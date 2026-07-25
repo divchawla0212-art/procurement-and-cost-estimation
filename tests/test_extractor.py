@@ -16,6 +16,9 @@ def test_ingest_workbook_builds_workpackage(tmp_path):
     wp = packages[0]
     assert wp.discipline == "electrical"
     assert len(wp.cost_items) == 2
+    # No summary rollup attached, and all item arithmetic reconciles ->
+    # reconciliation must leave a clean workbook's status at "ok".
+    assert doc.extraction_status == "ok"
 
 
 def test_ingest_workbook_attaches_summary_rollup(tmp_path):
@@ -48,3 +51,32 @@ def test_ingest_workbook_attaches_summary_rollup(tmp_path):
     wp = packages[0]
     assert wp.summary_rollup is not None
     assert wp.summary_rollup.total_value == 99999.0
+    # Item totals sum to 50.0, but the attached rollup says 99999.0 ->
+    # reconciliation must be wired into the pipeline and flag this.
+    assert doc.extraction_status == "discrepancies"
+
+
+def test_ingest_workbook_default_mock_client_does_not_crash(tmp_path):
+    """cost-est ingest with LLM_PROVIDER unset resolves to MockLLMClient(response={}),
+    whose empty response makes SheetLayout.model_validate({}) raise a ValidationError
+    inside map_sheet. That single bad sheet must not abort the whole workbook --
+    ingest_workbook must degrade gracefully instead of raising."""
+    path = make(str(tmp_path / "COSTING mini Electrical.xlsx"))
+    client = MockLLMClient(response={})
+    doc, packages = ingest_workbook(path, client, load_config())
+
+    assert doc.extraction_status == "failed"
+    assert packages == []
+
+
+def test_ingest_workbook_corrupt_file_returns_failed_status(tmp_path):
+    """A file that openpyxl can't open at all (corrupt/not really an xlsx) must
+    not raise out of ingest_workbook -- it should surface as a failed Document
+    with no work packages."""
+    path = tmp_path / "broken.xlsx"
+    path.write_bytes(b"not a real xlsx file")
+    client = MockLLMClient(response={"header_row": 7, "columns": {"code": 2}})
+    doc, packages = ingest_workbook(str(path), client, load_config())
+
+    assert doc.extraction_status == "failed"
+    assert packages == []

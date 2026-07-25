@@ -12,6 +12,10 @@ def run_ingest(root: str, out_path: str) -> CostDataset:
     dataset = ingest_directory(root, client, config)
     with open(out_path, "w", encoding="utf-8") as fh:
         json.dump(dataset.model_dump(), fh, indent=2, default=str)
+    counts = {"ok": 0, "discrepancies": 0, "failed": 0}
+    for doc in dataset.documents:
+        counts[doc.extraction_status] = counts.get(doc.extraction_status, 0) + 1
+    print(f"Documents: {counts['ok']} ok, {counts['discrepancies']} discrepancies, {counts['failed']} failed")
     return dataset
 
 

@@ -7,6 +7,7 @@ from cost_estimation.ingestion.classifier import classify_document, classify_she
 from cost_estimation.ingestion.header_mapper import map_sheet
 from cost_estimation.ingestion.workbook_loader import read_items
 from cost_estimation.ingestion.summary_parser import parse_summary, attach_rollups
+from cost_estimation.ingestion.reconcile import check_item, check_rollup
 
 _SKIP_SHEETS = {"summary", "cover", "notes"}
 _WORKBOOK_TYPES = {DocType.COSTING_WORKBOOK, DocType.SCHEDULE_OF_PRICES}
@@ -16,20 +17,48 @@ def ingest_workbook(path: str, client: LLMClient, config: DisciplineConfig) -> t
     document = classify_document(path, config)
     # NOTE: not read_only — read_items/sheet_preview use random .cell() access,
     # which is unreliable in openpyxl read-only mode (max_row can be None).
-    wb = openpyxl.load_workbook(path, data_only=True)
+    try:
+        wb = openpyxl.load_workbook(path, data_only=True)
+    except Exception:
+        document.extraction_status = "failed"
+        return document, []
+
     packages: list[WorkPackage] = []
+    any_sheet_failed = False
     for ws in wb.worksheets:
         if ws.title.strip().lower() in _SKIP_SHEETS:
             continue
-        layout = map_sheet(ws, client, config, ws.title)
-        items = read_items(ws, layout, path, ws.title)
+        try:
+            layout = map_sheet(ws, client, config, ws.title)
+            items = read_items(ws, layout, path, ws.title)
+        except Exception:
+            any_sheet_failed = True
+            continue
         if not items:
             continue
         discipline, area = classify_sheet(ws.title, config)
         packages.append(WorkPackage(name=ws.title.strip(), discipline=discipline, area=area, cost_items=items))
+
     summary_ws = next((s for s in wb.worksheets if s.title.strip().lower() == "summary"), None)
     if summary_ws is not None:
         attach_rollups(packages, parse_summary(summary_ws, path))
+
+    if not packages and any_sheet_failed:
+        document.extraction_status = "failed"
+        return document, packages
+
+    discrepancies = []
+    for wp in packages:
+        for item in wp.cost_items:
+            d = check_item(item)
+            if d is not None:
+                discrepancies.append(d)
+        rd = check_rollup(wp)
+        if rd is not None:
+            discrepancies.append(rd)
+    if discrepancies:
+        document.extraction_status = "discrepancies"
+
     return document, packages
 
 

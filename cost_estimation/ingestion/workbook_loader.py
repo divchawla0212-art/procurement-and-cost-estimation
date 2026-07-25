@@ -15,9 +15,15 @@ def _num(value) -> float | None:
     return None
 
 
+def _valid_col(c) -> bool:
+    return isinstance(c, int) and c >= 1
+
+
 def read_items(worksheet, layout: SheetLayout, document_path: str, sheet_name: str) -> list[CostItem]:
     cols = layout.columns
     code_col = cols.get("code")
+    if not _valid_col(code_col):
+        code_col = None
     items: list[CostItem] = []
     for row in range(layout.header_row + 1, worksheet.max_row + 1):
         code = worksheet.cell(row, code_col).value if code_col else None
@@ -26,7 +32,7 @@ def read_items(worksheet, layout: SheetLayout, document_path: str, sheet_name: s
 
         def cell(role):
             c = cols.get(role)
-            return worksheet.cell(row, c).value if c else None
+            return worksheet.cell(row, c).value if _valid_col(c) else None
 
         prov = ProvenanceRef(
             document_path=document_path, sheet=sheet_name,
