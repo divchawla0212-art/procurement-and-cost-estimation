@@ -19,7 +19,8 @@ def check_item(item: CostItem) -> Discrepancy | None:
     if not item.priced or item.rate_buildup is None or item.quantity is None or item.total is None:
         return None
     expected = item.quantity * item.rate_buildup.unit_price
-    if _close(expected, item.total):
+    # Tolerance anchored to expected value: _close(actual, expected) scales by expected
+    if _close(item.total, expected):
         return None
     return Discrepancy(kind="item_total", location=item.code, expected=expected, actual=item.total)
 

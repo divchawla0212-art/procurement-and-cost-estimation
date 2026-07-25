@@ -34,3 +34,34 @@ def test_rollup_mismatch():
                      summary_rollup=SummaryRollup(total_value=999.0))
     d = check_rollup(wp)
     assert d is not None and d.kind == "rollup"
+
+
+def test_item_at_tolerance_boundary():
+    # Regression: qty=1, unit_price=100 → expected=100.
+    # actual=99.0 is exactly 1% below, should PASS tolerance
+    # (tolerance anchored to expected: 0.01 * max(1, 100) = 1.0, diff=1.0 <= 1.0)
+    assert check_item(_item(1, 100.0, 99.0)) is None
+
+
+def test_item_beyond_tolerance_boundary():
+    # Same expected=100, but actual=98.0 is 2% below, should FAIL tolerance
+    # (diff=2.0 > 1.0)
+    d = check_item(_item(1, 100.0, 98.0))
+    assert d is not None and d.kind == "item_total"
+
+
+def test_rollup_at_tolerance_boundary():
+    # Rollup: items total 99.0, expected (summary_rollup.total_value) = 100.0,
+    # tolerance=0.01*max(1,100)=1.0, diff=1.0 <= 1.0 → should PASS
+    wp = WorkPackage(name="w", cost_items=[_item(1, 99.0, 99.0)],
+                     summary_rollup=SummaryRollup(total_value=100.0))
+    assert check_rollup(wp) is None
+
+
+def test_rollup_beyond_tolerance_boundary():
+    # Rollup: items total 98.0, expected = 100.0,
+    # diff=2.0 > 1.0 → should FAIL
+    wp = WorkPackage(name="w", cost_items=[_item(1, 98.0, 98.0)],
+                     summary_rollup=SummaryRollup(total_value=100.0))
+    d = check_rollup(wp)
+    assert d is not None and d.kind == "rollup"
