@@ -1439,6 +1439,206 @@ git commit -m "feat: ingestion orchestrator"
 
 ---
 
+### Task 12.5: Summary rollup parsing + attachment (spec §7.2)
+
+**Files:**
+- Create: `cost_estimation/ingestion/summary_parser.py`
+- Modify: `cost_estimation/ingestion/extractor.py` (attach rollups in `ingest_workbook`)
+- Test: `tests/test_summary_parser.py`
+
+**Interfaces:**
+- Consumes: `SummaryRollup`, `WorkPackage` (Task 6).
+- Produces:
+  - `normalize_label(s: str) -> str` — lowercases, replaces non-alphanumerics with spaces, collapses whitespace, and strips a trailing `s` from tokens longer than 3 chars (crude singularization) so `"TF Cables and Access. "` and `"TF Cable and Access."` both normalize to `"tf cable and acces"`.
+  - `parse_summary(worksheet, document_path: str) -> dict[str, SummaryRollup]` — finds the header row (first row containing a cell whose text includes "total value"), maps value columns by header text (total_manhours/materials/consumables/installation/total_value), then reads each data row that has a numeric total-value **and** a text label to the left of the first value column. Rows without a label (subtotal rows) and aggregate rows whose normalized label contains any of `{"sum", "total", "month", "overall"}` are skipped. Keyed by `normalize_label(label)`.
+  - `attach_rollups(work_packages: list[WorkPackage], summary_map: dict[str, SummaryRollup]) -> None` — sets `wp.summary_rollup = summary_map.get(normalize_label(wp.name))` for each work package (leaves `None` when unmatched).
+  - `ingest_workbook` (modified) — after building work packages, if the workbook has a sheet named (case-insensitive) `"summary"`, parse it and `attach_rollups`.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# tests/test_summary_parser.py
+import os
+import openpyxl
+import pytest
+from cost_estimation.models.schema import WorkPackage
+from cost_estimation.ingestion.summary_parser import (
+    normalize_label, parse_summary, attach_rollups,
+)
+
+
+def _mini_summary(path):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "SUMMARY"
+    ws["E2"] = "Total Manhours"; ws["F2"] = "Materials"; ws["G2"] = "Consumables"
+    ws["H2"] = "Installation"; ws["J2"] = "Total Value (USD)"
+    ws["C3"] = "TF Main Elec. Equipment"; ws["E3"] = 85240; ws["H3"] = 2471535.06; ws["J3"] = 2471535.06
+    ws["C4"] = "TF Cable and Access."; ws["J4"] = 13963935.36
+    ws["J15"] = 16435470.42            # subtotal row: no label -> skipped
+    ws["C16"] = "Overall SUM"; ws["J16"] = 16435470.42   # aggregate -> skipped
+    wb.save(path)
+    return path
+
+
+def test_normalize_handles_plural_and_punctuation():
+    assert normalize_label("TF Cables and Access. ") == normalize_label("TF Cable and Access.")
+
+
+def test_parse_summary_extracts_packages_and_skips_aggregates(tmp_path):
+    path = _mini_summary(str(tmp_path / "s.xlsx"))
+    ws = openpyxl.load_workbook(path, data_only=True)["SUMMARY"]
+    out = parse_summary(ws, path)
+    assert set(out.keys()) == {"tf main elec equipment", "tf cable and acces"}
+    assert out["tf main elec equipment"].total_value == 2471535.06
+    assert out["tf main elec equipment"].installation == 2471535.06
+
+
+def test_attach_matches_by_normalized_name(tmp_path):
+    path = _mini_summary(str(tmp_path / "s.xlsx"))
+    ws = openpyxl.load_workbook(path, data_only=True)["SUMMARY"]
+    out = parse_summary(ws, path)
+    packages = [WorkPackage(name="TF Cables and Access. ", discipline="electrical", area="TF")]
+    attach_rollups(packages, out)
+    assert packages[0].summary_rollup is not None
+    assert packages[0].summary_rollup.total_value == 13963935.36
+
+
+REAL = "data/cost-estimation-data/GDES COSTING SHEET & PROPOSAL TEMPLATE/GDX-P-26-072 REV-00(1) COSTING A-6 (Electrical BOQs for Unit areas Imp. contractor) Rev.1 RK 20260622.xlsx"
+
+
+@pytest.mark.skipif(not os.path.exists(REAL), reason="sample data not present")
+def test_real_summary_parses_and_reconciles_to_grand_total():
+    ws = openpyxl.load_workbook(REAL, data_only=True)["SUMMARY"]
+    out = parse_summary(ws, REAL)
+    assert "tf main elec equipment" in out
+    assert abs(out["tf main elec equipment"].total_value - 2471535.06) < 1.0
+    # Sum of all parsed package rollups equals the workbook's Overall SUM row.
+    grand = sum(r.total_value for r in out.values())
+    assert abs(grand - 36119013.81) < 100.0
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `python -m pytest tests/test_summary_parser.py -v`
+Expected: FAIL with `ModuleNotFoundError: No module named 'cost_estimation.ingestion.summary_parser'`
+
+- [ ] **Step 3: Write minimal implementation**
+
+```python
+# cost_estimation/ingestion/summary_parser.py
+import re
+from cost_estimation.models.schema import SummaryRollup, WorkPackage
+
+_VALUE_HEADERS = {
+    "total_manhours": ["total manhours"],
+    "materials": ["materials", "material"],
+    "consumables": ["consumables"],
+    "installation": ["installation"],
+    "total_value": ["total value"],
+}
+_AGGREGATE_TOKENS = {"sum", "total", "month", "overall"}
+
+
+def normalize_label(s: str) -> str:
+    s = re.sub(r"[^a-z0-9 ]", " ", s.lower())
+    tokens = [t[:-1] if t.endswith("s") and len(t) > 3 else t for t in s.split()]
+    return " ".join(tokens)
+
+
+def _num(value) -> float:
+    return float(value) if isinstance(value, (int, float)) else 0.0
+
+
+def _find_header_row(ws) -> int | None:
+    for r in range(1, min(ws.max_row, 40) + 1):
+        for c in range(1, min(ws.max_column, 40) + 1):
+            v = ws.cell(r, c).value
+            if isinstance(v, str) and "total value" in v.lower():
+                return r
+    return None
+
+
+def _map_value_cols(ws, header_row: int) -> dict[str, int]:
+    cols: dict[str, int] = {}
+    for c in range(1, ws.max_column + 1):
+        v = ws.cell(header_row, c).value
+        if not isinstance(v, str):
+            continue
+        low = v.lower()
+        for role, keys in _VALUE_HEADERS.items():
+            if role not in cols and any(k in low for k in keys):
+                cols[role] = c
+    return cols
+
+
+def parse_summary(worksheet, document_path: str) -> dict[str, SummaryRollup]:
+    header_row = _find_header_row(worksheet)
+    if header_row is None:
+        return {}
+    cols = _map_value_cols(worksheet, header_row)
+    total_col = cols.get("total_value")
+    if not total_col:
+        return {}
+    first_value_col = min(cols.values())
+    out: dict[str, SummaryRollup] = {}
+    for r in range(header_row + 1, worksheet.max_row + 1):
+        total = worksheet.cell(r, total_col).value
+        if not isinstance(total, (int, float)):
+            continue
+        label = None
+        for c in range(1, first_value_col):
+            v = worksheet.cell(r, c).value
+            if isinstance(v, str) and v.strip():
+                label = v.strip()
+                break
+        if not label:
+            continue
+        norm = normalize_label(label)
+        if any(tok in norm.split() for tok in _AGGREGATE_TOKENS):
+            continue
+        out[norm] = SummaryRollup(
+            total_manhours=_num(worksheet.cell(r, cols["total_manhours"]).value) if "total_manhours" in cols else 0.0,
+            materials=_num(worksheet.cell(r, cols["materials"]).value) if "materials" in cols else 0.0,
+            consumables=_num(worksheet.cell(r, cols["consumables"]).value) if "consumables" in cols else 0.0,
+            installation=_num(worksheet.cell(r, cols["installation"]).value) if "installation" in cols else 0.0,
+            total_value=float(total),
+        )
+    return out
+
+
+def attach_rollups(work_packages: list[WorkPackage], summary_map: dict[str, SummaryRollup]) -> None:
+    for wp in work_packages:
+        wp.summary_rollup = summary_map.get(normalize_label(wp.name))
+```
+
+Then modify `ingest_workbook` in `cost_estimation/ingestion/extractor.py` — add the import and attach step:
+
+```python
+# add to imports
+from cost_estimation.ingestion.summary_parser import parse_summary, attach_rollups
+
+# inside ingest_workbook, after the sheet loop builds `packages` and before `return`:
+    summary_ws = next((s for s in wb.worksheets if s.title.strip().lower() == "summary"), None)
+    if summary_ws is not None:
+        attach_rollups(packages, parse_summary(summary_ws, path))
+    return document, packages
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `python -m pytest tests/test_summary_parser.py tests/test_extractor.py -v`
+Expected: PASS (existing extractor test still passes; real-data test skips when data absent).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add cost_estimation/ingestion/summary_parser.py cost_estimation/ingestion/extractor.py tests/test_summary_parser.py
+git commit -m "feat: summary rollup parsing + name-matched attachment"
+```
+
+---
+
 ### Task 13: CLI + end-to-end dataset output
 
 **Files:**
@@ -1613,8 +1813,6 @@ git commit -m "test: real-data smoke + reconciliation on sample Schedule of Pric
 - **No network in CI:** only the two guarded tests (`ANTHROPIC_API_KEY`, sample-data presence) touch real providers/data; everything else uses the mock client and generated fixtures.
 - **Deferred to later phases (do NOT build here):** rate library, pricing the blank Schedule of Prices, discipline/project roll-up beyond echoing as-stated Summary values, `.docx` proposal generation, SOW method-of-measurement enforcement, resource-rate extraction from the costing Summary sheets (schema exists; population is a later phase).
 
-## Known coverage note (from self-review vs spec §7.2)
+## Coverage note (spec §7.2)
 
-Spec §7.2 makes **work-package-sum == workbook Summary rollup** a hard requirement. This plan builds and unit-tests the reconciliation *mechanism* (`check_rollup`, Task 11) and wires item-arithmetic reconciliation on real data (Task 14), but the extractor does **not** yet populate `WorkPackage.summary_rollup` from the real costing-workbook `SUMMARY` sheets, so end-to-end rollup reconciliation on real data is not exercised. The real `SUMMARY` labels (e.g. `TF Cable and Access.`) do not match sheet titles (`TF Cables and Access. `) exactly, so populating them needs a normalized-name match step.
-
-**Options:** (a) add a Task 12.5 that parses each costing workbook's `SUMMARY` sheet into `{normalized_label: SummaryRollup}` and attaches rollups to work packages by normalized-name match, then a real-data rollup reconciliation test; or (b) accept the documented deferral for Phase 1 (mechanism proven, population deferred to the pricing/roll-up phase). Confirm the choice before execution.
+Spec §7.2 (**work-package-sum == workbook Summary rollup**) is covered as follows: the reconciliation *mechanism* is built and unit-tested (`check_rollup`, Task 11); **Task 12.5** parses the real `SUMMARY` sheets into `SummaryRollup`s, attaches them to work packages by normalized-name match (handling the `TF Cable and Access.` vs `TF Cables and Access. ` mismatch), and reconciles the parsed rollups against the workbook's own grand-total on real data; item-arithmetic reconciliation on real data is covered by Task 14. Full **sum-of-extracted-items == Summary** on real data additionally requires live-LLM extraction of every detail sheet's layout, which is exercised via `check_rollup` once a live provider is configured (deterministic CI uses the unit-tested mechanism + real-`SUMMARY` reconciliation).
