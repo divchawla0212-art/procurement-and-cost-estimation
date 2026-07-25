@@ -1,7 +1,6 @@
 import os
 import openpyxl
 import pytest
-from cost_estimation.config.loader import load_config
 from cost_estimation.ingestion.workbook_loader import SheetLayout, read_items
 from cost_estimation.ingestion.reconcile import check_item
 
