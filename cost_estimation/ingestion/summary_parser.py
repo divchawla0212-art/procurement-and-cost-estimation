@@ -1,5 +1,7 @@
 import re
+from openpyxl.utils import get_column_letter
 from cost_estimation.models.schema import SummaryRollup, WorkPackage
+from shared.provenance import ProvenanceRef
 
 _VALUE_HEADERS = {
     "total_manhours": ["total manhours"],
@@ -58,10 +60,12 @@ def parse_summary(worksheet, document_path: str) -> dict[str, SummaryRollup]:
         if not isinstance(total, (int, float)):
             continue
         label = None
+        label_col = None
         for c in range(1, first_value_col):
             v = worksheet.cell(r, c).value
             if isinstance(v, str) and v.strip():
                 label = v.strip()
+                label_col = c
                 break
         if not label:
             continue
@@ -74,6 +78,12 @@ def parse_summary(worksheet, document_path: str) -> dict[str, SummaryRollup]:
             consumables=_num(worksheet.cell(r, cols["consumables"]).value) if "consumables" in cols else 0.0,
             installation=_num(worksheet.cell(r, cols["installation"]).value) if "installation" in cols else 0.0,
             total_value=float(total),
+            provenance=ProvenanceRef(
+                document_path=document_path,
+                sheet=worksheet.title,
+                cell=f"{get_column_letter(label_col)}{r}",
+                extractor="xlsx",
+            ),
         )
     return out
 

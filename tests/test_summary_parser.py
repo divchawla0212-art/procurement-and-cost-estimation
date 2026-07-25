@@ -32,6 +32,11 @@ def test_parse_summary_extracts_packages_and_skips_aggregates(tmp_path):
     assert set(out.keys()) == {"tf main elec equipment", "tf cable and acces"}
     assert out["tf main elec equipment"].total_value == 2471535.06
     assert out["tf main elec equipment"].installation == 2471535.06
+    prov = out["tf main elec equipment"].provenance
+    assert prov is not None
+    assert prov.document_path == path
+    assert prov.sheet == "SUMMARY"
+    assert prov.cell == "C3"
 
 
 def test_attach_matches_by_normalized_name(tmp_path):

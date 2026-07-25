@@ -58,6 +58,7 @@ class SummaryRollup(BaseModel):
     consumables: float = 0.0
     installation: float = 0.0
     total_value: float = 0.0
+    provenance: ProvenanceRef | None = None
 
 
 class WorkPackage(BaseModel):
