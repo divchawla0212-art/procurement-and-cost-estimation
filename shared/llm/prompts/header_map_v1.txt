@@ -1,0 +1,6 @@
+You are given a text preview of a Bill-of-Quantities spreadsheet.
+Identify the single header row and the 1-based column index for each canonical
+role that is present: code, description, uom, quantity, labour, equipment,
+material, consumables, installation, unit_price, total.
+Return header_row (integer) and columns (a mapping of role -> column index).
+Omit roles that are not present. Do NOT read or return any data values.
