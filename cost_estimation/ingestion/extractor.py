@@ -6,6 +6,7 @@ from cost_estimation.models.schema import Document, DocType, WorkPackage, CostDa
 from cost_estimation.ingestion.classifier import classify_document, classify_sheet
 from cost_estimation.ingestion.header_mapper import map_sheet
 from cost_estimation.ingestion.workbook_loader import read_items
+from cost_estimation.ingestion.summary_parser import parse_summary, attach_rollups
 
 _SKIP_SHEETS = {"summary", "cover", "notes"}
 _WORKBOOK_TYPES = {DocType.COSTING_WORKBOOK, DocType.SCHEDULE_OF_PRICES}
@@ -26,6 +27,9 @@ def ingest_workbook(path: str, client: LLMClient, config: DisciplineConfig) -> t
             continue
         discipline, area = classify_sheet(ws.title, config)
         packages.append(WorkPackage(name=ws.title.strip(), discipline=discipline, area=area, cost_items=items))
+    summary_ws = next((s for s in wb.worksheets if s.title.strip().lower() == "summary"), None)
+    if summary_ws is not None:
+        attach_rollups(packages, parse_summary(summary_ws, path))
     return document, packages
 
 
