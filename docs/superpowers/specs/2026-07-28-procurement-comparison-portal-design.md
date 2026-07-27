@@ -45,7 +45,8 @@ Reuses the existing foundation (`shared/llm/` incl. the Anthropic + Bedrock adap
 procurement/
   models.py       # VendorBid, OptionalItem, NormalizationAdjustment, ComparisonTable, Project
   project.py      # filesystem project store: create/list/load; safe unzip of vendor folders
-  loaders.py      # extract text from PDF (pdfplumber, pypdf fallback) and xlsx (openpyxl)
+  loaders.py      # extract text from PDF (pdftotext CLI -> pypdf -> LLM fallback) and xlsx (openpyxl)
+  pdf_llm.py      # LLM PDF transcription (Anthropic native PDF input) — fallback for scanned/thin PDFs
   quote_select.py # choose the quotation document inside a vendor folder (filename heuristics)
   extract.py      # vendor folder -> VendorBid  (LLM structured extraction via shared/llm)
   normalize.py    # VendorBid -> normalized total + explicit NormalizationAdjustments
@@ -97,7 +98,7 @@ Every extracted figure carries a `ProvenanceRef` (document + page). Raw as-state
 ## 6. Extraction (`extract.py`)
 
 - `quote_select.pick_quote(files)` — choose the quotation doc by filename keywords (`quotation`, `quote`, `offer`, `proposal`, `techno`, or a vendor-ref pattern); fall back to the only/most-likely commercial document.
-- `loaders.read_text(path)` — PDF via `pdfplumber` (fallback `pypdf`), xlsx via `openpyxl` flattened to text.
+- `loaders.read_text(path, llm_fallback=None)` — PDF via `pdftotext` CLI → `pypdf` → **LLM transcription fallback** when the text layer is empty/thin (scanned or image-only PDFs); xlsx via `openpyxl` flattened to text. The fallback (`pdf_llm.transcribe_pdf`) sends the PDF to the LLM using Anthropic's native PDF document input and returns the transcribed text, so **every vendor and requirement PDF is extracted properly** regardless of whether it has a usable text layer.
 - `extract_bid(vendor, files, client)` — builds a versioned, provider-neutral prompt + the `VendorBid` output schema, calls `client.classify_structure(prompt, VendorBid, text)` (the existing generic structured-output method), validates into a `VendorBid`, attaches provenance. On any failure → a `VendorBid` with `extraction_status="failed"` and a reason (never raises out of the run).
 
 Numbers come from the model reading the quote text; a later phase (roadmap) adds deterministic reconciliation against stated totals.

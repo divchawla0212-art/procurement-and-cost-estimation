@@ -17,6 +17,7 @@
 - Per-vendor **graceful failure**: a vendor that can't be found/extracted is marked `extraction_status="failed"` with a reason; the run continues.
 - LLM-dependent tests run against the **mock adapter** (`MockLLMClient`); live tests `skipif` no `ANTHROPIC_API_KEY`.
 - Projects live on the local filesystem under `projects/<slug>/`.
+- **PDF text extraction must be robust:** `pdftotext` CLI → `pypdf` → **LLM transcription fallback** (Anthropic native PDF document input) when the text layer is empty or thin. All vendor and requirement PDFs must extract properly, including scanned/image-only ones. The fallback is injected as a callable so `loaders` stays decoupled and unit-testable without a key.
 - Vendor ZIP extraction must reject path traversal (zip-slip) and ignore hidden/`~$` files.
 - Money comparisons in tests use tolerance `abs(a - b) <= 0.01`.
 - TDD: failing test first, watch it fail, minimal implementation, watch it pass, commit.
@@ -374,19 +375,22 @@ git commit -m "feat: filesystem project store with safe vendor-zip unpack"
 
 ---
 
-### Task 3: Document text loaders (xlsx + pdf)
+### Task 3: Document text loaders with LLM PDF fallback
 
 **Files:**
 - Create: `procurement/loaders.py`
+- Create: `procurement/pdf_llm.py`
 - Test: `tests/test_procurement_loaders.py`
+- Test: `tests/test_procurement_pdf_llm.py`
 - Modify: `pyproject.toml` (add `pypdf` dependency)
 
 **Interfaces:**
-- Consumes: nothing.
+- Consumes: the `anthropic` SDK (native PDF document input) for the fallback.
 - Produces:
   - `read_xlsx_text(path: str) -> str` — flatten all sheets to text (`sheet | cell=value` lines) via openpyxl.
-  - `read_pdf_text(path: str) -> str` — try the `pdftotext -layout <path> -` CLI (present on this machine); on any failure fall back to `pypdf` page-text extraction.
-  - `read_text(path: str) -> str` — dispatch by extension (`.xlsx`→xlsx, `.pdf`→pdf, else read as utf-8 text ignoring errors).
+  - `read_pdf_text(path: str, llm_fallback=None, min_chars: int = 200) -> str` — tiered, robust: `pdftotext -layout` CLI → `pypdf` page text → if the result is still shorter than `min_chars` and an `llm_fallback` callable is provided, return `llm_fallback(path)`. Each tier is wrapped in `try/except` so a bad/scanned PDF never raises.
+  - `read_text(path: str, llm_fallback=None) -> str` — dispatch by extension (`.xlsx`→xlsx, `.pdf`→`read_pdf_text(path, llm_fallback)`, else utf-8 text ignoring errors).
+  - `pdf_llm.transcribe_pdf(path: str, model: str | None = None) -> str` — send the PDF to the LLM via Anthropic's native PDF **document** input and return the transcribed text. Model from `PDF_LLM_MODEL` env (a PDF-capable model the key can access). `pdf_llm._build_document_block(pdf_bytes: bytes) -> dict` is the pure, unit-testable request-block builder.
 
 - [ ] **Step 1: Add `pypdf` to `pyproject.toml` dependencies and install**
 
@@ -417,11 +421,32 @@ def test_read_text_dispatches_plain(tmp_path):
     assert "hello quote" in read_text(str(p))
 
 
+def test_read_pdf_text_uses_llm_fallback_when_thin(tmp_path):
+    # A non-PDF byte blob: pdftotext yields nothing and pypdf raises (caught),
+    # so the injected LLM fallback must be used. This proves the robustness path
+    # without any network or key.
+    fake = tmp_path / "scan.pdf"; fake.write_bytes(b"not a real pdf")
+    called = {}
+
+    def fb(p):
+        called["path"] = p
+        return "TRANSCRIBED VENDOR QUOTE TEXT " * 20
+
+    text = read_pdf_text(str(fake), llm_fallback=fb)
+    assert "TRANSCRIBED VENDOR QUOTE" in text
+    assert called["path"] == str(fake)
+
+
+def test_read_pdf_text_no_fallback_returns_empty_on_bad_pdf(tmp_path):
+    fake = tmp_path / "scan.pdf"; fake.write_bytes(b"not a real pdf")
+    assert read_pdf_text(str(fake)).strip() == ""  # never raises
+
+
 REAL_PDF = "data/procurement-data/ADPOWER/ADP-13158-2024-935.pdf"
 
 
 @pytest.mark.skipif(not os.path.exists(REAL_PDF), reason="sample data not present")
-def test_read_pdf_text_real(tmp_path):
+def test_read_pdf_text_real():
     text = read_pdf_text(REAL_PDF)
     assert len(text) > 200
     assert "Baudouin" in text or "Generator" in text or "QUOTATION" in text.upper()
@@ -458,45 +483,128 @@ def read_xlsx_text(path: str) -> str:
     return "\n".join(lines)
 
 
-def read_pdf_text(path: str) -> str:
+def _pdftotext(path: str) -> str:
     exe = shutil.which("pdftotext")
-    if exe:
+    if not exe:
+        return ""
+    try:
+        out = subprocess.run([exe, "-layout", path, "-"], capture_output=True, timeout=120)
+        return out.stdout.decode("utf-8", errors="ignore")
+    except Exception:
+        return ""
+
+
+def _pypdf(path: str) -> str:
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(path)
+        return "\n".join((page.extract_text() or "") for page in reader.pages)
+    except Exception:
+        return ""
+
+
+def read_pdf_text(path: str, llm_fallback=None, min_chars: int = 200) -> str:
+    """Robust PDF text: pdftotext CLI -> pypdf -> LLM transcription fallback."""
+    text = _pdftotext(path)
+    if len(text.strip()) < min_chars:
+        alt = _pypdf(path)
+        if len(alt.strip()) > len(text.strip()):
+            text = alt
+    if len(text.strip()) < min_chars and llm_fallback is not None:
         try:
-            out = subprocess.run(
-                [exe, "-layout", path, "-"],
-                capture_output=True, timeout=120,
-            )
-            text = out.stdout.decode("utf-8", errors="ignore")
-            if text.strip():
-                return text
+            fb = llm_fallback(path)
+            if fb and fb.strip():
+                return fb
         except Exception:
             pass
-    # Fallback: pypdf
-    from pypdf import PdfReader
-    reader = PdfReader(path)
-    return "\n".join((page.extract_text() or "") for page in reader.pages)
+    return text
 
 
-def read_text(path: str) -> str:
+def read_text(path: str, llm_fallback=None) -> str:
     ext = os.path.splitext(path)[1].lower()
     if ext == ".xlsx":
         return read_xlsx_text(path)
     if ext == ".pdf":
-        return read_pdf_text(path)
+        return read_pdf_text(path, llm_fallback=llm_fallback)
     with open(path, "r", encoding="utf-8", errors="ignore") as fh:
         return fh.read()
 ```
 
-- [ ] **Step 5: Run test to verify it passes**
+- [ ] **Step 5: Write the PDF LLM fallback module + its test**
 
-Run: `python -m pytest tests/test_procurement_loaders.py -v`
-Expected: PASS (2 passed, 1 passed or skipped depending on sample-data presence)
+```python
+# procurement/pdf_llm.py
+import os
+import base64
 
-- [ ] **Step 6: Commit**
+_PROMPT = (
+    "Transcribe ALL text from this document exactly and completely. Preserve "
+    "tables, line items, quantities, prices, currencies, and terms as readable "
+    "plain text. Return only the transcribed text, with no commentary."
+)
+
+
+def _build_document_block(pdf_bytes: bytes) -> dict:
+    return {
+        "type": "document",
+        "source": {
+            "type": "base64",
+            "media_type": "application/pdf",
+            "data": base64.standard_b64encode(pdf_bytes).decode("ascii"),
+        },
+    }
+
+
+def transcribe_pdf(path: str, model: str | None = None) -> str:
+    """Transcribe a PDF to text using Anthropic's native PDF document input.
+    Used only as a fallback when the text layer is empty/thin. Requires
+    ANTHROPIC_API_KEY and a PDF-capable model (set PDF_LLM_MODEL if needed)."""
+    import anthropic
+
+    model = model or os.getenv("PDF_LLM_MODEL", "claude-sonnet-4-5")
+    with open(path, "rb") as fh:
+        pdf_bytes = fh.read()
+    client = anthropic.Anthropic()
+    message = client.messages.create(
+        model=model,
+        max_tokens=8000,
+        messages=[{
+            "role": "user",
+            "content": [
+                _build_document_block(pdf_bytes),
+                {"type": "text", "text": _PROMPT},
+            ],
+        }],
+    )
+    return "".join(b.text for b in message.content if getattr(b, "type", None) == "text")
+```
+
+```python
+# tests/test_procurement_pdf_llm.py
+import base64
+from procurement.pdf_llm import _build_document_block
+
+
+def test_build_document_block_encodes_pdf():
+    block = _build_document_block(b"hello-pdf")
+    assert block["type"] == "document"
+    assert block["source"]["type"] == "base64"
+    assert block["source"]["media_type"] == "application/pdf"
+    assert base64.standard_b64decode(block["source"]["data"]) == b"hello-pdf"
+```
+
+> **Implementer note:** the live transcription path is exercised only with a real key. If the API rejects the `document` block on the installed `anthropic` SDK, add `betas=["pdfs-2024-09-25"]` and switch to `client.beta.messages.create`, and set `PDF_LLM_MODEL` to a PDF-capable model the key can access. The unit test above covers the block builder without any network.
+
+- [ ] **Step 6: Run tests to verify they pass**
+
+Run: `python -m pytest tests/test_procurement_loaders.py tests/test_procurement_pdf_llm.py -v`
+Expected: PASS (loaders: 3 passed + 1 real-data passed/skipped; pdf_llm: 1 passed)
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add procurement/loaders.py tests/test_procurement_loaders.py pyproject.toml
-git commit -m "feat: xlsx + pdf text loaders (pdftotext CLI, pypdf fallback)"
+git add procurement/loaders.py procurement/pdf_llm.py tests/test_procurement_loaders.py tests/test_procurement_pdf_llm.py pyproject.toml
+git commit -m "feat: robust document loaders with LLM PDF transcription fallback"
 ```
 
 ---
@@ -601,7 +709,7 @@ git commit -m "feat: quotation-document picker"
 
 **Interfaces:**
 - Consumes: `read_text` (Task 3), `pick_quote` (Task 4), `BidExtraction`/`VendorBid` (Task 1), `LLMClient` (`shared/llm/interface`), `ProvenanceRef`.
-- Produces: `extract_bid(vendor: str, files: list[str], client) -> VendorBid` — picks the quote, reads its text, calls `client.classify_structure(prompt, BidExtraction, text)`, validates into `BidExtraction`, and wraps into a `VendorBid` with vendor/source/provenance and `extraction_status="ok"`. On no quote found or any exception, returns a `VendorBid` with `extraction_status="failed"` and a `notes` reason (never raises).
+- Produces: `extract_bid(vendor: str, files: list[str], client, pdf_fallback=None) -> VendorBid` — picks the quote, reads its text (passing `pdf_fallback` to `read_text` so scanned/thin PDFs are LLM-transcribed), calls `client.classify_structure(prompt, BidExtraction, text)`, validates into `BidExtraction`, and wraps into a `VendorBid` with vendor/source/provenance and `extraction_status="ok"`. On no quote found or any exception, returns a `VendorBid` with `extraction_status="failed"` and a `notes` reason (never raises).
 
 - [ ] **Step 1: Write the prompt file**
 
@@ -671,13 +779,13 @@ from procurement.loaders import read_text
 _PROMPT = Path(__file__).parents[1] / "shared" / "llm" / "prompts" / "bid_extract_v1.txt"
 
 
-def extract_bid(vendor: str, files: list[str], client) -> VendorBid:
+def extract_bid(vendor: str, files: list[str], client, pdf_fallback=None) -> VendorBid:
     quote = pick_quote(files)
     if quote is None:
         return VendorBid(vendor=vendor, extraction_status="failed",
                          notes="no quote document found in vendor folder")
     try:
-        text = read_text(quote)
+        text = read_text(quote, llm_fallback=pdf_fallback)
         prompt = _PROMPT.read_text(encoding="utf-8")
         result = client.classify_structure(prompt, BidExtraction, text)
         extraction = BidExtraction.model_validate(result)
@@ -1029,7 +1137,7 @@ git commit -m "feat: comparison export to xlsx/csv"
 **Interfaces:**
 - Consumes: `project` store (Task 2), `extract_bid` (Task 5), `normalize_bid` (Task 6), `build_comparison` (Task 7), models (Task 1).
 - Produces:
-  - `run_ingestion(root: str, slug: str, client) -> dict` — loads the project; for each vendor: `vendor_files` → `extract_bid` → `normalize_bid`; builds the comparison; writes `dataset.json` (with `bids`, `normalized`, `comparison`) into the project dir; sets project `status="done"`; returns the assembled dict.
+  - `run_ingestion(root: str, slug: str, client, pdf_fallback=None) -> dict` — loads the project; for each vendor: `vendor_files` → `extract_bid(..., pdf_fallback=pdf_fallback)` → `normalize_bid`; builds the comparison; writes `dataset.json` (with `bids`, `normalized`, `comparison`) into the project dir; sets project `status="done"`; returns the assembled dict.
   - `load_dataset(root: str, slug: str) -> dict | None` — reads `dataset.json` if present.
 
 - [ ] **Step 1: Write the failing test**
@@ -1088,13 +1196,13 @@ from procurement.normalize import normalize_bid
 from procurement.compare import build_comparison
 
 
-def run_ingestion(root: str, slug: str, client) -> dict:
+def run_ingestion(root: str, slug: str, client, pdf_fallback=None) -> dict:
     project = load_project(root, slug)
     bids = []
     normalized = []
     for vendor in project.vendors:
         files = vendor_files(root, slug, vendor)
-        bid = extract_bid(vendor, files, client)
+        bid = extract_bid(vendor, files, client, pdf_fallback=pdf_fallback)
         bids.append(bid)
         normalized.append(normalize_bid(bid, project.target_currency, project.fx_rates))
     comparison = build_comparison(bids, normalized, project.target_currency)
@@ -1160,6 +1268,7 @@ import os
 import streamlit as st
 from procurement import project as proj
 from procurement.pipeline import run_ingestion, load_dataset
+from procurement.pdf_llm import transcribe_pdf
 from procurement.export import comparison_to_rows, comparison_to_xlsx_bytes, comparison_to_csv_str
 from shared.llm.factory import get_client
 
@@ -1251,7 +1360,7 @@ if st.button("Save FX rates"):
 st.markdown("### 4. Run ingestion")
 if st.button("Run ingestion", type="primary", disabled=not project.vendors):
     with st.spinner("Extracting and comparing vendor bids..."):
-        run_ingestion(ROOT, project.slug, get_client())
+        run_ingestion(ROOT, project.slug, get_client(), pdf_fallback=transcribe_pdf)
     st.success("Done.")
 
 # --- Results ---
@@ -1356,6 +1465,7 @@ git commit -m "test: live ADPOWER bid extraction (skip-guarded)"
 - **Run order:** Tasks 1→11 are dependency-ordered.
 - **No network in CI:** every test except the two skip-guarded ones (`ANTHROPIC_API_KEY`, sample-data presence) uses the mock adapter or generated fixtures.
 - **The LLM method is `classify_structure`** (generic structured output). We reuse it for bid extraction — do not add a new method to the LLM layer.
+- **PDF LLM fallback** (`procurement/pdf_llm.transcribe_pdf`) is a focused, Anthropic-specific call (native PDF document input) used only when the text layer is empty/thin — it is injected into `read_text` as a callable, so `loaders` and the unit tests stay decoupled and key-free. Generalizing this fallback to Bedrock/other providers is a roadmap item (added to `docs/future-improvements-roadmap.md`).
 - **Deferred (do NOT build here):** requirements-doc parsing/compliance, full scope normalization, weighted scoring/award, full BOM extraction, revision/lineage, live FX, the client's exact CS-template export, auth/hosting. All in `docs/future-improvements-roadmap.md`.
 
 ## Suggested 4-day pacing

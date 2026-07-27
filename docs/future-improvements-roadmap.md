@@ -54,6 +54,7 @@ Per `docs/superpowers/specs/2026-07-27-aws-ingestion-infrastructure-design.md`:
 
 - 🟨 **Live-test OpenAI & Gemini adapters.** Currently implemented and mock-tested only; promote to live-tested paths.
 - 🟨 **Vision fallback.** All adapters accept an `images` argument but ignore it; wire image content blocks so scanned/image-only pages can be extracted.
+- 🟨 **Generalize the PDF LLM transcription fallback.** The portal's `procurement/pdf_llm.transcribe_pdf` (robust extraction for scanned/thin PDFs) is currently a direct Anthropic call via native PDF document input. Route it through the provider-agnostic LLM layer (a document/vision method on `LLMClient`) so it also works on Bedrock and other providers.
 - 🟨 **Prompt caching & cost controls.** Enable automatic prompt caching for the repeated extraction prompt (Anthropic direct); add token-usage/cost logging per run.
 - 🟦 **Streaming & resilience.** Streaming responses for long extractions; richer retry/backoff and rate-limit handling.
 
