@@ -27,3 +27,20 @@ def test_extract_bid_no_quote_is_failed():
     bid = extract_bid("AESL", [], client)
     assert bid.extraction_status == "failed"
     assert "no quote" in (bid.notes or "").lower()
+
+
+def test_extract_bid_exception_in_classification(tmp_path):
+    # Test graceful failure when LLM raises exception - verifies exception branch
+    quote = tmp_path / "Quotation-X.txt"; quote.write_text("Base price USD 585000, FCA")
+
+    class BoomClient:
+        """Fake client that raises exception in classify_structure"""
+        def classify_structure(self, *args, **kwargs):
+            raise RuntimeError("boom")
+
+    client = BoomClient()
+    bid = extract_bid("VENDOR", [str(quote)], client)
+    assert bid.extraction_status == "failed"
+    assert "extraction error" in (bid.notes or "").lower()
+    assert bid.provenance is not None
+    assert bid.provenance.document_path.endswith("Quotation-X.txt")

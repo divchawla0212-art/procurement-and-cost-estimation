@@ -26,4 +26,5 @@ def extract_bid(vendor: str, files: list[str], client, pdf_fallback=None) -> Ven
         )
     except Exception as exc:  # graceful per-vendor failure
         return VendorBid(vendor=vendor, source_document=quote,
+                         provenance=ProvenanceRef(document_path=quote, extractor="anthropic:bid_extract_v1"),
                          extraction_status="failed", notes=f"extraction error: {exc}")
