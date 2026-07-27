@@ -11,8 +11,8 @@ VENDOR_DIR = "data/procurement-data/ADPOWER"
     not (os.getenv("ANTHROPIC_API_KEY") and os.path.isdir(VENDOR_DIR)),
     reason="needs ANTHROPIC_API_KEY and sample data",
 )
-def test_live_extract_adpower():
-    os.environ["LLM_PROVIDER"] = "anthropic"
+def test_live_extract_adpower(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
     files = glob.glob(os.path.join(VENDOR_DIR, "*"))
     bid = extract_bid("ADPOWER", files, get_client())
     assert bid.extraction_status == "ok"
