@@ -1,0 +1,9 @@
+You are extracting the commercial terms of a single vendor's quotation for a
+competitive tender. From the quotation text, return: currency (ISO code),
+base_price (the total price for the base scope, as a number), whether VAT is
+included and its rate, freight amount and whether freight is included,
+discount percentage (as a fraction, e.g. 0.10), any optional/priced line items
+(spares, tools, PEMS), delivery_time, delivery_terms (e.g. FCA/EXW/CIF/site),
+payment_terms, and engine_make. Use the numbers exactly as stated; do not
+convert currencies or compute totals. If a field is not present, leave it at
+its default. Do not invent values.
