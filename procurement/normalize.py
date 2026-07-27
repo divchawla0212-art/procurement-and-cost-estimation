@@ -7,7 +7,8 @@ def normalize_bid(bid: VendorBid, target_currency: str, fx_rates: dict[str, floa
                              normalized_total=None, extraction_status="failed")
 
     adjustments: list[NormalizationAdjustment] = []
-    rate = 1.0 if (not bid.currency or bid.currency == target_currency) else fx_rates.get(bid.currency, 1.0)
+    is_foreign = bool(bid.currency) and bid.currency != target_currency
+    rate = fx_rates.get(bid.currency, 1.0) if is_foreign else 1.0
 
     base = bid.base_price
     converted = base * rate
@@ -15,6 +16,10 @@ def normalize_bid(bid: VendorBid, target_currency: str, fx_rates: dict[str, floa
         adjustments.append(NormalizationAdjustment(
             kind="currency", description=f"{bid.currency}->{target_currency} @ {rate}",
             from_value=base, to_value=converted, delta=converted - base))
+    elif is_foreign and bid.currency not in fx_rates:
+        adjustments.append(NormalizationAdjustment(
+            kind="currency", description=f"no FX rate for {bid.currency}; assumed 1.0",
+            from_value=base, to_value=base, delta=0.0))
 
     total = converted
     if bid.vat_included and bid.vat_rate:

@@ -38,3 +38,10 @@ def test_failed_bid_has_no_total():
     n = normalize_bid(bid, "USD", {})
     assert n.normalized_total is None
     assert n.extraction_status == "failed"
+
+
+def test_missing_fx_rate_is_surfaced():
+    bid = VendorBid(vendor="A", currency="EUR", base_price=1000.0, freight_included=True)
+    n = normalize_bid(bid, "USD", {})  # no EUR rate configured
+    assert abs(n.normalized_total - 1000.0) <= 0.01  # assumed 1:1
+    assert any(a.kind == "currency" and "assumed 1.0" in a.description.lower() for a in n.adjustments)
