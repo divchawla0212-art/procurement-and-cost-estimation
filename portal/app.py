@@ -45,7 +45,7 @@ st.subheader(f"Project: {project.name}")
 st.markdown("### 1. Requirements document")
 req = st.file_uploader("Upload the requirements document", type=["pdf", "docx", "xlsx"], key="req")
 if req is not None:
-    dest = os.path.join(ROOT, project.slug, "requirements", req.name)
+    dest = os.path.join(ROOT, project.slug, "requirements", os.path.basename(req.name))
     with open(dest, "wb") as fh:
         fh.write(req.getbuffer())
     project.requirements_file = req.name
