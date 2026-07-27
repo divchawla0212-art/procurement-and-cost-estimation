@@ -52,3 +52,30 @@ def test_unpack_rejects_zip_slip(tmp_path):
     with pytest.raises(ValueError):
         unpack_vendor_zip(str(tmp_path), "proj", str(zpath))
     assert not (tmp_path.parent / "evil.txt").exists()
+
+
+def test_unpack_rejects_malicious_slug(tmp_path):
+    """Verify that a slug containing path traversal raises ValueError."""
+    create_project(str(tmp_path), "Proj")
+    zpath = tmp_path / "v.zip"
+    zpath.write_bytes(_zip_bytes({"VENDOR/file.txt": b"x"}))
+    with pytest.raises(ValueError, match="Unsafe slug"):
+        unpack_vendor_zip(str(tmp_path), "../evil", str(zpath))
+    assert not (tmp_path.parent / "evil").exists()
+
+
+def test_unpack_skips_backslash_separated_hidden_files(tmp_path):
+    """Verify that hidden/temp files with backslash separators are skipped."""
+    create_project(str(tmp_path), "Proj")
+    zpath = tmp_path / "v.zip"
+    zpath.write_bytes(_zip_bytes({
+        "VENDOR\\~$temp.docx": b"x",
+        "VENDOR\\.hidden": b"x",
+        "VENDOR/normal.pdf": b"y",
+    }))
+    vendors = unpack_vendor_zip(str(tmp_path), "proj", str(zpath))
+    assert vendors == ["VENDOR"]
+    files = vendor_files(str(tmp_path), "proj", "VENDOR")
+    assert len(files) == 1
+    assert all("~$" not in f for f in files)
+    assert all(".hidden" not in f for f in files)

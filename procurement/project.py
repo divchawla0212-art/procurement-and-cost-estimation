@@ -12,6 +12,14 @@ def slugify(name: str) -> str:
     return _SLUG.sub("-", name.lower()).strip("-")
 
 
+def _validate_slug(root: str, slug: str) -> None:
+    """Validate that slug does not escape root. Raises ValueError if unsafe."""
+    root_real = os.path.realpath(root)
+    project_real = os.path.realpath(os.path.join(root, slug))
+    if not (project_real == root_real or project_real.startswith(root_real + os.sep)):
+        raise ValueError(f"Unsafe slug: {slug}")
+
+
 def _project_dir(root: str, slug: str) -> str:
     return os.path.join(root, slug)
 
@@ -51,12 +59,15 @@ def list_projects(root: str) -> list[Project]:
 
 
 def _is_skippable(name: str) -> bool:
-    parts = name.split("/")
+    # Normalize separators for consistent handling of both / and \ paths
+    normalized = name.replace("\\", "/")
+    parts = normalized.split("/")
     base = parts[-1]
-    return (not base) or name.startswith("__MACOSX") or base.startswith(".") or base.startswith("~$")
+    return (not base) or normalized.startswith("__MACOSX") or base.startswith(".") or base.startswith("~$")
 
 
 def unpack_vendor_zip(root: str, slug: str, zip_path: str) -> list[str]:
+    _validate_slug(root, slug)
     vendors_dir = os.path.realpath(os.path.join(_project_dir(root, slug), "vendors"))
     vendors: set[str] = set()
     with zipfile.ZipFile(zip_path) as zf:
