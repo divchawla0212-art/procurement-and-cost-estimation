@@ -3,7 +3,7 @@ import os
 import zipfile
 import pytest
 from procurement.project import (
-    slugify, create_project, load_project, list_projects, unpack_vendor_zip, vendor_files,
+    slugify, create_project, load_project, list_projects, unpack_vendor_zip, vendor_files, _is_skippable,
 )
 
 
@@ -79,3 +79,11 @@ def test_unpack_skips_backslash_separated_hidden_files(tmp_path):
     assert len(files) == 1
     assert all("~$" not in f for f in files)
     assert all(".hidden" not in f for f in files)
+
+
+def test_is_skippable_normalizes_backslash_separator():
+    """Direct unit test: _is_skippable handles both / and \\ separators correctly."""
+    assert _is_skippable("ADPOWER\\~$temp.docx") is True
+    assert _is_skippable("ADPOWER\\.hidden") is True
+    assert _is_skippable("__MACOSX\\junk") is True
+    assert _is_skippable("ADPOWER\\Quotation.pdf") is False
