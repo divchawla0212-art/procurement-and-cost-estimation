@@ -1,10 +1,13 @@
 # portal/app.py
 import os
+import zipfile
 import streamlit as st
 from procurement import project as proj
 from procurement.pipeline import run_ingestion, load_dataset
 from procurement.pdf_llm import transcribe_pdf
 from procurement.export import comparison_to_rows, comparison_to_xlsx_bytes, comparison_to_csv_str
+from procurement.quote_select import pick_quote
+from procurement.models import ComparisonTable
 from shared.llm.factory import get_client
 
 ROOT = os.environ.get("PROCUREMENT_PROJECTS_ROOT", "projects")
@@ -61,7 +64,7 @@ if vzip is not None:
     try:
         vendors = proj.unpack_vendor_zip(ROOT, project.slug, tmp)
         st.success(f"Detected vendors: {', '.join(vendors)}")
-    except ValueError as e:
+    except (ValueError, zipfile.BadZipFile) as e:
         st.error(f"Rejected archive: {e}")
     finally:
         os.remove(tmp)
@@ -70,7 +73,6 @@ if vzip is not None:
 if project.vendors:
     for v in project.vendors:
         files = proj.vendor_files(ROOT, project.slug, v)
-        from procurement.quote_select import pick_quote
         st.caption(f"**{v}** — {len(files)} files · quote: {os.path.basename(pick_quote(files) or '—')}")
 
 # --- FX rates ---
@@ -102,15 +104,16 @@ if st.button("Run ingestion", type="primary", disabled=not project.vendors):
 dataset = load_dataset(ROOT, project.slug)
 if dataset:
     st.markdown("### 5. Results")
-    from procurement.models import ComparisonTable
     table = ComparisonTable.model_validate(dataset["comparison"])
     st.dataframe(comparison_to_rows(table), use_container_width=True)
 
     c1, c2 = st.columns(2)
     c1.download_button("Download Excel", comparison_to_xlsx_bytes(table),
-                       file_name=f"{project.slug}-comparison.xlsx")
+                       file_name=f"{project.slug}-comparison.xlsx",
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     c2.download_button("Download CSV", comparison_to_csv_str(table),
-                       file_name=f"{project.slug}-comparison.csv")
+                       file_name=f"{project.slug}-comparison.csv",
+                       mime="text/csv")
 
     st.markdown("#### Per-vendor extracted bids")
     for bid in dataset["bids"]:

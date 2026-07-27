@@ -87,3 +87,11 @@ def test_is_skippable_normalizes_backslash_separator():
     assert _is_skippable("ADPOWER\\.hidden") is True
     assert _is_skippable("__MACOSX\\junk") is True
     assert _is_skippable("ADPOWER\\Quotation.pdf") is False
+
+
+def test_unpack_rejects_non_zip_file(tmp_path):
+    create_project(str(tmp_path), "Proj")
+    bad = tmp_path / "not_really.zip"
+    bad.write_text("this is plain text, not a zip")
+    with pytest.raises(zipfile.BadZipFile):
+        unpack_vendor_zip(str(tmp_path), "proj", str(bad))
