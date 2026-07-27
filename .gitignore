@@ -219,3 +219,6 @@ __marimo__/
 .superpowers/
 *.pyc
 cost_dataset.json
+
+# Confidential client tender/cost documents — never commit
+data/

@@ -4,6 +4,7 @@ from shared.llm.mock_client import MockLLMClient
 from shared.llm.anthropic_client import AnthropicClient
 from shared.llm.openai_client import OpenAIClient
 from shared.llm.gemini_client import GeminiClient
+from shared.llm.bedrock_client import BedrockClient
 
 
 def get_client() -> LLMClient:
@@ -18,4 +19,6 @@ def get_client() -> LLMClient:
         return OpenAIClient(**kwargs)
     if provider == "gemini":
         return GeminiClient(**kwargs)
+    if provider == "bedrock":
+        return BedrockClient(**kwargs)
     raise ValueError(f"Unknown LLM_PROVIDER: {provider}")
