@@ -75,4 +75,6 @@ class Project(BaseModel):
     fx_rates: dict[str, float] = {}
     vendors: list[str] = []
     requirements_file: str | None = None
+    store_version: int = 1
+    generation: int = 0
     status: str = "new"
