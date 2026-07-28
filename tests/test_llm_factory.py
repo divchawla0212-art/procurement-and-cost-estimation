@@ -16,6 +16,13 @@ def test_selects_bedrock(monkeypatch):
     assert isinstance(get_client(), BedrockClient)
 
 
+def test_selects_openai(monkeypatch):
+    from shared.llm.openai_client import OpenAIClient
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "dummy")
+    assert isinstance(get_client(), OpenAIClient)
+
+
 def test_bedrock_honors_llm_model(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "bedrock")
     monkeypatch.setenv("AWS_REGION", "us-east-1")

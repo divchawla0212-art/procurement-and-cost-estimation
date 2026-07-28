@@ -2,6 +2,7 @@
 import os
 import zipfile
 import streamlit as st
+from dotenv import load_dotenv
 from procurement import project as proj
 from procurement.pipeline import run_ingestion, load_dataset
 from procurement.pdf_llm import transcribe_pdf
@@ -10,31 +11,67 @@ from procurement.quote_select import pick_quote
 from procurement.models import ComparisonTable
 from shared.llm.factory import get_client
 
+load_dotenv()  # load a local .env if present (see .env.example)
+
 ROOT = os.environ.get("PROCUREMENT_PROJECTS_ROOT", "projects")
-# Default to real Anthropic extraction when a provider isn't explicitly chosen,
-# so a set ANTHROPIC_API_KEY is actually used (get_client() otherwise defaults to mock).
-os.environ.setdefault("LLM_PROVIDER", "anthropic")
+os.makedirs(ROOT, exist_ok=True)
+
+# The env var each provider needs for its API key (None = no key needed).
+PROVIDER_KEYS = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+    "bedrock": None,
+    "mock": None,
+}
 
 st.set_page_config(page_title="Procurement Comparison Portal", layout="wide")
 st.title("Procurement Comparison Portal")
-
-if not os.getenv("ANTHROPIC_API_KEY"):
-    st.warning("ANTHROPIC_API_KEY is not set — extraction will fail. Set it and restart to run real extraction.")
-
-os.makedirs(ROOT, exist_ok=True)
 
 # --- Sidebar: project selection / creation ---
 st.sidebar.header("Projects")
 projects = proj.list_projects(ROOT)
 names = [p.slug for p in projects]
-choice = st.sidebar.selectbox("Open project", ["<new>"] + names)
+# A just-created project is applied here, before the widget is instantiated —
+# Streamlit forbids assigning to a widget's key once it exists.
+if "_pending_project" in st.session_state:
+    st.session_state["project_choice"] = st.session_state.pop("_pending_project")
+
+choice = st.sidebar.selectbox("Open project", ["<new>"] + names, key="project_choice")
+
+# --- Sidebar: LLM provider (kept after the project selectbox so the project
+# selector stays the first sidebar selectbox; rendered before any st.stop()). ---
+st.sidebar.header("LLM provider")
+_provider_options = ["anthropic", "openai", "mock"]
+_default_provider = os.environ.get("LLM_PROVIDER", "anthropic")
+if _default_provider not in _provider_options:
+    _provider_options.append(_default_provider)
+provider = st.sidebar.selectbox(
+    "Extraction provider", _provider_options,
+    index=_provider_options.index(_default_provider),
+    help="Which LLM API runs the bid extraction. Set the matching API key in your .env.",
+)
+os.environ["LLM_PROVIDER"] = provider
+
+_needed_key = PROVIDER_KEYS.get(provider)
+if _needed_key and not os.getenv(_needed_key):
+    st.warning(
+        f"{_needed_key} is not set — extraction with '{provider}' will fail. "
+        f"Add it to your .env (copy .env.example) and restart."
+    )
 
 if choice == "<new>":
     new_name = st.sidebar.text_input("New project name")
     target = st.sidebar.text_input("Target currency", value="USD")
-    if st.sidebar.button("Create") and new_name.strip():
-        proj.create_project(ROOT, new_name.strip(), target_currency=target.strip() or "USD")
-        st.rerun()
+    if st.sidebar.button("Create"):
+        if new_name.strip():
+            created = proj.create_project(ROOT, new_name.strip(), target_currency=target.strip() or "USD")
+            # Open the project we just made, otherwise the rerun lands back on
+            # this screen and a successful create is indistinguishable from a no-op.
+            st.session_state["_pending_project"] = created.slug
+            st.rerun()
+        else:
+            st.sidebar.error("Enter a project name first.")
     st.info("Create a project in the sidebar to begin.")
     st.stop()
 
@@ -97,7 +134,10 @@ if st.button("Save FX rates"):
 st.markdown("### 4. Run ingestion")
 if st.button("Run ingestion", type="primary", disabled=not project.vendors):
     with st.spinner("Extracting and comparing vendor bids..."):
-        run_ingestion(ROOT, project.slug, get_client(), pdf_fallback=transcribe_pdf)
+        # The scanned-PDF transcription fallback uses Anthropic; only enable it
+        # when an Anthropic key is available (works even if extraction runs on OpenAI).
+        _fallback = transcribe_pdf if os.getenv("ANTHROPIC_API_KEY") else None
+        run_ingestion(ROOT, project.slug, get_client(), pdf_fallback=_fallback)
     st.success("Done.")
 
 # --- Results ---

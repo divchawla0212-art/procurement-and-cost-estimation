@@ -1,14 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "cost-estimation"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = ["pydantic>=2.6", "openpyxl>=3.1", "pyyaml>=6.0", "anthropic>=0.39", "pypdf>=4.0", "streamlit>=1.30"]
+dependencies = ["pydantic>=2.6", "openpyxl>=3.1", "pyyaml>=6.0", "anthropic>=0.39", "pypdf>=4.0", "streamlit>=1.30", "python-dotenv>=1.0", "openai>=1.0"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 
 [project.scripts]
 cost-est = "cost_estimation.cli:main"
+
+# Flat layout: name the real packages so setuptools doesn't try to package
+# runtime/data dirs (data/, projects/, docs/) alongside them.
+[tool.setuptools.packages.find]
+include = ["cost_estimation*", "procurement*", "shared*", "portal*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
