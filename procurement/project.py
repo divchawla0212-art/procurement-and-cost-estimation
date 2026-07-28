@@ -4,6 +4,7 @@ import json
 import zipfile
 from datetime import datetime, timezone
 from procurement.models import Project
+from procurement.store import layout
 
 _SLUG = re.compile(r"[^a-z0-9]+")
 
@@ -25,8 +26,10 @@ def _project_dir(root: str, slug: str) -> str:
 
 
 def save_project(root: str, project: Project) -> None:
-    with open(os.path.join(_project_dir(root, project.slug), "project.json"), "w", encoding="utf-8") as fh:
-        json.dump(project.model_dump(), fh, indent=2)
+    layout.atomic_write_json(
+        os.path.join(_project_dir(root, project.slug), "project.json"),
+        project.model_dump(),
+    )
 
 
 def create_project(root: str, name: str, target_currency: str = "USD") -> Project:
