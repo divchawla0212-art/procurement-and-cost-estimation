@@ -1,8 +1,14 @@
 """Derived SQLite index over the JSON snapshots.
 
 This module is the ONLY one that opens store.db. The index is disposable:
-deleting it must change no query result. Every query checks freshness first
-and rebuilds on any mismatch, so stale reads are structurally impossible.
+deleting it must change no query result.
+
+Every query checks freshness before answering and rebuilds on any mismatch.
+The freshness key is the project `generation` plus the mtime_ns and size of
+every snapshot file. `generation` only moves inside a `transaction()`, so for
+a bare `save_*` outside one, mtime+size is the only guard - which catches
+everything except a write that lands in the same mtime tick at an identical
+size. Stale reads are therefore very unlikely, not impossible by construction.
 """
 import logging
 import os

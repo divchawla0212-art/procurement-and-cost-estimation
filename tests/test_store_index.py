@@ -85,9 +85,39 @@ def test_index_is_never_opened_writable_outside_rebuild(tmp_path, monkeypatch):
     assert opened and all(opened), "queries must open the index read-only (uri=True)"
 
 
-def test_corrupt_index_falls_back_to_snapshots(tmp_path):
+def test_corrupt_index_is_rebuilt_not_served(tmp_path):
+    # A corrupt db never reaches the fallback: is_stale() cannot read its meta
+    # table, calls it stale, and rebuild() replaces it before the query runs.
     root = _seed(tmp_path)
     index.query_documents(root, "p")
     with open(layout.index_path(root, "p"), "wb") as fh:
         fh.write(b"not a database")
     assert len(index.query_documents(root, "p")) == 2
+    assert index.is_stale(root, "p") is False       # replaced by a good db
+
+
+def _break_sqlite(monkeypatch):
+    def boom(*a, **k):
+        raise sqlite3.OperationalError("unable to open database file")
+    monkeypatch.setattr(index.sqlite3, "connect", boom)
+
+
+def test_documents_fall_back_to_snapshots_when_sqlite_is_unusable(tmp_path, monkeypatch):
+    root = _seed(tmp_path)
+    via_sql = index.query_documents(root, "p")
+    quotes_via_sql = index.query_documents(root, "p", doc_class="quotation")
+    vendor_via_sql = index.query_documents(root, "p", vendor="KERUI")
+    _break_sqlite(monkeypatch)
+    assert index.query_documents(root, "p") == via_sql
+    assert index.query_documents(root, "p", doc_class="quotation") == quotes_via_sql
+    assert index.query_documents(root, "p", vendor="KERUI") == vendor_via_sql
+    assert index.query_documents(root, "p", vendor="NOPE") == []
+
+
+def test_vendor_summary_falls_back_to_snapshots_when_sqlite_is_unusable(tmp_path, monkeypatch):
+    # the fallback hand-rolls the GROUP BY over a LEFT JOIN; assert it agrees
+    # with the SQL it stands in for, row for row.
+    root = _seed(tmp_path)
+    via_sql = index.query_vendor_summary(root, "p")
+    _break_sqlite(monkeypatch)
+    assert index.query_vendor_summary(root, "p") == via_sql

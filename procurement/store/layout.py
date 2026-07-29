@@ -30,19 +30,33 @@ def facts_path(root: str, slug: str, vendor: str) -> str:
     return os.path.join(store_dir(root, slug), "vendors", vendor, "facts.json")
 
 
+def migration_marker_path(root: str, slug: str) -> str:
+    """Positive record that the legacy dataset.json import completed."""
+    return os.path.join(store_dir(root, slug), "migrated.json")
+
+
 def events_path(root: str, slug: str) -> str:
     return os.path.join(store_dir(root, slug), "events.jsonl")
 
 
 def atomic_write_json(path: str, data) -> None:
-    """Write JSON so an interrupted write cannot destroy the previous copy."""
+    """Write JSON so an interrupted write cannot destroy the previous copy.
+
+    The fsync matters: os.replace() is atomic with respect to the directory
+    entry, but without flushing the new contents to disk first a power loss can
+    leave the *replaced* name pointing at a truncated file. Any failure - a
+    serialization error mid-dump included - removes the temp file rather than
+    orphaning it next to the real one.
+    """
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=2, default=str)
     try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2, default=str)
+            fh.flush()
+            os.fsync(fh.fileno())
         os.replace(tmp, path)
-    except OSError:
+    except BaseException:
         if os.path.exists(tmp):
             os.remove(tmp)
         raise

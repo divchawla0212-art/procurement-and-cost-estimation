@@ -24,7 +24,16 @@ def bump_generation(root: str, slug: str) -> int:
 
 @contextmanager
 def transaction(root: str, slug: str):
-    """Bump `generation` once, only if the body completes without raising."""
+    """Bump `generation` once, only if the body completes without raising.
+
+    This is NOT a rollback: it does not undo the writes a failed body already
+    made. Each individual save is atomic, but the set is not, so a body that
+    raises half way leaves the earlier files written and only withholds the
+    generation bump. Callers whose partial state would be misread on the next
+    run must record their own completion marker inside the body (see
+    `migrate.migrate_dataset_json`) rather than inferring it from what happens
+    to be on disk.
+    """
     yield
     bump_generation(root, slug)
 
@@ -47,6 +56,23 @@ def load_facts(root: str, slug: str, vendor: str) -> VendorFacts | None:
 def save_facts(root: str, slug: str, facts: VendorFacts) -> None:
     layout.atomic_write_json(layout.facts_path(root, slug, facts.vendor),
                              facts.model_dump())
+
+
+def delete_facts(root: str, slug: str, vendor: str) -> bool:
+    """Remove a vendor's facts snapshot. Returns True if there was one.
+
+    Used when a vendor leaves the project: the snapshots are authoritative, so
+    facts for a vendor the project no longer has would be contradictory state,
+    not merely unused state.
+    """
+    path = layout.facts_path(root, slug, vendor)
+    if not os.path.exists(path):
+        return False
+    os.remove(path)
+    vdir = os.path.dirname(path)
+    if os.path.isdir(vdir) and not os.listdir(vdir):
+        os.rmdir(vdir)
+    return True
 
 
 def list_fact_vendors(root: str, slug: str) -> list[str]:

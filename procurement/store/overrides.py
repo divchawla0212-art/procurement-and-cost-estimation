@@ -28,7 +28,10 @@ def _parse(field_path: str) -> list[tuple[str, str | None]]:
         if not m:
             raise ValueError(f"Malformed field_path segment: {raw!r}")
         sel = m.group("sel")
-        if sel is not None and sel.isdigit():
+        # str.isdigit() would let "-1" through as an id selector, which matches
+        # nothing and surfaces later as a spurious conflict instead of the
+        # rejection the author needs to see.
+        if sel is not None and re.fullmatch(r"-?\d+", sel):
             raise ValueError(
                 f"Index selectors are not supported ({raw!r}); address list "
                 "members by id, because list order is not stable across re-extractions"

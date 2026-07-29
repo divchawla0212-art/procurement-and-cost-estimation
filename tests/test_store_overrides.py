@@ -34,6 +34,13 @@ def test_index_selectors_are_rejected():
         ov.get_by_path(_rec(), "technical[0].value")
 
 
+def test_negative_index_selectors_are_rejected_too():
+    # "-1" must not slip through as an id selector: it would match nothing and
+    # surface as a spurious conflict instead of the intended rejection.
+    with pytest.raises(ValueError):
+        ov.get_by_path(_rec(), "technical[-1].value")
+
+
 def test_apply_override_wins_over_extracted_value():
     out = ov.apply_overrides(_rec(), [_o("commercial.base_price", 1200.0, 1000.0)])
     assert out["commercial"]["base_price"] == 1200.0

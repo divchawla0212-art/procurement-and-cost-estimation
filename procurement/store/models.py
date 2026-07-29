@@ -34,7 +34,10 @@ class DocumentRecord(BaseModel):
 
 class VendorFacts(BaseModel):
     vendor: str
-    commercial: dict | None = None      # BidExtraction dump, from the quotation
+    # VendorBid dump from the quotation, with any human overrides already
+    # applied - this is the resolved value, not the raw extraction. The raw
+    # value each override replaced is kept in `overrides[].extracted_value`.
+    commercial: dict | None = None
     normalized: dict | None = None      # NormalizedBid dump
     technical: list[dict] = []          # populated in phase 2
     deviations: list[dict] = []         # populated in phase 2
