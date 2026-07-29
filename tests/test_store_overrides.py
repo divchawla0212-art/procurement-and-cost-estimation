@@ -69,3 +69,30 @@ def test_reconcile_leaves_untouched_paths_alone():
     fresh = _rec()
     out = ov.reconcile([_o("commercial.base_price", 1200.0, 1000.0)], fresh)
     assert out[0].conflict is False
+
+
+def test_reconcile_flags_conflict_when_list_member_vanishes():
+    prior = _o("technical[f-1].value", 55.0, 40.0)
+    prior.conflict = True                            # already flagged from a prior run
+    fresh = _rec()
+    fresh["technical"] = [f for f in fresh["technical"] if f["fact_id"] != "f-1"]
+    out = ov.reconcile([prior], fresh)
+    assert out[0].conflict is True                    # a vanished path is never "agrees"
+    assert out[0].extracted_value is None
+    assert out[0].value == 55.0                       # override still wins
+
+
+def test_apply_overrides_with_unwritable_path_does_not_raise():
+    rec = _rec()
+    rec["technical"] = [f for f in rec["technical"] if f["fact_id"] != "f-1"]
+    out = ov.apply_overrides(rec, [_o("technical[f-1].value", 55.0, 40.0)])
+    assert isinstance(out, dict)
+    assert out["commercial"]["base_price"] == 1000.0
+    assert all(f["fact_id"] != "f-1" for f in out["technical"])
+
+
+def test_reconcile_treats_legitimate_none_as_agreement_not_missing():
+    rec = _rec()
+    rec["commercial"]["discount"] = None              # legitimately extracted as null
+    out = ov.reconcile([_o("commercial.discount", "flat 5%", None)], rec)
+    assert out[0].conflict is False

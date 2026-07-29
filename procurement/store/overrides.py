@@ -5,11 +5,20 @@ override was recorded against, the override is flagged `conflict` and both
 values are kept for review — nothing is silently dropped either way.
 """
 import copy
+import logging
 import re
 
 from procurement.store.models import Override
 
+_log = logging.getLogger(__name__)
+
 _SEGMENT = re.compile(r"^(?P<name>[^\[\]]+)(?:\[(?P<sel>[^\[\]]+)\])?$")
+
+# Sentinel distinguishing "path does not resolve" from "path resolves to a
+# stored None". A field legitimately extracted as None is not the same as a
+# vanished field — conflating them would let a dropped fact masquerade as
+# quiet agreement.
+_MISSING = object()
 
 
 def _parse(field_path: str) -> list[tuple[str, str | None]]:
@@ -62,13 +71,19 @@ def _walk(obj, parts, create: bool = False):
     return (cur, name)
 
 
-def get_by_path(obj: dict, field_path: str):
+def _resolve(obj: dict, field_path: str):
+    """Return the value at field_path, or _MISSING if the path does not resolve."""
     parts = _parse(field_path)
     found = _walk(obj, parts)
     if found is None:
-        return None
+        return _MISSING
     container, key = found
     return container if key is None else container.get(key)
+
+
+def get_by_path(obj: dict, field_path: str):
+    value = _resolve(obj, field_path)
+    return None if value is _MISSING else value
 
 
 def set_by_path(obj: dict, field_path: str, value) -> bool:
@@ -86,18 +101,35 @@ def set_by_path(obj: dict, field_path: str, value) -> bool:
 def apply_overrides(record: dict, overrides: list[Override]) -> dict:
     out = copy.deepcopy(record)
     for o in overrides:
-        set_by_path(out, o.field_path, o.value)
+        if not set_by_path(out, o.field_path, o.value):
+            _log.warning(
+                "override for %r could not be applied: path does not resolve "
+                "in the current record (the field may have been removed by "
+                "re-extraction)",
+                o.field_path,
+            )
     return out
 
 
 def reconcile(overrides: list[Override], fresh_record: dict) -> list[Override]:
-    """Update each override against a fresh extraction, flagging disagreement."""
+    """Update each override against a fresh extraction, flagging disagreement.
+
+    A path that no longer resolves at all (e.g. a list member dropped by a
+    re-extraction) is its own state, distinct from "extraction agrees" —
+    it always flags a conflict and never silently clears one that was
+    already flagged, because data disappearing is not the same as data
+    matching.
+    """
     out = []
     for o in overrides:
         updated = o.model_copy()
-        current = get_by_path(fresh_record, o.field_path)
-        updated.conflict = current is not None and current != o.extracted_value
-        if updated.conflict:
-            updated.extracted_value = current
+        current = _resolve(fresh_record, o.field_path)
+        if current is _MISSING:
+            updated.conflict = True
+            updated.extracted_value = None
+        else:
+            updated.conflict = current != o.extracted_value
+            if updated.conflict:
+                updated.extracted_value = current
         out.append(updated)
     return out
