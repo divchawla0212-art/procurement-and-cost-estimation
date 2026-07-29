@@ -133,7 +133,7 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
         snapshots.save_documents(root, slug, documents)
 
     project = load_project(root, slug)
-    project.status = ("failed" if extracted == 0 and failed
+    project.status = ("failed" if extracted == 0
                       else "done_with_failures" if failed else "done")
     save_project(root, project)
 

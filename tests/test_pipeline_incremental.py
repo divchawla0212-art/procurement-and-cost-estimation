@@ -1,7 +1,7 @@
 import io
 import zipfile
 from procurement.project import create_project, unpack_vendor_zip, load_project
-from procurement.pipeline import run_ingestion, inventory_documents
+from procurement.pipeline import run_ingestion, inventory_documents, load_dataset
 from procurement.store import events, snapshots
 from shared.llm.mock_client import MockLLMClient
 
@@ -129,3 +129,19 @@ def test_partial_failure_is_reported_distinctly(tmp_path):
 
     run_ingestion(root, "p", OneBad(), force=True)
     assert load_project(root, "p").status == "done_with_failures"
+
+
+def test_status_is_failed_when_nothing_extracted_and_nothing_failed(tmp_path):
+    # no vendors were ever unpacked -> no quote is ever selected -> the run
+    # extracts nothing and fails nothing; "done" would be a lie here.
+    root = str(tmp_path)
+    create_project(root, "P", target_currency="USD")
+    run_ingestion(root, "p", _client())
+    assert load_project(root, "p").status == "failed"
+    assert load_dataset(root, "p") is None
+
+
+def test_status_is_done_on_a_clean_run(tmp_path):
+    root = _project(tmp_path)
+    run_ingestion(root, "p", _client())
+    assert load_project(root, "p").status == "done"
