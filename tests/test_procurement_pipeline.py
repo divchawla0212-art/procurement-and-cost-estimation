@@ -28,6 +28,7 @@ def test_run_ingestion_end_to_end(tmp_path):
 
     assert len(result["comparison"]["rows"]) == 2
     assert all(r["extraction_status"] == "ok" for r in result["comparison"]["rows"])
-    # persisted
-    ds = load_dataset(str(tmp_path), "proj")
-    assert ds is not None and len(ds["bids"]) == 2
+    # persisted to the store
+    from procurement.store import snapshots
+    assert snapshots.load_facts(str(tmp_path), "proj", "KERUI").commercial is not None
+    assert snapshots.load_facts(str(tmp_path), "proj", "ADPOWER").commercial is not None
