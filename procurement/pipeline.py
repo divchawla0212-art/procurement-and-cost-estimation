@@ -104,19 +104,28 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
 
             prior_facts = snapshots.load_facts(root, slug, doc.vendor)
             prior_overrides = prior_facts.overrides if prior_facts else []
-            commercial = bid.model_dump()
-            overrides = reconcile(prior_overrides, commercial)
-            resolved = apply_overrides(commercial, overrides)
+            # field_path is relative to the snapshot root (VendorFacts), where
+            # commercial/technical/deviations are siblings - so overrides must
+            # be reconciled and applied against that shape, not against the
+            # bare bid dump. Against the bid dump "commercial.base_price"
+            # simply never resolves and the human's correction is discarded.
+            facts_view = {
+                "commercial": bid.model_dump(),
+                "technical": prior_facts.technical if prior_facts else [],
+                "deviations": prior_facts.deviations if prior_facts else [],
+            }
+            overrides = reconcile(prior_overrides, facts_view)
+            resolved = apply_overrides(facts_view, overrides)
             normalized = normalize_bid(
-                VendorBid.model_validate(resolved),
+                VendorBid.model_validate(resolved["commercial"]),
                 project.target_currency, project.fx_rates)
 
             snapshots.save_facts(root, slug, VendorFacts(
                 vendor=doc.vendor,
-                commercial=resolved,
+                commercial=resolved["commercial"],
                 normalized=normalized.model_dump(),
-                technical=prior_facts.technical if prior_facts else [],
-                deviations=prior_facts.deviations if prior_facts else [],
+                technical=resolved["technical"],
+                deviations=resolved["deviations"],
                 overrides=overrides))
 
             events.append_event(root, slug, Event(
@@ -129,6 +138,21 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
                         at=_now(), run_id=run_id, actor="pipeline",
                         action="override.conflicted", target=doc.doc_id,
                         detail={"field_path": o.field_path}))
+
+        # A vendor removed from the project must not keep haunting the
+        # comparison: documents.json is replaced wholesale every run, but
+        # facts.json lives in a per-vendor directory nobody was pruning, and
+        # load_dataset enumerates vendors from those directories. Snapshots are
+        # authoritative, so the stale file is deleted rather than merely
+        # filtered out at read time.
+        for vendor in snapshots.list_fact_vendors(root, slug):
+            if vendor in project.vendors:
+                continue
+            if snapshots.delete_facts(root, slug, vendor):
+                events.append_event(root, slug, Event(
+                    at=_now(), run_id=run_id, actor="pipeline",
+                    action="vendor.pruned", target=vendor,
+                    detail={"reason": "no longer in the project"}))
 
         snapshots.save_documents(root, slug, documents)
 
@@ -146,11 +170,26 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
 
 
 def load_dataset(root: str, slug: str) -> dict | None:
-    """Assemble the UI-facing view from the store."""
+    """Assemble the UI-facing view from the store.
+
+    Migrates on read as well as on ingestion: the portal calls this on every
+    render, and a project whose results only exist in a legacy dataset.json
+    would otherwise show nothing until the user paid for a full re-extraction.
+    The migration is idempotent and a no-op once the store is populated.
+    """
+    migrate.migrate_dataset_json(root, slug)
     vendors = snapshots.list_fact_vendors(root, slug)
     if not vendors:
         return None
     project = load_project(root, slug)
+    if project.vendors:
+        # defence in depth behind run_ingestion's pruning: never show a vendor
+        # the project no longer has. Skipped when the project lists no vendors
+        # at all, since that cannot distinguish "none" from "not recorded" for
+        # a project whose facts came from migration.
+        vendors = [v for v in vendors if v in set(project.vendors)]
+    if not vendors:
+        return None
     bids, normalized = [], []
     for vendor in vendors:
         facts = snapshots.load_facts(root, slug, vendor)

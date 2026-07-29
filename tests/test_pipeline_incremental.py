@@ -1,8 +1,10 @@
 import io
+import shutil
 import zipfile
 from procurement.project import create_project, unpack_vendor_zip, load_project
 from procurement.pipeline import run_ingestion, inventory_documents, load_dataset
 from procurement.store import events, snapshots
+from procurement.store.models import Override
 from shared.llm.mock_client import MockLLMClient
 
 
@@ -145,3 +147,100 @@ def test_status_is_done_on_a_clean_run(tmp_path):
     root = _project(tmp_path)
     run_ingestion(root, "p", _client())
     assert load_project(root, "p").status == "done"
+
+
+def test_load_dataset_migrates_a_legacy_project_without_a_paid_rerun(tmp_path):
+    """A pre-store project must show its results on render, not only after the
+    user clicks 'Run ingestion' and pays for a full round of LLM calls."""
+    import json as _json
+    root = str(tmp_path)
+    create_project(root, "P", target_currency="USD")
+    project = load_project(root, "p")
+    project.vendors = ["KERUI", "MKON"]
+    from procurement.project import save_project
+    save_project(root, project)
+    with open(tmp_path / "p" / "dataset.json", "w", encoding="utf-8") as fh:
+        _json.dump({
+            "bids": [{"vendor": "KERUI", "base_price": 1000.0, "currency": "USD"},
+                     {"vendor": "MKON", "base_price": 900.0, "currency": "USD"}],
+            "normalized": [{"vendor": "KERUI", "normalized_currency": "USD",
+                            "normalized_total": 1000.0},
+                           {"vendor": "MKON", "normalized_currency": "USD",
+                            "normalized_total": 900.0}],
+            "comparison": {"target_currency": "USD", "rows": []},
+        }, fh)
+
+    dataset = load_dataset(root, "p")
+    assert dataset is not None, "a legacy project must not lose its results"
+    assert {b["vendor"] for b in dataset["bids"]} == {"KERUI", "MKON"}
+    assert len(dataset["comparison"]["rows"]) == 2
+
+
+def _override(path, value, extracted):
+    return Override(field_path=path, value=value, extracted_value=extracted,
+                    author="rahul", at="2026-07-29T10:00:00Z", reason="quote revision by email")
+
+
+def test_override_survives_rerun_and_flows_into_normalized(tmp_path):
+    """The exit criterion: a human correction written into facts.json is still
+    the value the comparison shows after a fresh, disagreeing extraction."""
+    root = _project(tmp_path)
+    run_ingestion(root, "p", _client())
+
+    facts = snapshots.load_facts(root, "p", "KERUI")
+    assert facts.commercial["base_price"] == 1000.0
+    # spec-conformant path: dotted, relative to the snapshot root (VendorFacts)
+    facts.overrides = [_override("commercial.base_price", 1500.0, 1000.0)]
+    snapshots.save_facts(root, "p", facts)
+
+    disagreeing = MockLLMClient(response={"currency": "USD", "base_price": 2000.0,
+                                          "freight_included": True})
+    run_ingestion(root, "p", disagreeing, force=True)
+
+    after = snapshots.load_facts(root, "p", "KERUI")
+    assert after.commercial["base_price"] == 1500.0, "the human correction must win"
+    assert after.normalized["normalized_total"] == 1500.0, \
+        "and must flow through normalization into the comparison"
+    assert len(after.overrides) == 1
+    assert after.overrides[0].conflict is True
+    assert after.overrides[0].extracted_value == 2000.0
+    assert after.overrides[0].value == 1500.0
+
+    dataset = load_dataset(root, "p")
+    kerui = next(b for b in dataset["bids"] if b["vendor"] == "KERUI")
+    assert kerui["base_price"] == 1500.0
+
+
+def test_override_conflict_is_recorded_as_an_event(tmp_path):
+    root = _project(tmp_path)
+    run_ingestion(root, "p", _client())
+    facts = snapshots.load_facts(root, "p", "KERUI")
+    facts.overrides = [_override("commercial.base_price", 1500.0, 1000.0)]
+    snapshots.save_facts(root, "p", facts)
+
+    disagreeing = MockLLMClient(response={"currency": "USD", "base_price": 2000.0,
+                                          "freight_included": True})
+    run_ingestion(root, "p", disagreeing, force=True)
+    assert "override.conflicted" in [e.action for e in events.read_events(root, "p")]
+
+
+def test_withdrawn_vendor_is_dropped_from_the_store_and_the_comparison(tmp_path):
+    root = _project(tmp_path)
+    run_ingestion(root, "p", _client())
+    assert set(snapshots.list_fact_vendors(root, "p")) == {"KERUI", "MKON"}
+
+    # the buyer withdraws MKON and re-uploads only the remaining vendor
+    shutil.rmtree(tmp_path / "p" / "vendors" / "MKON")
+    z2 = tmp_path / "v2.zip"
+    z2.write_bytes(_zip({"KERUI/Quotation.txt": b"base price 1000",
+                         "KERUI/BOM.txt": b"bill of materials"}))
+    unpack_vendor_zip(root, "p", str(z2))
+    assert load_project(root, "p").vendors == ["KERUI"]
+
+    run_ingestion(root, "p", _client())
+
+    assert snapshots.list_fact_vendors(root, "p") == ["KERUI"], \
+        "a withdrawn vendor's facts must not survive on disk"
+    dataset = load_dataset(root, "p")
+    assert [b["vendor"] for b in dataset["bids"]] == ["KERUI"]
+    assert [r["vendor"] for r in dataset["comparison"]["rows"]] == ["KERUI"]
