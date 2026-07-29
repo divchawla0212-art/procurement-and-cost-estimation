@@ -8,6 +8,13 @@
 
 **Tech Stack:** Python 3.12, Pydantic v2, stdlib `sqlite3`, `hashlib`, `pytest`. No new dependencies.
 
+> **Executed 2026-07-30. Three defects in this plan's own code were found during execution — do not copy these blocks verbatim into a later plan:**
+> 1. **Task 6** uses `with sqlite3.connect(...) as conn:`. That is a *transaction* context manager, not a resource one — it never closes the handle, so `rebuild()`'s `os.replace()` fails on Windows with `PermissionError: WinError 32`. Every connection site needs an explicit `conn.close()` (and `conn.commit()` before it where writes occur).
+> 2. **Task 8** calls `reconcile(prior_overrides, commercial)` / `apply_overrides(commercial, overrides)` against the bare `VendorBid` dump. `field_path` is defined relative to the **`VendorFacts`** root, so the spec-conformant form `commercial.base_price` never resolves and every conforming override is silently discarded. Reconcile against a `VendorFacts`-shaped view instead.
+> 3. **Task 8** never prunes `facts.json` for vendors removed from `project.vendors`, so a withdrawn vendor's stale price persists in the comparison forever — a regression against the `dataset.json` model this phase replaced.
+>
+> All three are fixed in the shipped code (`fa8ba9a`, `01be065`). Defects 2 and 3 lived in the seam *between* modules, which per-task reviews structurally cannot see — a lesson for phases 2–4: end each plan with an explicit cross-module integration task whose only job is to test the wiring.
+
 ## Global Constraints
 
 - Python `>=3.12`; dependencies unchanged — `sqlite3` and `hashlib` are stdlib.

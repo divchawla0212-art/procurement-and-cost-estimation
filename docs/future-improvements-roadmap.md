@@ -68,6 +68,15 @@ Per `docs/superpowers/specs/2026-07-27-aws-ingestion-infrastructure-design.md`:
 - 🔧 Cost-estimation spec §6 wording overstates shipped scope (lists resource rates as delivered).
 - 🔧 `dict(block.input)` redundant copy in the Anthropic/Bedrock adapters (harmless, consistent).
 
+### From the phase-1 store build (2026-07-30)
+
+Carried from the final whole-branch review; each was adjudicated as non-blocking and parked deliberately.
+
+- 🔧 **`load_dataset`'s read-time vendor filter is skipped when `project.vendors` is empty.** A re-upload that shrinks the vendor list to zero, followed by a page render before the next `run_ingestion`, can still show stale facts. Self-heals on the next run, which prunes unconditionally. Closing it properly needs a "vendors were ever recorded" flag to distinguish a legacy project from a genuinely empty one.
+- 🔧 **`migrate_dataset_json` imports every vendor in a legacy `dataset.json`** without filtering against the current `project.vendors`. Latent only where a legacy dataset and a since-shrunk vendor list coexist on a store with no migration marker yet.
+- 🔧 **`snapshots.transaction` is atomic over the `generation` counter, not over the set of file writes.** A mid-loop failure leaves some `facts.json` written. The migration marker makes this retryable rather than silently lossy, but a staging-directory rollback is the fuller fix.
+- 🔧 **`procurement/store/index.py` is built, tested and unwired.** Nothing outside its own tests imports it — the SQLite cache is not yet consumed by `load_dataset` or the portal. Wire it when query volume justifies it (phase 2/4).
+
 ## 7. Cross-cutting engineering
 
 - 🟨 **Packaging & environments.** Lock dependencies (`uv`/`poetry`), pin versions, reproducible setup; separate `procurement`, `cost_estimation`, `shared`, `portal` as clean packages.
