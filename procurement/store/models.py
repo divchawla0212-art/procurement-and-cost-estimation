@@ -1,3 +1,4 @@
+import hashlib
 from typing import Any
 from pydantic import BaseModel
 
@@ -20,6 +21,7 @@ class DocumentRecord(BaseModel):
     vendor: str | None = None       # None for RFQ documents
     doc_class: str = "unclassified"
     classified_by: str | None = None
+    classified_with: str | None = None
     revision_label: str | None = None
     supersedes: str | None = None
     superseded_by: str | None = None
@@ -51,3 +53,37 @@ class Event(BaseModel):
     action: str
     target: str | None = None
     detail: dict = {}
+
+
+def fact_id_for(doc_id: str, parameter: str) -> str:
+    """Stable across re-extraction: same document + same parameter -> same id.
+    That is what lets a human override on technical[<id>].value survive a
+    re-run, since list order is not stable and index paths are forbidden."""
+    key = f"{doc_id}:{parameter.strip().lower()}"
+    return "f-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:10]
+
+
+def deviation_id_for(doc_id: str, clause_ref: str | None, statement: str) -> str:
+    key = f"{doc_id}:{(clause_ref or statement).strip().lower()}"
+    return "v-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:10]
+
+
+class FactRecord(BaseModel):
+    """One technical parameter as stated by a vendor document. Values are kept
+    exactly as written, with the unit alongside — conversion and comparison
+    happen in phase 3, in Python, never in the model."""
+    fact_id: str
+    parameter: str
+    value: str | float | None = None
+    unit: str | None = None
+    verbatim: str | None = None      # the source sentence, for provenance
+    doc_id: str
+
+
+class DeviationRecord(BaseModel):
+    """One entry from a vendor deviation form."""
+    deviation_id: str
+    clause_ref: str | None = None
+    statement: str
+    disposition: str = "noted"       # comply | deviate | noted
+    doc_id: str
