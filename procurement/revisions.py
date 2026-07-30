@@ -11,7 +11,12 @@ import re
 
 from procurement.store.models import DocumentRecord
 
-_REV = re.compile(r"\brev[\s._-]*([0-9]+|[a-z])\b", re.IGNORECASE)
+#  No leading \b: revision markers are sometimes concatenated directly onto
+# an identifier with no separator (e.g. "935Rev1.pdf") and that must still be
+# recognised. The trailing \b is what matters for safety: it is what stops
+# "Revenue"/"Reverse" from being read as "Rev" + a single-letter revision
+# (their next character is a word character, so no boundary exists there).
+_REV = re.compile(r"rev[\s._-]*([0-9]+|[a-z])\b", re.IGNORECASE)
 _SUPERSEDED = re.compile(r"supersede", re.IGNORECASE)
 # Everything from the "supersede" marker to the end of the name is metadata
 # about the supersession event (e.g. "Superseded with MOM 20241111"), not
@@ -21,7 +26,7 @@ _SUPERSEDED_TAIL = re.compile(r"supersede.*$", re.IGNORECASE | re.DOTALL)
 # no identity information either. Word-bounded so "Copyright.pdf" is untouched.
 _COPY_MARKER = re.compile(r"\bcopy\b", re.IGNORECASE)
 _LEADING_INDEX = re.compile(r"^\s*\d{1,2}[\s._-]+")
-_REV_CHUNK = re.compile(r"[\(\[]?\s*\brev[\s._-]*(?:[0-9]+|[a-z])\b\s*[\)\]]?", re.IGNORECASE)
+_REV_CHUNK = re.compile(r"[\(\[]?\s*rev[\s._-]*(?:[0-9]+|[a-z])\b\s*[\)\]]?", re.IGNORECASE)
 _NOISE = re.compile(r"[^a-z0-9]+")
 
 
@@ -69,11 +74,15 @@ def resolve_supersession(docs: list[DocumentRecord]) -> list[DocumentRecord]:
     for members in groups.values():
         if len(members) < 2:
             continue
-        newest = max(members, key=_rank)
-        for doc in members:
-            if doc is newest:
-                continue
+        # Oldest first. `superseded_by` always names the newest document (the
+        # one a later extraction-skip step should treat as authoritative);
+        # `supersedes` is the lineage pointer and must name the immediate
+        # predecessor, not just any older sibling, so a 3+ chain reads as a
+        # chain rather than skipping members.
+        ordered = sorted(members, key=_rank)
+        newest = ordered[-1]
+        for doc in ordered[:-1]:
             doc.superseded_by = newest.doc_id
-        newest.supersedes = next(
-            (d.doc_id for d in members if d is not newest), None)
+        for prev, doc in zip(ordered, ordered[1:]):
+            doc.supersedes = prev.doc_id
     return out
