@@ -420,7 +420,11 @@ def test_a_flag_is_not_a_rate(tmp_path):
     statement = build_statement(root, "p")
     for vendor in ("KERUI", "MKON"):
         assert _cell(statement, "final_value", vendor).total == 1000.0
-        assert _cell(statement, "discount_amount", vendor) is None
+        # 0.00, not absent: an unusable rate is no discount, and the row is
+        # always emitted for a priced column. What matters is that `True`
+        # did not become a 100% discount taking FINAL VALUE to zero.
+        assert _cell(statement, "discount_amount", vendor).total == 0.0
+        assert _cell(statement, "discount_pct", vendor) is None
     assert _cell(statement, "vat", "KERUI") is None
 
 

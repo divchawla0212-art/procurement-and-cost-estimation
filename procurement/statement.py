@@ -170,7 +170,9 @@ def _priced_rows(project, facts) -> list[StatementRow]:
         # the top of the award screen as the cheapest bid.
         base = _money(c.get("base_price")) or None
         if base is not None:
-            cell("base_scope", "Base scope", "priced", vendor, total=base)
+            cell("base_scope", "Base scope", "priced", vendor, total=base,
+                 qty=_money(c.get("base_qty")),
+                 unit_price=_money(c.get("base_unit_price")))
 
         options = 0.0
         unpriced = 0
@@ -281,9 +283,13 @@ def _priced_rows(project, facts) -> list[StatementRow]:
         # Rule (a): the discount base excludes VAT — computed here, on the
         # unrounded pre_vat, and carried unrounded into final_value below.
         discount_raw = pre_vat * s["pct"]
-        if s["pct"]:
-            cell("discount_amount", "Discount Amount", "priced", vendor,
-                 total=round(discount_raw, 2))
+        # Emitted even at 0%, unlike every other blank-on-unknown row here.
+        # This zero is DERIVED, not missing: the Discount % row above already
+        # says 0%, and 0% of a known column really is nothing off. The
+        # reference sheet prints it, and a blank beside a stated 0% would
+        # read as "not yet checked".
+        cell("discount_amount", "Discount Amount", "priced", vendor,
+             total=round(discount_raw, 2))
         # The displayed cells are each rounded independently, so adding the
         # printed column by hand can land a cent away from the printed FINAL
         # VALUE. That is deliberate: the reference sheet is the authority and

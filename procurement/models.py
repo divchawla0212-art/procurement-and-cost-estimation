@@ -14,6 +14,13 @@ class OptionalItem(BaseModel):
 class BidExtraction(BaseModel):
     currency: str = ""
     base_price: float = 0.0
+    # Nullable, unlike base_price: these are new, so nothing depends on them
+    # defaulting to a number, and None is what "the quotation did not break
+    # the base scope into units" actually means. base_price keeps its 0.0
+    # default only because normalize.py multiplies it — see the open
+    # escalation in the phase ledger.
+    base_qty: float | None = None
+    base_unit_price: float | None = None
     vat_included: bool = False
     vat_rate: float = 0.0
     freight_amount: float = 0.0

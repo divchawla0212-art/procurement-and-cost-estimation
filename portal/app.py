@@ -6,10 +6,9 @@ from dotenv import load_dotenv
 from procurement import project as proj
 from procurement.pipeline import run_ingestion, load_dataset
 from procurement.pdf_llm import transcribe_pdf
-from procurement.export import comparison_to_rows, comparison_to_xlsx_bytes, comparison_to_csv_str
 from procurement.quote_select import pick_quote
-from procurement.models import ComparisonTable
 from shared.llm.factory import get_client
+from portal.views import statement as statement_view
 
 load_dotenv()  # load a local .env if present (see .env.example)
 
@@ -141,20 +140,11 @@ if st.button("Run ingestion", type="primary", disabled=not project.vendors):
     st.success("Done.")
 
 # --- Results ---
+st.markdown("### 5. Results")
+statement_view.render(ROOT, project.slug)
+
 dataset = load_dataset(ROOT, project.slug)
 if dataset:
-    st.markdown("### 5. Results")
-    table = ComparisonTable.model_validate(dataset["comparison"])
-    st.dataframe(comparison_to_rows(table), use_container_width=True)
-
-    c1, c2 = st.columns(2)
-    c1.download_button("Download Excel", comparison_to_xlsx_bytes(table),
-                       file_name=f"{project.slug}-comparison.xlsx",
-                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    c2.download_button("Download CSV", comparison_to_csv_str(table),
-                       file_name=f"{project.slug}-comparison.csv",
-                       mime="text/csv")
-
     st.markdown("#### Per-vendor extracted bids")
     for bid in dataset["bids"]:
         with st.expander(f"{bid['vendor']} — {bid['extraction_status']}"):
