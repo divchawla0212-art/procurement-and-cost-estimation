@@ -62,8 +62,11 @@ def _opt_key(description: str) -> str:
 def _money(value) -> float | None:
     """None unless this is a real number. '' and None both mean unknown, and
     unknown must never become 0.0 — a zero in a price column is an award-
-    changing lie, not a rendering detail."""
-    return float(value) if isinstance(value, (int, float)) else None
+    changing lie, not a rendering detail. bool is excluded deliberately:
+    `isinstance(True, int)` is True, and a flag must not read as a price."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
 
 
 def _priced_rows(project, facts) -> list[StatementRow]:
@@ -77,17 +80,39 @@ def _priced_rows(project, facts) -> list[StatementRow]:
         row = rows.setdefault(key, StatementRow(key=key, label=label, kind=kind))
         row.cells[vendor] = StatementCell(**kw)
 
+    def opt_cell(key, label, vendor, **kw):
+        """Optional rows alone can be written twice for one vendor: two items
+        whose descriptions normalise to the same key share a cell. Overwriting
+        would print the second line while the column sum contains both, so the
+        printed sheet would not add up to its own FINAL VALUE. Merge instead —
+        qty and unit price are dropped, since they no longer describe one line."""
+        row = rows.setdefault(key, StatementRow(key=key, label=label, kind="priced"))
+        prior = row.cells.get(vendor)
+        if prior is None:
+            row.cells[vendor] = StatementCell(**kw)
+            return
+        totals = [t for t in (prior.total, kw.get("total")) if t is not None]
+        row.cells[vendor] = StatementCell(total=sum(totals) if totals else None,
+                                          note=prior.note or kw.get("note"))
+
     order: list[str] = []           # optional-row keys, first-seen across columns
     sums: dict[str, dict] = {}
 
     for vendor in project.vendors:
         f = facts.get(vendor)
         c = (f.commercial if f else None) or {}
-        base = _money(c.get("base_price"))
+        # `or None` is the load-bearing half. BidExtraction.base_price defaults
+        # to 0.0, so an extraction that succeeded and found no price stores
+        # exactly what one that found zero would — and `_money` cannot tell
+        # them apart. No vendor quotes a zero base scope, so 0.0 here means
+        # unknown; taken literally it prints a 0.00 FINAL VALUE that sorts to
+        # the top of the award screen as the cheapest bid.
+        base = _money(c.get("base_price")) or None
         if base is not None:
             cell("base_scope", "Base scope", "priced", vendor, total=base)
 
         options = 0.0
+        unpriced = 0
         for item in c.get("optional_items", []):
             key = f"opt:{_opt_key(item.get('description', ''))}"
             if key not in order:
@@ -96,14 +121,24 @@ def _priced_rows(project, facts) -> list[StatementRow]:
                 # Its scope is still worth showing — the note — but never its
                 # total, or the base price would be counted twice: once as
                 # part of base_price, once again as this line item.
-                cell(key, item.get("description", ""), "priced", vendor,
-                     note="included in base price")
+                opt_cell(key, item.get("description", ""), vendor,
+                         note="included in base price")
                 continue
+            qty = _money(item.get("qty"))
+            unit_price = _money(item.get("unit_price"))
             total = _money(item.get("total"))
-            cell(key, item.get("description", ""), "priced", vendor,
-                 qty=_money(item.get("qty")), unit_price=_money(item.get("unit_price")),
-                 total=total)
-            options += total or 0.0
+            if total is None and qty is not None and unit_price is not None:
+                # Arithmetic stays in Python: OptionalItem.total is nullable,
+                # and when the components are stored the line is priced.
+                # Dropping it would understate this column against a vendor
+                # who happened to state the same scope's total outright.
+                total = qty * unit_price
+            opt_cell(key, item.get("description", ""), vendor,
+                     qty=qty, unit_price=unit_price, total=total)
+            if total is None:
+                unpriced += 1       # cannot join the sum — FINAL VALUE says so
+            else:
+                options += total
 
         freight = None
         if not c.get("freight_included"):
@@ -136,7 +171,8 @@ def _priced_rows(project, facts) -> list[StatementRow]:
 
         sums[vendor] = {"base": base, "options": options,
                         "freight": freight or 0.0, "vat_raw": vat_raw or 0.0,
-                        "pct": pct or 0.0, "has_prices": base is not None}
+                        "pct": pct or 0.0, "unpriced": unpriced,
+                        "has_prices": base is not None}
 
         normalized = f.normalized if f else None
         norm_total = _money((normalized or {}).get("normalized_total"))
@@ -156,8 +192,15 @@ def _priced_rows(project, facts) -> list[StatementRow]:
         if s["pct"]:
             cell("discount_amount", "Discount Amount", "priced", vendor,
                  total=round(discount_raw, 2))
+        # The displayed cells are each rounded independently, so adding the
+        # printed column by hand can land a cent away from the printed FINAL
+        # VALUE. That is deliberate: the reference sheet is the authority and
+        # it sums the unrounded components. Do not "fix" it by summing the
+        # rounded cells — that reproduces neither the sheet nor the tests.
+        n = s["unpriced"]
         cell("final_value", "FINAL VALUE", "priced", vendor,
-             total=round(pre_vat + s["vat_raw"] - discount_raw, 2))
+             total=round(pre_vat + s["vat_raw"] - discount_raw, 2),
+             note=(f"excludes {n} option(s) with no stated price" if n else None))
 
     ordered = (["base_scope"] + order +
                ["freight", "vat", "vat_included", "discount_pct",
@@ -191,8 +234,12 @@ def build_statement(root: str, slug: str) -> Statement:
         quote = _live_quote(f, docs)
         statement.revisions[vendor] = quote.revision_label if quote else None
         # Unknown must stay None, not "" — the fix CLAUDE.md's "missing data
-        # is never coerced" rule prescribes for this column header.
-        statement.currencies[vendor] = (f.commercial or {}).get("currency") if f else None
+        # is never coerced" rule prescribes for this column header. The
+        # trailing `or None` is what actually enforces it: BidExtraction.
+        # currency defaults to "", so a successful extraction that found no
+        # currency reaches here as "" rather than as a missing key.
+        commercial = (f.commercial or {}) if f else {}
+        statement.currencies[vendor] = commercial.get("currency") or None
         # missing: no facts snapshot at all. failed: facts exist but the
         # quotation never produced commercial terms. Conflating the two would
         # tell a reviewer a vendor never bid when the extraction actually broke.

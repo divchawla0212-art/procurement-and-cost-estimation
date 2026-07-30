@@ -1,3 +1,4 @@
+from procurement.models import VendorBid
 from procurement.project import load_project, save_project
 from procurement.statement import build_statement
 from procurement.store import snapshots
@@ -114,6 +115,128 @@ def test_the_normalised_row_is_normalize_bids_figure_verbatim(tmp_path):
     statement = build_statement(root, "p")
     assert _cell(statement, "normalised", "KERUI").total == 999.0
     assert _cell(statement, "final_value", "KERUI").total == 1187000.0
+
+
+def test_a_zero_base_price_is_unknown_not_free(tmp_path):
+    """BidExtraction.base_price defaults to 0.0, so an extraction that
+    succeeded and found no price stores the same 0.0 as one that found zero.
+    No vendor quotes a zero base scope, so 0.0 means unknown — and a 0.00
+    FINAL VALUE would sort to the top of the award screen as the cheapest
+    bid. This is the production shape `commercial=None` never exercises."""
+    root = _project(tmp_path)
+    snapshots.save_facts(root, "p", VendorFacts(
+        vendor="KERUI", commercial=VendorBid(vendor="KERUI").model_dump()))
+
+    statement = build_statement(root, "p")
+    for key in ("base_scope", "final_value"):
+        cell = _cell(statement, key, "KERUI")
+        assert cell is None or cell.total is None, key
+
+
+def test_an_option_priced_only_by_qty_and_unit_price_still_counts(tmp_path):
+    """OptionalItem.total is nullable. When qty and unit price are both
+    stored, the total is derivable — arithmetic stays in Python, so derive
+    it rather than dropping the line out of the column sum."""
+    root = _project(tmp_path)
+    _facts(root, "KERUI", base_price=1000.0, optional_items=[
+        {"description": "Tools", "qty": 2, "unit_price": 500.0}])
+
+    statement = build_statement(root, "p")
+    assert _cell(statement, "opt:tools", "KERUI").total == 1000.0
+    assert _cell(statement, "final_value", "KERUI").total == 2000.0
+
+
+def test_an_option_with_no_price_at_all_is_flagged_on_the_final_value(tmp_path):
+    """It cannot join the sum, but the sum must say so. Silently omitting it
+    understates the column against vendors who did price the same scope."""
+    root = _project(tmp_path)
+    _facts(root, "KERUI", base_price=1000.0, optional_items=[
+        {"description": "Tools"}])
+
+    statement = build_statement(root, "p")
+    assert _cell(statement, "opt:tools", "KERUI").total is None
+    final = _cell(statement, "final_value", "KERUI")
+    assert final.total == 1000.0
+    assert "1" in final.note and "no stated price" in final.note
+
+
+def test_two_options_that_normalise_alike_reconcile_with_the_column(tmp_path):
+    """'Tools - Optional' and 'Tools' collapse to one key. Printing one and
+    summing both leaves a column a reviewer cannot add up by hand."""
+    root = _project(tmp_path)
+    _facts(root, "KERUI", base_price=1000.0, optional_items=[
+        {"description": "Tools - Optional", "total": 17000.0},
+        {"description": "Tools", "total": 5000.0}])
+
+    statement = build_statement(root, "p")
+    assert _cell(statement, "opt:tools", "KERUI").total == 22000.0
+    assert _cell(statement, "final_value", "KERUI").total == 23000.0
+
+
+def test_the_column_sums_base_options_freight_vat_and_discount_together(tmp_path):
+    """Every priced component in one column, so that a defect in any single
+    one of them changes FINAL VALUE. Each of base, options and freight must
+    be inside the discount base and outside the VAT base."""
+    root = _project(tmp_path)
+    _facts(root, "KERUI", base_price=1000000.0, freight_amount=20000.0,
+           vat_rate=0.05, discount_pct=0.10, optional_items=[
+               {"description": "PEMS", "total": 100000.0},
+               {"description": "Tools", "qty": 2, "unit_price": 25000.0}])
+
+    statement = build_statement(root, "p")
+    assert _cell(statement, "freight", "KERUI").total == 20000.0
+    assert _cell(statement, "vat", "KERUI").total == 50000.0        # base only
+    assert _cell(statement, "discount_amount", "KERUI").total == 117000.0
+    assert _cell(statement, "final_value", "KERUI").total == 1103000.0
+
+
+def test_freight_the_vendor_included_is_not_added_again(tmp_path):
+    root = _project(tmp_path)
+    _facts(root, "KERUI", base_price=1000.0, freight_amount=20000.0,
+           freight_included=True)
+
+    statement = build_statement(root, "p")
+    assert _cell(statement, "freight", "KERUI") is None
+    assert _cell(statement, "final_value", "KERUI").total == 1000.0
+
+
+def test_the_rows_render_in_the_specs_order(tmp_path):
+    """Priced rows ahead of the text rows, optionals inside the priced
+    block, FINAL VALUE after the discount that feeds it."""
+    root = _project(tmp_path)
+    _facts(root, "KERUI", base_price=1000.0, freight_amount=50.0,
+           vat_rate=0.05, discount_pct=0.10,
+           optional_items=[{"description": "Tools", "total": 10.0}])
+
+    assert [r.key for r in build_statement(root, "p").rows] == [
+        "base_scope", "opt:tools", "freight", "vat", "vat_included",
+        "discount_pct", "discount_amount", "final_value", "normalised",
+        "engine_make", "delivery_time", "delivery_terms", "payment_terms",
+        "quotation_file", "technical_feedback"]
+
+
+def test_the_value_rows_are_values_not_prices(tmp_path):
+    """`vat_included` and `discount_pct` describe the column; they are not
+    money and must never be summed into it."""
+    root = _project(tmp_path)
+    _facts(root, "KERUI", base_price=1000.0, discount_pct=0.10)
+
+    statement = build_statement(root, "p")
+    for key, text in (("vat_included", "NO"), ("discount_pct", "10%")):
+        row = next(r for r in statement.rows if r.key == key)
+        assert row.kind == "value", key
+        assert row.cells["KERUI"].text == text
+        assert row.cells["KERUI"].total is None
+
+
+def test_an_unknown_currency_is_none_not_blank(tmp_path):
+    """BidExtraction.currency defaults to "", which the Statement field
+    declares it never carries."""
+    root = _project(tmp_path)
+    snapshots.save_facts(root, "p", VendorFacts(
+        vendor="KERUI", commercial=VendorBid(vendor="KERUI").model_dump()))
+
+    assert build_statement(root, "p").currencies["KERUI"] is None
 
 
 def test_building_twice_writes_nothing(tmp_path):
