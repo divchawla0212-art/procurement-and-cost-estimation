@@ -57,3 +57,16 @@ def test_every_rule_result_is_a_known_class():
                  "MOM notes.pdf", "MR spec.pdf", "Layout.pdf", "Spares list.pdf"]:
         result = classify_by_rules(name)
         assert result is None or result in DOC_CLASSES
+
+
+@pytest.mark.parametrize("filename,not_expected", [
+    # Word-boundary tests: prove that short keywords don't match inside larger words
+    ("Bombay Office Quotation.pdf", "bom"),  # "bom" inside "Bombay", should be quotation
+    ("XX Moment of Inertia Calculation.pdf", "mom"),  # "mom" inside "Moment", should be None
+    ("Torque and Moment Report.pdf", "mom"),  # "mom" inside "Moment", should be None
+    ("Stupid Question Log.pdf", "drawing"),  # "pid" inside "stupid", should be None
+])
+def test_word_boundary_prevents_false_matches(filename, not_expected):
+    """Verify that short keywords require word boundaries and don't match inside larger words."""
+    result = classify_by_rules(filename)
+    assert result != not_expected
