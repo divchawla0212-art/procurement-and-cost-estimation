@@ -8,6 +8,7 @@ mutation between run 1 and run 2 and asserts what the store must look like
 afterwards.
 """
 import io
+import os
 import zipfile
 
 from procurement.pipeline import run_ingestion, load_dataset
@@ -365,3 +366,54 @@ def test_a_prompt_version_bump_reextracts_only_that_document_class(tmp_path, mon
     assert docs["01 DataSheet A.txt"].prompt_version == "tech_facts_v2"
     assert docs["Quotation.txt"].prompt_version == "bid_extract_v1"
     assert docs["03 Vendor Deviation Form.txt"].prompt_version == "deviation_v1"
+
+
+# --------------------------------------------------------------------------
+# INV-S6 - commercial terms are pruned with the quotation that produced them
+# --------------------------------------------------------------------------
+
+from tests.test_pipeline_rfq import RfqClient
+from tests.test_pipeline_vocabulary import _project as _vendor_project
+
+
+def test_deleting_the_quotation_removes_the_stored_prices(tmp_path):
+    """INV-S6. A vendor whose quotation is gone must not keep quoting a price."""
+    root = _vendor_project(tmp_path)
+    run_ingestion(root, "p", RfqClient())
+    assert snapshots.load_facts(root, "p", "KERUI").commercial is not None
+
+    os.remove(tmp_path / "p" / "vendors" / "KERUI" / "Quotation.txt")
+    run_ingestion(root, "p", RfqClient())
+
+    facts = snapshots.load_facts(root, "p", "KERUI")
+    assert facts.commercial is None
+    assert facts.normalized is None
+    assert facts.quotation_doc_id is None
+    # the datasheet is untouched: pruning is per-source, not per-vendor
+    assert facts.technical
+
+
+def test_a_failed_quotation_extraction_keeps_the_previous_prices(tmp_path):
+    """I3, in the commercial half. The document is still there and still
+    routed, so an outage must not be read as 'the quotation is gone'.
+
+    RfqClient's bid extraction returns a fixed {"base_price": 1000.0} for any
+    file content, so re-extracting the (changed) quotation would land on the
+    same number preservation would - the assertion can't tell them apart. A
+    sentinel written directly into the store before run 2 can: if it survives
+    a failed re-extraction, the record was preserved, not silently rebuilt.
+    """
+    root = _vendor_project(tmp_path)
+    run_ingestion(root, "p", RfqClient())
+
+    facts = snapshots.load_facts(root, "p", "KERUI")
+    facts.commercial["base_price"] = 424242.0
+    snapshots.save_facts(root, "p", facts)
+
+    (tmp_path / "p" / "vendors" / "KERUI" / "Quotation.txt").write_text(
+        "base price 2000", encoding="utf-8")
+    run_ingestion(root, "p", RfqClient(fail_on=("bid",)))
+
+    facts = snapshots.load_facts(root, "p", "KERUI")
+    assert facts.commercial["base_price"] == 424242.0
+    assert facts.normalized is not None

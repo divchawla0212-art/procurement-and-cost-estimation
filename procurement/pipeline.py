@@ -81,8 +81,17 @@ def _prune_orphan_facts(root: str, slug: str, run_id: str, vendors: list[str],
         live = live_by_vendor.get(vendor, set())
         technical = [f for f in facts.technical if f.get("doc_id") in live]
         deviations = [d for d in facts.deviations if d.get("doc_id") in live]
+        # commercial has no per-record doc_id, so it is pruned via the stored
+        # link. A vendor whose quotation was deleted or reclassified away kept
+        # its prices forever: the technical half's C1, one field over. The
+        # None guard matters: facts written before quotation_doc_id existed
+        # have no link, and reading that absence as "dead" would delete every
+        # pre-existing vendor's prices on the first run after upgrade.
+        commercial_dead = (facts.quotation_doc_id is not None
+                           and facts.quotation_doc_id not in live)
         if (len(technical) == len(facts.technical)
-                and len(deviations) == len(facts.deviations)):
+                and len(deviations) == len(facts.deviations)
+                and not commercial_dead):
             continue
         dropped = sorted(
             {f.get("doc_id") for f in facts.technical if f.get("doc_id") not in live}
@@ -90,6 +99,11 @@ def _prune_orphan_facts(root: str, slug: str, run_id: str, vendors: list[str],
         detail = {"doc_ids": dropped,
                   "technical_dropped": len(facts.technical) - len(technical),
                   "deviations_dropped": len(facts.deviations) - len(deviations)}
+        if commercial_dead:
+            detail["commercial_dropped"] = facts.quotation_doc_id
+            facts.commercial = None
+            facts.normalized = None
+            facts.quotation_doc_id = None
         facts.technical = technical
         facts.deviations = deviations
         # Overrides are left untouched: they are re-reconciled against the
