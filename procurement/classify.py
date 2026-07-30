@@ -44,3 +44,37 @@ def classify_by_rules(path: str) -> str | None:
             elif k in name:
                 return doc_class
     return None
+
+
+from pathlib import Path
+from pydantic import BaseModel
+
+CLASSIFY_PROMPT_VERSION = "doc_class_v1"
+_CLASSIFY_PROMPT = (Path(__file__).parents[1] / "shared" / "llm" / "prompts"
+                    / "doc_class_v1.txt")
+_TEXT_HEAD_CHARS = 500
+
+
+class _DocClass(BaseModel):
+    doc_class: str = "other"
+
+
+def classify_document(path: str, client, text_head: str = "") -> tuple[str, str]:
+    """Return (doc_class, classified_by). The model is consulted only when the
+    filename rules decline, and never gets to abort a run: any failure
+    degrades to ("other", "llm-failed") and any unrecognised answer degrades
+    to ("other", "llm")."""
+    ruled = classify_by_rules(path)
+    if ruled is not None:
+        return ruled, "rule"
+
+    context = (f"Filename: {os.path.basename(path)}\n\n"
+               f"Opening text:\n{text_head[:_TEXT_HEAD_CHARS]}")
+    try:
+        prompt = _CLASSIFY_PROMPT.read_text(encoding="utf-8")
+        result = _DocClass.model_validate(
+            client.classify_structure(prompt, _DocClass, context))
+        answer = result.doc_class
+    except Exception:
+        return "other", "llm-failed"
+    return (answer if answer in DOC_CLASSES else "other"), "llm"
