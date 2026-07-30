@@ -1,0 +1,1041 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ingestion Pipeline — Procurement Comparison Portal</title>
+<style>
+  /* minimal reset — this page sets all its own spacing via flex/grid gap */
+  *, *::before, *::after { box-sizing: border-box; }
+  body, h1, h2, h3, p, dl, dd, ul, ol, figure { margin: 0; }
+  ul, ol { padding: 0; }
+  img, svg { max-width: 100%; }
+</style>
+</head>
+<body>
+<style>
+  :root {
+    --paper:      #F1F4F5;
+    --surface:    #FFFFFF;
+    --surface-2:  #E7ECEE;
+    --ink:        #121B20;
+    --ink-2:      #3E4E56;
+    --ink-3:      #6B7C84;
+    --rule:       #CFD8DC;
+    --rule-soft:  #E1E8EA;
+
+    --accent:     #0B5F68;
+    --accent-ink: #084249;
+    --accent-wash:#DCEBEC;
+
+    --model:      #8A5D06;
+    --model-wash: #F4E9D2;
+
+    --fallback:   #A6432A;
+    --fallback-wash:#F6E2DC;
+
+    --shadow: 0 1px 2px rgba(18, 27, 32, .06), 0 6px 16px -10px rgba(18, 27, 32, .22);
+
+    --mono: ui-monospace, "Cascadia Mono", "Cascadia Code", Consolas, "SF Mono", "Roboto Mono", monospace;
+    --sans: "Segoe UI Variable Text", "Segoe UI", ui-sans-serif, system-ui, -apple-system, "Helvetica Neue", sans-serif;
+
+    --measure: 66ch;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper:      #0D1417;
+      --surface:    #141E22;
+      --surface-2:  #1C282D;
+      --ink:        #E3EAED;
+      --ink-2:      #AFC0C7;
+      --ink-3:      #7E9099;
+      --rule:       #2A3940;
+      --rule-soft:  #202D33;
+
+      --accent:     #58B8C2;
+      --accent-ink: #8FD4DB;
+      --accent-wash:#12333A;
+
+      --model:      #D9A441;
+      --model-wash: #35291057;
+
+      --fallback:   #E08063;
+      --fallback-wash:#3A1F1757;
+
+      --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 6px 16px -10px rgba(0, 0, 0, .7);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --paper:      #0D1417;
+    --surface:    #141E22;
+    --surface-2:  #1C282D;
+    --ink:        #E3EAED;
+    --ink-2:      #AFC0C7;
+    --ink-3:      #7E9099;
+    --rule:       #2A3940;
+    --rule-soft:  #202D33;
+    --accent:     #58B8C2;
+    --accent-ink: #8FD4DB;
+    --accent-wash:#12333A;
+    --model:      #D9A441;
+    --model-wash: #35291057;
+    --fallback:   #E08063;
+    --fallback-wash:#3A1F1757;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 6px 16px -10px rgba(0, 0, 0, .7);
+  }
+
+  :root[data-theme="light"] {
+    --paper:      #F1F4F5;
+    --surface:    #FFFFFF;
+    --surface-2:  #E7ECEE;
+    --ink:        #121B20;
+    --ink-2:      #3E4E56;
+    --ink-3:      #6B7C84;
+    --rule:       #CFD8DC;
+    --rule-soft:  #E1E8EA;
+    --accent:     #0B5F68;
+    --accent-ink: #084249;
+    --accent-wash:#DCEBEC;
+    --model:      #8A5D06;
+    --model-wash: #F4E9D2;
+    --fallback:   #A6432A;
+    --fallback-wash:#F6E2DC;
+    --shadow: 0 1px 2px rgba(18, 27, 32, .06), 0 6px 16px -10px rgba(18, 27, 32, .22);
+  }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 62rem;
+    margin: 0 auto;
+    padding: clamp(1.5rem, 4vw, 3.5rem) clamp(1rem, 4vw, 2.5rem) 6rem;
+    display: flex;
+    flex-direction: column;
+    gap: 3.5rem;
+  }
+
+  /* ---------- title block ---------- */
+
+  .titleblock {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: .72rem;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0;
+  }
+
+  h1 {
+    font-family: var(--mono);
+    font-size: clamp(1.75rem, 4.4vw, 2.6rem);
+    line-height: 1.15;
+    letter-spacing: -.02em;
+    font-weight: 600;
+    text-wrap: balance;
+    margin: 0;
+  }
+
+  .standfirst {
+    max-width: var(--measure);
+    color: var(--ink-2);
+    font-size: 1.06rem;
+    margin: 0;
+  }
+
+  .meta {
+    display: grid;
+    /* 16rem forces 3 columns at full width, so 6 cells fill exactly 2 rows
+       with no orphan, and mono values fit without breaking mid-token */
+    grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+    gap: 0;
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    overflow: hidden;
+    background: var(--surface);
+  }
+
+  .meta div {
+    padding: .7rem .9rem;
+    border-right: 1px solid var(--rule-soft);
+    border-bottom: 1px solid var(--rule-soft);
+  }
+
+  .meta dt {
+    font-family: var(--mono);
+    font-size: .64rem;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin: 0 0 .2rem;
+  }
+
+  .meta dd {
+    font-family: var(--mono);
+    font-size: .82rem;
+    color: var(--ink);
+    margin: 0;
+    word-break: break-word;
+  }
+
+  /* ---------- at a glance strip ---------- */
+
+  .glance-wrap { overflow-x: auto; padding-bottom: .5rem; }
+
+  .glance {
+    display: flex;
+    align-items: stretch;
+    gap: .4rem;
+    min-width: max-content;
+  }
+
+  .glance .g {
+    display: flex;
+    flex-direction: column;
+    gap: .15rem;
+    min-width: 7.2rem;
+    padding: .6rem .75rem;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-top: 2px solid var(--accent);
+    border-radius: 3px;
+  }
+
+  .glance .g[data-kind="model"] { border-top-color: var(--model); }
+
+  .glance .g b {
+    font-family: var(--mono);
+    font-size: .78rem;
+    font-weight: 600;
+    letter-spacing: -.01em;
+  }
+
+  .glance .g span {
+    font-size: .7rem;
+    color: var(--ink-3);
+    line-height: 1.35;
+  }
+
+  .glance .arrow {
+    align-self: center;
+    color: var(--ink-3);
+    font-family: var(--mono);
+    font-size: .9rem;
+  }
+
+  /* ---------- legend ---------- */
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem 1.4rem;
+    padding: .85rem 1rem;
+    background: var(--surface-2);
+    border-radius: 3px;
+    font-size: .82rem;
+    color: var(--ink-2);
+  }
+
+  .legend b {
+    display: inline-flex;
+    align-items: center;
+    gap: .45rem;
+    font-weight: 400;
+  }
+
+  .swatch {
+    width: .8rem;
+    height: .8rem;
+    border-radius: 2px;
+    flex: none;
+  }
+
+  .swatch.det { background: var(--accent); }
+  .swatch.model { background: var(--model); }
+  .swatch.fallback { background: var(--fallback); }
+
+  /* ---------- stages ---------- */
+
+  .stage {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+  }
+
+  .stage-head {
+    display: flex;
+    align-items: baseline;
+    gap: .75rem;
+    flex-wrap: wrap;
+    padding-bottom: .6rem;
+    border-bottom: 2px solid var(--ink);
+  }
+
+  .stage-head h2 {
+    font-family: var(--mono);
+    font-size: 1.02rem;
+    font-weight: 600;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    margin: 0;
+  }
+
+  .stage-head .where {
+    font-family: var(--mono);
+    font-size: .74rem;
+    color: var(--ink-3);
+    margin: 0;
+  }
+
+  .stage-note {
+    max-width: var(--measure);
+    color: var(--ink-2);
+    font-size: .95rem;
+    margin: 0;
+  }
+
+  /* ---------- flow nodes ---------- */
+
+  .flow {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: .8rem;
+    margin: 0;
+    padding: 0;
+  }
+
+  .node {
+    display: grid;
+    grid-template-columns: 2.6rem 1fr;
+    gap: 0 .9rem;
+    position: relative;
+  }
+
+  .node::before {
+    content: "";
+    position: absolute;
+    left: 1.29rem;
+    top: 2.6rem;
+    bottom: -.8rem;
+    width: 2px;
+    background: var(--rule);
+  }
+
+  .node:last-child::before { display: none; }
+
+  .node-mark {
+    font-family: var(--mono);
+    font-size: .72rem;
+    font-weight: 600;
+    letter-spacing: .02em;
+    display: grid;
+    place-items: center;
+    width: 2.6rem;
+    height: 2.6rem;
+    border-radius: 50%;
+    background: var(--accent-wash);
+    color: var(--accent-ink);
+    border: 2px solid var(--accent);
+    z-index: 1;
+  }
+
+  .node[data-kind="model"] .node-mark {
+    background: var(--model-wash);
+    border-color: var(--model);
+    color: var(--model);
+  }
+
+  .node[data-kind="fallback"] .node-mark {
+    background: var(--fallback-wash);
+    border-color: var(--fallback);
+    color: var(--fallback);
+  }
+
+  .node-body {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--accent);
+    border-radius: 3px;
+    padding: .85rem 1.1rem 1rem;
+    box-shadow: var(--shadow);
+    display: flex;
+    flex-direction: column;
+    gap: .5rem;
+  }
+
+  .node[data-kind="model"] .node-body { border-left-color: var(--model); }
+  .node[data-kind="fallback"] .node-body { border-left-color: var(--fallback); }
+
+  .node-title {
+    display: flex;
+    align-items: baseline;
+    gap: .6rem;
+    flex-wrap: wrap;
+    margin: 0;
+    font-size: 1rem;
+  }
+
+  .node-title code {
+    font-family: var(--mono);
+    font-size: .92rem;
+    font-weight: 600;
+    color: var(--ink);
+  }
+
+  .ref {
+    font-family: var(--mono);
+    font-size: .7rem;
+    color: var(--ink-3);
+  }
+
+  .tag {
+    font-family: var(--mono);
+    font-size: .62rem;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    padding: .12rem .42rem;
+    border-radius: 2px;
+    background: var(--model-wash);
+    color: var(--model);
+    border: 1px solid var(--model);
+  }
+
+  .tag.fb { background: var(--fallback-wash); color: var(--fallback); border-color: var(--fallback); }
+
+  .does {
+    margin: 0;
+    color: var(--ink-2);
+    font-size: .92rem;
+    max-width: var(--measure);
+  }
+
+  .does code, .helps code, li code, p code {
+    font-family: var(--mono);
+    font-size: .85em;
+    background: var(--surface-2);
+    padding: .05em .32em;
+    border-radius: 2px;
+  }
+
+  .helps {
+    margin: 0;
+    font-size: .92rem;
+    color: var(--ink);
+    max-width: var(--measure);
+    padding-left: .75rem;
+    border-left: 2px solid var(--accent);
+  }
+
+  .node[data-kind="model"] .helps { border-left-color: var(--model); }
+  .node[data-kind="fallback"] .helps { border-left-color: var(--fallback); }
+
+  .helps b {
+    font-family: var(--mono);
+    font-size: .64rem;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    display: block;
+    margin-bottom: .1rem;
+    font-weight: 600;
+  }
+
+  /* ---------- the per-vendor loop bracket ---------- */
+
+  .loop {
+    position: relative;
+    padding: 1.1rem 0 1.1rem 1.2rem;
+    border-left: 2px dashed var(--accent);
+    margin-left: .3rem;
+    display: flex;
+    flex-direction: column;
+    gap: .8rem;
+  }
+
+  .loop-label {
+    font-family: var(--mono);
+    font-size: .7rem;
+    letter-spacing: .11em;
+    text-transform: uppercase;
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    margin: 0;
+  }
+
+  .loop-label::before {
+    content: "";
+    width: 1.1rem;
+    height: 2px;
+    background: var(--accent);
+    display: block;
+  }
+
+  .loop-foot {
+    font-family: var(--mono);
+    font-size: .7rem;
+    letter-spacing: .04em;
+    color: var(--ink-3);
+    margin: 0;
+    padding-left: .2rem;
+  }
+
+  /* ---------- substep table (normalization ladder) ---------- */
+
+  .table-wrap { overflow-x: auto; }
+
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 34rem;
+    font-size: .88rem;
+    background: var(--surface);
+  }
+
+  th, td {
+    text-align: left;
+    padding: .5rem .7rem;
+    border-bottom: 1px solid var(--rule-soft);
+    vertical-align: top;
+  }
+
+  th {
+    font-family: var(--mono);
+    font-size: .66rem;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    border-bottom: 1px solid var(--rule);
+    font-weight: 600;
+  }
+
+  td:first-child {
+    font-family: var(--mono);
+    font-size: .82rem;
+    white-space: nowrap;
+  }
+
+  td.num { font-variant-numeric: tabular-nums; }
+
+  tbody tr:last-child td { border-bottom: none; }
+
+  /* ---------- closing panels ---------- */
+
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    padding: 1.4rem 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: .9rem;
+  }
+
+  .panel.warn { border-left: 3px solid var(--fallback); }
+
+  .panel h2 {
+    font-family: var(--mono);
+    font-size: .88rem;
+    font-weight: 600;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    margin: 0;
+  }
+
+  .panel ul {
+    margin: 0;
+    padding-left: 1.1rem;
+    display: flex;
+    flex-direction: column;
+    gap: .55rem;
+    color: var(--ink-2);
+    font-size: .93rem;
+    max-width: var(--measure);
+  }
+
+  .panel li strong { color: var(--ink); font-weight: 600; }
+
+  .kicker {
+    font-family: var(--mono);
+    font-size: .76rem;
+    color: var(--ink-3);
+    text-align: center;
+    letter-spacing: .04em;
+    margin: 0;
+  }
+
+  @media (max-width: 34rem) {
+    .node { grid-template-columns: 1.9rem 1fr; gap: 0 .6rem; }
+    .node-mark { width: 1.9rem; height: 1.9rem; font-size: .6rem; }
+    .node::before { left: .94rem; top: 1.9rem; }
+    .loop { padding-left: .7rem; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+
+<div class="page">
+
+  <header class="titleblock">
+    <p class="eyebrow">Procurement Comparison Portal · Pipeline reference</p>
+    <h1>How a vendor ZIP becomes a defensible bid comparison</h1>
+    <p class="standfirst">
+      Nineteen steps from upload to exported comparison. Exactly one of them asks a language model
+      to make a judgement — the other eighteen are deterministic Python you can unit-test, re-run,
+      and defend when an award gets challenged. This page walks each step and what it buys you.
+    </p>
+
+    <dl class="meta">
+      <div><dt>Entry point</dt><dd>portal/app.py</dd></div>
+      <div><dt>Orchestrator</dt><dd>pipeline.run_ingestion()</dd></div>
+      <div><dt>Model calls</dt><dd>1 per vendor</dd></div>
+      <div><dt>Prompt version</dt><dd>bid_extract_v1</dd></div>
+      <div><dt>Output</dt><dd>dataset.json + xlsx/csv</dd></div>
+      <div><dt>State</dt><dd>filesystem, resumable</dd></div>
+    </dl>
+  </header>
+
+  <section>
+    <div class="glance-wrap">
+      <div class="glance">
+        <div class="g"><b>Upload</b><span>ZIP → vendor roster</span></div>
+        <div class="arrow">→</div>
+        <div class="g"><b>Select</b><span>pick the priced quote</span></div>
+        <div class="arrow">→</div>
+        <div class="g"><b>Read</b><span>PDF/XLSX → text</span></div>
+        <div class="arrow">→</div>
+        <div class="g" data-kind="model"><b>Extract</b><span>text → schema</span></div>
+        <div class="arrow">→</div>
+        <div class="g"><b>Normalize</b><span>like-for-like basis</span></div>
+        <div class="arrow">→</div>
+        <div class="g"><b>Compare</b><span>rank + flag</span></div>
+        <div class="arrow">→</div>
+        <div class="g"><b>Export</b><span>xlsx / csv / json</span></div>
+      </div>
+    </div>
+  </section>
+
+  <div class="legend">
+    <b><span class="swatch det"></span> Deterministic — pure Python, same input gives same output</b>
+    <b><span class="swatch model"></span> Model-inferred — an LLM reads and returns a validated schema</b>
+    <b><span class="swatch fallback"></span> Fallback / failure path — degrades instead of crashing</b>
+  </div>
+
+  <!-- ============ STAGE A ============ -->
+  <section class="stage">
+    <div class="stage-head">
+      <h2>A · Set up the tender</h2>
+      <p class="where">portal/app.py · procurement/project.py</p>
+    </div>
+    <p class="stage-note">
+      Everything the run needs is captured on disk before a single document is read. Nothing lives
+      in session memory, so a browser refresh or a portal restart costs you nothing.
+    </p>
+
+    <ol class="flow">
+
+      <li class="node" data-kind="det">
+        <div class="node-mark">01</div>
+        <div class="node-body">
+          <p class="node-title"><code>create_project()</code> <span class="ref">project.py</span></p>
+          <p class="does">
+            Slugifies the tender name, creates <code>requirements/</code> and <code>vendors/</code>,
+            and writes <code>project.json</code> holding the target currency, FX table, vendor list and status.
+          </p>
+          <p class="helps"><b>Why it helps</b>
+            Each tender gets an isolated, inspectable folder. You can zip a project and hand the whole
+            evidence trail to an auditor, or re-open it six months later during a challenge.</p>
+        </div>
+      </li>
+
+      <li class="node" data-kind="det">
+        <div class="node-mark">02</div>
+        <div class="node-body">
+          <p class="node-title"><code>requirements upload</code> <span class="ref">app.py</span></p>
+          <p class="does">
+            Stores the MR / RFQ under <code>requirements/</code> and records the filename on the project.
+            It is filed and never opened — no step downstream reads it.
+          </p>
+          <p class="helps"><b>Why it helps</b>
+            The spec travels with the evidence pack today. It is also the hook the compliance
+            baseline will plug into — parse this once and every bid can be scored against it.</p>
+        </div>
+      </li>
+
+      <li class="node" data-kind="det">
+        <div class="node-mark">03</div>
+        <div class="node-body">
+          <p class="node-title"><code>unpack_vendor_zip()</code> <span class="ref">project.py</span></p>
+          <p class="does">
+            Treats each top-level folder in the archive as one vendor. Resolves every destination with
+            <code>realpath</code> and refuses anything landing outside <code>vendors/</code>; skips
+            <code>__MACOSX</code>, dotfiles and <code>~$</code> Office lock files. Writes the roster back to the project.
+          </p>
+          <p class="helps"><b>Why it helps</b>
+            One drag-and-drop replaces manual vendor entry, and the folder names become the identities
+            used to join every later table. The containment check means a malicious or malformed archive
+            cannot write into your filesystem.</p>
+        </div>
+      </li>
+
+      <li class="node" data-kind="det">
+        <div class="node-mark">04</div>
+        <div class="node-body">
+          <p class="node-title"><code>FX rates</code> <span class="ref">app.py</span></p>
+          <p class="does">
+            Parses <code>EUR=1.08, AED=0.27</code> style pairs into <code>project.fx_rates</code>,
+            silently dropping malformed entries.
+          </p>
+          <p class="helps"><b>Why it helps</b>
+            The exchange rate is the single most contestable assumption in a multi-currency comparison.
+            Keeping it as editable project data — not a constant in code — means you can restate the
+            whole comparison at a different rate in seconds.</p>
+        </div>
+      </li>
+
+    </ol>
+  </section>
+
+  <!-- ============ STAGE B ============ -->
+  <section class="stage">
+    <div class="stage-head">
+      <h2>B · Run ingestion</h2>
+      <p class="where">procurement/pipeline.py · shared/llm/factory.py</p>
+    </div>
+    <p class="stage-note">
+      One button in the portal calls <code>run_ingestion()</code>, which loads validated project state,
+      builds an LLM client, then walks the vendors one at a time.
+    </p>
+
+    <ol class="flow">
+
+      <li class="node" data-kind="det">
+        <div class="node-mark">05</div>
+        <div class="node-body">
+          <p class="node-title"><code>load_project()</code> <span class="ref">pipeline.py</span></p>
+          <p class="does">
+            Re-reads <code>project.json</code> through Pydantic rather than trusting whatever the UI
+            was holding.
+          </p>
+          <p class="helps"><b>Why it helps</b>
+            The run is driven by what is actually on disk, so a run is reproducible from the folder
+            alone — no hidden UI state can change the result.</p>
+        </div>
+      </li>
+
+      <li class="node" data-kind="det">
+        <div class="node-mark">06</div>
+        <div class="node-body">
+          <p class="node-title"><code>get_client()</code> <span class="ref">factory.py</span></p>
+          <p class="does">
+            Reads <code>LLM_PROVIDER</code> / <code>LLM_MODEL</code> and returns an Anthropic, OpenAI,
+            Gemini, Bedrock or mock client behind one narrow <code>classify_structure()</code> interface.
+          </p>
+          <p class="helps"><b>Why it helps</b>
+            Switching provider is one environment variable, not a refactor. The mock client is what
+            lets the whole pipeline be tested in CI without an API key or a cent of spend.</p>
+        </div>
+      </li>
+
+    </ol>
+
+      <div class="loop">
+        <p class="loop-label">for each vendor in project.vendors</p>
+
+        <ol class="flow">
+
+          <li class="node" data-kind="det">
+            <div class="node-mark">07</div>
+            <div class="node-body">
+              <p class="node-title"><code>vendor_files()</code> <span class="ref">project.py</span></p>
+              <p class="does">
+                Walks the vendor folder recursively, drops hidden and lock files, returns the list sorted.
+              </p>
+              <p class="helps"><b>Why it helps</b>
+                Sorting makes file order deterministic, so two runs over the same folder resolve the
+                same quote document — a prerequisite for reproducible results.</p>
+            </div>
+          </li>
+
+          <li class="node" data-kind="det">
+            <div class="node-mark">08</div>
+            <div class="node-body">
+              <p class="node-title"><code>pick_quote()</code> <span class="ref">quote_select.py</span></p>
+              <p class="does">
+                Scores filenames: <strong>+100</strong> for <code>quotation / quote / offer / proposal /
+                techno / commercial</code>, <strong>−50</strong> for <code>bom / datasheet / deviation /
+                mom / spec / layout / p&amp;id / spares / drawing</code>, <strong>+5</strong> for
+                <code>.pdf</code> or <code>.xlsx</code>, shortest filename wins ties.
+              </p>
+              <p class="helps"><b>Why it helps</b>
+                KERUI ships 21 documents and only one carries the price. This finds it with zero model
+                calls and zero operator effort — and because the portal prints the chosen filename next
+                to each vendor, a wrong pick is visible before you trust the number.</p>
+            </div>
+          </li>
+
+          <li class="node" data-kind="det">
+            <div class="node-mark">09</div>
+            <div class="node-body">
+              <p class="node-title"><code>read_text()</code> <span class="ref">loaders.py</span></p>
+              <p class="does">
+                Dispatches on extension. <code>.xlsx</code> goes through openpyxl in read-only,
+                <code>data_only</code> mode and is flattened to <code>Sheet | A1=val | B1=val</code> lines.
+              </p>
+              <p class="helps"><b>Why it helps</b>
+                Emitting the cell address alongside every value keeps the spreadsheet's coordinates intact
+                in the text the model sees — which is what makes cell-level provenance possible rather
+                than a vague "it was somewhere in the workbook".</p>
+            </div>
+          </li>
+
+          <li class="node" data-kind="det">
+            <div class="node-mark">10</div>
+            <div class="node-body">
+              <p class="node-title"><code>read_pdf_text()</code> — tier 1 &amp; 2 <span class="ref">loaders.py</span></p>
+              <p class="does">
+                Tries the <code>pdftotext -layout</code> CLI first, then falls back to pypdf, keeping
+                whichever returns more text. Each tier only fires if the previous produced under 200 characters.
+              </p>
+              <p class="helps"><b>Why it helps</b>
+                <code>-layout</code> preserves column alignment, so a price table survives as a readable
+                table instead of collapsing into scrambled tokens. Two cheap local extractors handle the
+                overwhelming majority of vendor PDFs at no API cost.</p>
+            </div>
+          </li>
+
+          <li class="node" data-kind="fallback">
+            <div class="node-mark">11</div>
+            <div class="node-body">
+              <p class="node-title"><code>transcribe_pdf()</code> <span class="ref">pdf_llm.py</span> <span class="tag fb">fallback</span></p>
+              <p class="does">
+                If the text layer is still thin, the raw PDF is sent to a vision-capable model as a
+                native document block and transcribed verbatim. The portal only wires this tier in
+                when <code>ANTHROPIC_API_KEY</code> is set — it uses Anthropic's own PDF document
+                input, so it stays available even when extraction itself is running on OpenAI or
+                Gemini. Without that key <code>pdf_fallback</code> is <code>None</code> and the
+                tier is skipped.
+              </p>
+              <p class="helps"><b>Why it helps</b>
+                Six of KERUI's files are image-only scans — layouts, single-line diagrams, nameplate
+                drawings. Without this tier they would silently yield empty text and the vendor would
+                look like it quoted nothing. It costs nothing when the text layer is healthy — but it
+                degrades quietly: with no Anthropic key set, a scanned quote extracts as empty
+                rather than raising.</p>
+            </div>
+          </li>
+
+          <li class="node" data-kind="model">
+            <div class="node-mark">12</div>
+            <div class="node-body">
+              <p class="node-title"><code>classify_structure()</code> <span class="ref">extract.py</span> <span class="tag">the only inference step</span></p>
+              <p class="does">
+                Sends <code>bid_extract_v1</code> plus the document text and gets back a
+                <code>BidExtraction</code>: currency, base price, VAT flag and rate, freight amount and
+                basis, discount, optional line items, delivery time, Incoterms, payment terms, engine make.
+                The prompt explicitly forbids converting currencies, computing totals, or inventing values.
+              </p>
+              <p class="helps"><b>Why it helps</b>
+                The model does the one thing it is genuinely better at than code — reading unstructured
+                commercial prose — and is barred from arithmetic. Every number it returns should be
+                findable verbatim in the source document, which makes verification a text search rather
+                than a re-derivation.</p>
+            </div>
+          </li>
+
+          <li class="node" data-kind="det">
+            <div class="node-mark">13</div>
+            <div class="node-body">
+              <p class="node-title"><code>VendorBid</code> + <code>ProvenanceRef</code> <span class="ref">extract.py</span></p>
+              <p class="does">
+                Pydantic validates the model's output against the schema, then wraps it with the source
+                document path and the extractor stamp <code>anthropic:bid_extract_v1</code>.
+              </p>
+              <p class="helps"><b>Why it helps</b>
+                Malformed output is rejected at the boundary instead of poisoning the comparison. And
+                every figure carries which document and which prompt version produced it — so when a
+                losing bidder challenges the evaluation, you can name the page.</p>
+            </div>
+          </li>
+
+          <li class="node" data-kind="fallback">
+            <div class="node-mark">14</div>
+            <div class="node-body">
+              <p class="node-title"><code>except → extraction_status="failed"</code> <span class="ref">extract.py</span> <span class="tag fb">per-vendor</span></p>
+              <p class="does">
+                Any failure — unreadable file, no quote document, invalid model output — is caught per
+                vendor and recorded as a failed bid with the error text in <code>notes</code>.
+              </p>
+              <p class="helps"><b>Why it helps</b>
+                One bad vendor folder cannot abort the tender. You get a table with three usable rows and
+                one clearly flagged row, plus the reason, instead of a stack trace and nothing.</p>
+            </div>
+          </li>
+
+          <li class="node" data-kind="det">
+            <div class="node-mark">15</div>
+            <div class="node-body">
+              <p class="node-title"><code>normalize_bid()</code> <span class="ref">normalize.py</span></p>
+              <p class="does">
+                Walks the as-quoted price through four ordered adjustments, each recording a
+                <code>NormalizationAdjustment</code> with its kind, description, from-value, to-value and delta.
+              </p>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>Step</th><th>Rule</th><th>What it removes from the comparison</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>currency</td>
+                      <td class="num">× fx_rate</td>
+                      <td>Different quoting currencies. A missing rate is logged as an explicit "assumed 1.0" adjustment rather than applied silently.</td>
+                    </tr>
+                    <tr>
+                      <td>vat</td>
+                      <td class="num">÷ (1 + rate)</td>
+                      <td>One vendor quoting tax-inclusive against another quoting ex-tax.</td>
+                    </tr>
+                    <tr>
+                      <td>freight</td>
+                      <td class="num">+ amount × fx</td>
+                      <td>EXW vs CIF. Puts everyone on a freight-included basis.</td>
+                    </tr>
+                    <tr>
+                      <td>discount</td>
+                      <td class="num">− total × pct</td>
+                      <td>Headline price vs the price actually payable.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <p class="helps"><b>Why it helps</b>
+                This is the step that makes the numbers comparable at all — and because each adjustment is
+                itemised rather than folded into one figure, the path from quoted price to comparable total
+                is fully auditable and reversible. The portal renders these as a per-vendor table.</p>
+            </div>
+          </li>
+
+        </ol>
+
+        <p class="loop-foot">↻ repeat for the next vendor</p>
+      </div>
+  </section>
+
+  <!-- ============ STAGE C ============ -->
+  <section class="stage">
+    <div class="stage-head">
+      <h2>C · Converge, persist, export</h2>
+      <p class="where">procurement/compare.py · export.py</p>
+    </div>
+    <p class="stage-note">
+      The per-vendor results join back into one table, get written to disk, and leave the system in the
+      formats procurement actually circulates.
+    </p>
+
+    <ol class="flow">
+
+      <li class="node" data-kind="det">
+        <div class="node-mark">16</div>
+        <div class="node-body">
+          <p class="node-title"><code>build_comparison()</code> <span class="ref">compare.py</span></p>
+          <p class="does">
+            Joins raw bids to normalized bids on vendor name and emits one <code>ComparisonRow</code> per
+            vendor carrying both the as-quoted price and the normalized total, alongside delivery terms,
+            lead time, payment terms and engine make.
+          </p>
+          <p class="helps"><b>Why it helps</b>
+            Keeping the raw and normalized figures side by side means a reviewer can see what a vendor
+            actually wrote and what you compared — the adjustment is visible, not hidden.</p>
+        </div>
+      </li>
+
+      <li class="node" data-kind="det">
+        <div class="node-mark">17</div>
+        <div class="node-body">
+          <p class="node-title"><code>sort by (is_none, total)</code> <span class="ref">compare.py</span></p>
+          <p class="does">
+            Orders by normalized total ascending, with the null-total key sorting failed extractions to
+            the bottom.
+          </p>
+          <p class="helps"><b>Why it helps</b>
+            Cheapest first, and failed rows sink instead of sorting as zero and falsely topping the table
+            — a small detail that prevents a very expensive misread.</p>
+        </div>
+      </li>
+
+      <li class="node" data-kind="det">
+        <div class="node-mark">18</div>
+        <div class="node-body">
+          <p class="node-title"><code>dataset.json</code> + <code>status="done"</code> <span class="ref">pipeline.py</span></p>
+          <p class="does">
+            Writes bids, normalized bids and the comparison table into the project folder and marks the
+            project complete.
+          </p>
+          <p class="helps"><b>Why it helps</b>
+            Results outlive the process. Re-opening the project renders instantly from disk with no
+            re-extraction, so reviewing a tender is free after the first run.</p>
+        </div>
+      </li>
+
+      <li class="node" data-kind="det">
+        <div class="node-mark">19</div>
+        <div class="node-body">
+          <p class="node-title"><code>export</code> — xlsx · csv · raw JSON <span class="ref">export.py · app.py</span></p>
+          <p class="does">
+            Renders the sortable table, offers Excel and CSV downloads on a fixed nine-column header,
+            and exposes every vendor's raw extracted bid plus its adjustment ledger in expanders.
+          </p>
+          <p class="helps"><b>Why it helps</b>
+            The comparison lands in the format that gets circulated and marked up. The raw JSON alongside
+            it means anyone who doubts a cell can trace it back to the extraction without asking you.</p>
+        </div>
+      </li>
+
+    </ol>
+  </section>
+
+  <section class="panel">
+    <h2>What the shape buys you</h2>
+    <ul>
+      <li><strong>One inference call per vendor.</strong> Steps 01–11 and 13–19 are deterministic; only step 12 (and step 11 on scanned files) involves a model. The blast radius of a model error is one well-defined schema, not the whole result.</li>
+      <li><strong>Arithmetic never leaves Python.</strong> The prompt forbids the model from converting or totalling. Every number in the final table was either copied verbatim from a document or computed by code with unit tests behind it.</li>
+      <li><strong>Failure is per-vendor, never global.</strong> Bad archives, missing quotes, unreadable PDFs and invalid model output all degrade to a flagged row.</li>
+      <li><strong>Every derived figure is traceable.</strong> Provenance on the extraction, an itemised ledger on the normalization, raw JSON in the UI.</li>
+      <li><strong>Reproducible from the folder alone.</strong> Sorted file walks, on-disk project state, and a versioned prompt string mean a re-run months later produces a comparable result.</li>
+    </ul>
+  </section>
+
+  <section class="panel warn">
+    <h2>Not in the pipeline yet</h2>
+    <ul>
+      <li><strong>The requirements document is stored but never parsed.</strong> Nothing checks a bid against the MR, so there is no technical compliance flag and no should-cost anchor.</li>
+      <li><strong>Only one document per vendor is read.</strong> <code>pick_quote()</code> returns a single file, so deviation forms, spares lists and datasheets never reach extraction — which is exactly the material a compliance check would need.</li>
+      <li><strong>Ranking is price-only.</strong> Delivery time and payment terms are carried into the table but not scored, so there is no weighted recommendation.</li>
+      <li><strong>Extraction blocks the request.</strong> A run holds the Streamlit thread with no progress, retry or cancel.</li>
+    </ul>
+  </section>
+
+  <p class="kicker">Generated from the working tree · branch procurement-comparison-portal</p>
+
+</div>
+</body>
+</html>
