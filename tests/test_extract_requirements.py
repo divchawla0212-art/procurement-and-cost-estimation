@@ -59,6 +59,20 @@ def test_an_auto_clause_missing_any_bound_is_demoted_to_judgement(tmp_path, miss
     assert record.checkability == "judgement"
     # and the clause is still stored - demotion is not deletion
     assert record.clause_ref == "4.2.7"
+    # demotion clears all four bound fields together, not just the one that
+    # was missing on input
+    assert (record.parameter, record.operator, record.value, record.unit) == (
+        None, None, None, None)
+
+
+def test_a_zero_bound_is_a_real_bound_and_stays_auto(tmp_path):
+    # value is not None is the demotion test, not truthiness - a bound of 0
+    # (e.g. "vibration shall be 0 mm/s") is a real, statable bound and must
+    # not be mistaken for a missing one.
+    entry = dict(_TWO_CLAUSES["requirements"][0], value=0)
+    [record], status, _ = extract_requirements(
+        "d1", _spec(tmp_path), StubClient({"requirements": [entry]}))
+    assert (status, record.checkability, record.value) == ("ok", "auto", 0)
 
 
 def test_a_dimensionless_auto_clause_may_declare_unit_none_explicitly(tmp_path):
