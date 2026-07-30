@@ -267,3 +267,75 @@ def test_between_on_identical_units_still_rejects_a_value_outside():
     ok, _ = compare("between", [2.76, 4.14], "barg", 5.0, "barg",
                     parameter="fuel_gas_pressure")
     assert ok is False
+
+
+# --- the families the real RFQ corpus states --------------------------------
+
+@pytest.mark.parametrize("value,unit,expected,canonical", [
+    (110.0, "%", 110.0, "%"),
+    (12.0, "months", 12.0, "months"),
+    (1.0, "years", 12.0, "months"),
+    (1000.0, "m", 1000.0, "m"),
+    (1000.0, "mm", 1.0, "m"),
+    (3.0, "s", 3.0, "s"),
+    (3.0, "ms", 0.003, "s"),
+    (1250.0, "Amp", 1250.0, "a"),
+    (1.0, "kA", 1000.0, "a"),
+    (230.0, "VAC", 230.0, "v"),
+    (85.0, "dBA", 85.0, "db(a)"),
+    (2.76, "barg", 276.0, "kpag"),
+    (28000.0, "kg", 28000.0, "kg"),
+])
+def test_the_new_families_scale_to_their_canonical_unit(value, unit, expected,
+                                                       canonical):
+    got, got_canonical = to_canonical(value, unit)
+    assert got == pytest.approx(expected, rel=1e-6)
+    assert got_canonical == canonical
+
+
+def test_a_year_is_twelve_months_but_a_month_is_not_any_number_of_hours():
+    # exact, so it converts
+    assert to_canonical(2.0, "years")[0] == pytest.approx(24.0)
+    # not exact, so it refuses rather than approximating
+    with pytest.raises(Unconvertible):
+        compare("<=", 12.0, "months", 8760.0, "h", parameter="warranty_period")
+
+
+def test_weeks_never_silently_become_months():
+    # 4.348 weeks per month is an average, not a conversion, and a warranty
+    # period is not an average
+    with pytest.raises(Unconvertible):
+        compare(">=", 6.0, "months", 26.0, "weeks", parameter="preservation")
+
+
+def test_a_percentage_is_not_dimensionless():
+    # a dimensionless count must never compare against a percentage
+    with pytest.raises(Unconvertible):
+        compare(">=", 3.0, "", 110.0, "%", parameter="black_starts")
+
+
+def test_a_gauge_pressure_refusal_says_the_two_are_different_quantities():
+    # not merely "unrecognised unit 'barg'" - INV-10's whole distinction
+    with pytest.raises(Unconvertible) as exc:
+        compare(">=", 2.76, "barg", 2.76, "bar", parameter="fuel_gas_pressure")
+    assert "different quantities" in str(exc.value)
+
+
+def test_the_live_percentage_requirement_now_compares():
+    # sustained_overload_current >= 110 %, vendor states the number bare
+    ok, why = compare(">=", 110.0, "%", 300.0, None,
+                      parameter="sustained_overload_current")
+    assert ok is True and "assumed" in why.lower()
+
+
+def test_the_live_warranty_requirement_now_compares():
+    ok, _ = compare("==", 12.0, "months", 12.0, "Months",
+                    parameter="warranty_period")
+    assert ok is True
+
+
+def test_the_live_noise_requirement_compares_across_two_spellings():
+    # "dBA" and "dB(A) at 1m" are one unit printed two ways
+    ok, why = compare("<=", 85.0, "dBA", 85.0, "dB(A) at 1m",
+                      parameter="noise_limit")
+    assert ok is True and "at 1m" in why

@@ -33,12 +33,33 @@ _SCALAR = {
     "v": ("voltage", 1.0), "kv": ("voltage", 1000.0),
     "kg/h": ("mass_flow", 1.0), "t/h": ("mass_flow", 1000.0),
     "nm3/h": ("volume_flow", 1.0), "m3/h": ("volume_flow", 1.0),
+    # gauge pressure is one atmosphere away from absolute; folding barg into
+    # bar would misjudge a fuel-gas requirement by ~14 psi.
+    "barg": ("pressure_gauge", 100.0), "kpag": ("pressure_gauge", 1.0),
+    "psig": ("pressure_gauge", 6.894757),
+    # a percentage is its own family, not dimensionless: otherwise
+    # "black_starts >= 3" would compare against a fact of "110 %".
+    "%": ("percent", 1.0),
+    "months": ("calendar", 1.0), "years": ("calendar", 12.0),
+    # weeks is its own family on purpose: 4.348 weeks per month is an average,
+    # not a conversion, and a warranty period is not an average.
+    "weeks": ("weeks", 1.0),
+    "db(a)": ("noise", 1.0),
+    "m": ("length", 1.0), "mm": ("length", 0.001),
+    "cm": ("length", 0.01), "km": ("length", 1000.0),
+    "s": ("time", 1.0), "ms": ("time", 0.001),
+    "min": ("time", 60.0), "h": ("time", 3600.0),
+    "a": ("current", 1.0), "ma": ("current", 0.001), "ka": ("current", 1000.0),
+    "kg": ("mass", 1.0), "g": ("mass", 0.001), "t": ("mass", 1000.0),
     "": ("dimensionless", 1.0),
 }
 _CANONICAL = {"power": "kw", "apparent_power": "kva", "pressure": "kpa",
               "concentration": "ppm", "frequency": "hz", "voltage": "v",
               "mass_flow": "kg/h", "volume_flow": "nm3/h",
-              "temperature": "degc", "dimensionless": ""}
+              "temperature": "degc", "dimensionless": "",
+              "pressure_gauge": "kpag", "percent": "%", "calendar": "months",
+              "weeks": "weeks", "noise": "db(a)", "length": "m", "time": "s",
+              "current": "a", "mass": "kg"}
 
 _ALIASES = {
     "°c": "degc", "degc": "degc", "deg c": "degc", "celsius": "degc", "c": "degc",
@@ -49,6 +70,20 @@ _ALIASES = {
     "kg/cm²": "kg/cm2", "nm³/h": "nm3/h", "m³/h": "m3/h",
     "kilowatt": "kw", "megawatt": "mw", "volts": "v", "hertz": "hz",
     "parts per million": "ppm", "ppmv": "ppm", "vppm": "ppm",
+    "amp": "a", "amps": "a", "ampere": "a", "amperes": "a",
+    # AC and DC both fold to volts. In this domain they differ by an order of
+    # magnitude (24 V DC starting vs 230 V AC supply), so a wrong pass is
+    # implausible; the alternative leaves every battery and heater clause
+    # unanswered.
+    "vac": "v", "vdc": "v", "volts ac": "v", "volts dc": "v",
+    "meters": "m", "metres": "m", "metre": "m", "meter": "m",
+    "sec": "s", "secs": "s", "seconds": "s", "second": "s",
+    "hours": "h", "hour": "h", "hrs": "h", "hr": "h",
+    "year": "years", "yrs": "years", "yr": "years",
+    "month": "months", "week": "weeks",
+    "percent": "%", "pct": "%",
+    "dba": "db(a)", "db (a)": "db(a)", "db(a)": "db(a)",
+    "kilogram": "kg", "kilograms": "kg", "kgs": "kg", "tonne": "t",
 }
 
 # Molar mass (g/mol) per substance, and the molar volume of an ideal gas at
