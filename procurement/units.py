@@ -263,6 +263,12 @@ def _align(req_values: list[float], fact_value: float, req_unit, fact_unit,
     return aligned, fact_c, canonical, note
 
 
+def _tokens(value) -> frozenset[str]:
+    """The alphanumeric words of a printed value, for a non-numeric equality.
+    Same splitting rule as `_substance`, so one idea has one spelling."""
+    return frozenset(t for t in _TOKENS.split(str(value).lower()) if t)
+
+
 def _members(value) -> list[str]:
     if isinstance(value, (list, tuple)):
         return [str(v).strip().lower() for v in value]
@@ -316,13 +322,21 @@ def compare(operator: str, req_value, req_unit, fact_value, fact_unit,
 
     lhs = to_number(req_value)
     rhs = to_number(fact_value)
-    if lhs is None:
-        raise Unconvertible(f"requirement value {req_value!r} is not a number")
-    if rhs is None:
-        if operator == "==":
-            same = str(req_value).strip().lower() == str(fact_value).strip().lower()
-            return same, f"{fact_value!r} against required {req_value!r}"
-        raise Unconvertible(f"vendor value {fact_value!r} is not a number")
+    if lhs is None or rhs is None:
+        if operator != "==":
+            # ">= H" has no reading; only equality can be non-numeric
+            side = "requirement" if lhs is None else "vendor"
+            missing = req_value if lhs is None else fact_value
+            raise Unconvertible(f"{side} value {missing!r} is not a number")
+        want, got = _tokens(req_value), _tokens(fact_value)
+        if not want:
+            raise Unconvertible("the requirement states no value to compare")
+        # Every token the requirement states must appear in the vendor's
+        # answer: "H" is satisfied by "Class H", and "Class H Rise" is not
+        # satisfied by "Class H". Exact equality would refuse the first;
+        # substring matching would accept the second.
+        return want <= got, (f"{fact_value!r} against required {req_value!r} "
+                             f"(matched on {sorted(want)})")
 
     fact_unit, note = _assume_unit(req_unit, fact_unit)
     (lhs_c,), rhs_c, canonical, condition = _align(

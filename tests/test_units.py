@@ -339,3 +339,56 @@ def test_the_live_noise_requirement_compares_across_two_spellings():
     ok, why = compare("<=", 85.0, "dBA", 85.0, "dB(A) at 1m",
                       parameter="noise_limit")
     assert ok is True and "at 1m" in why
+
+
+# --- equality between two values that are not numbers -----------------------
+
+def test_a_class_requirement_matches_the_vendor_stating_it_with_context():
+    ok, why = compare("==", "H", "", "Class H", "", parameter="insulation_class")
+    assert ok is True and "Class H" in why
+
+
+def test_a_class_requirement_fails_a_different_class():
+    ok, _ = compare("==", "H", "", "Class F", "", parameter="insulation_class")
+    assert ok is False
+
+
+def test_a_non_numeric_equality_needs_every_requirement_token():
+    # "Class H Rise" asks for more than "Class H" states; a substring rule
+    # would read the vendor's answer as satisfying it
+    ok, _ = compare("==", "Class H Rise", "", "Class H", "",
+                    parameter="insulation_class")
+    assert ok is False
+
+
+def test_a_non_numeric_equality_is_case_and_punctuation_insensitive():
+    assert compare("==", "IP 55", "", "ip55", "", parameter="ip_rating")[0] is True
+
+
+def test_a_non_numeric_equality_rejects_a_different_rating():
+    # "IP 55" is not satisfied by "IP 23"
+    assert compare("==", "IP 55", "", "IP 23", "", parameter="ip_rating")[0] is False
+
+
+def test_an_empty_requirement_value_raises_rather_than_matching_everything():
+    with pytest.raises(Unconvertible):
+        compare("==", "   ", "", "Class H", "", parameter="insulation_class")
+
+
+def test_a_numeric_equality_is_unaffected_by_the_token_path():
+    assert compare("==", 50, "Hz", 50.0, "Hz", parameter="frequency")[0] is True
+    assert compare("==", 50, "Hz", 60.0, "Hz", parameter="frequency")[0] is False
+
+
+def test_a_non_numeric_requirement_on_an_ordering_operator_still_raises():
+    # ">= H" has no meaning; only equality has a non-numeric reading
+    with pytest.raises(Unconvertible) as exc:
+        compare(">=", "H", "", "Class H", "", parameter="insulation_class")
+    assert "requirement" in str(exc.value) and "not a number" in str(exc.value)
+
+
+def test_a_non_numeric_vendor_value_on_an_ordering_operator_names_the_vendor():
+    with pytest.raises(Unconvertible) as exc:
+        compare("<=", 50.0, "ppm", "as per standard", "ppm",
+                parameter="h2s_tolerance")
+    assert "vendor" in str(exc.value) and "not a number" in str(exc.value)
