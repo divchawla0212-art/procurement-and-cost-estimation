@@ -49,6 +49,14 @@ class VendorFacts(BaseModel):
     technical: list[dict] = []          # populated in phase 2
     deviations: list[dict] = []         # populated in phase 2
     overrides: list[Override] = []
+    # The document whose extraction produced `commercial`. Stored rather than
+    # re-derived: choosing it runs a classified-then-pick_quote fallback in
+    # pipeline.py that would drift if a second copy existed.
+    quotation_doc_id: str | None = None
+    # A reviewer's judgement, not an extracted value and not an Override —
+    # reconcile() flags any field_path absent from the extracted view, so a
+    # synthetic override path would raise a false conflict on every run.
+    technical_feedback: str | None = None
 
 
 class Event(BaseModel):

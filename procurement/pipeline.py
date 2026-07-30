@@ -487,6 +487,10 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
                 # overwrite would publish a half-good record - facts intact,
                 # commercial blanked - straight into the comparison
                 commercial_dump = bid.model_dump() if status == "ok" else base.commercial
+                # only on success: a failed re-extraction must not repoint the
+                # link at a document that produced nothing, which would then
+                # prune good prices
+                quotation_doc_id = doc.doc_id if status == "ok" else base.quotation_doc_id
                 technical = list(base.technical)
                 deviations = list(base.deviations)
             elif route == "datasheet":
@@ -505,6 +509,7 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
                     technical = list(base.technical)
                 commercial_dump = base.commercial
                 deviations = list(base.deviations)
+                quotation_doc_id = base.quotation_doc_id
             else:   # deviation
                 items, status, notes = extract_deviations(doc.doc_id, full, client,
                                                           pdf_fallback=pdf_fallback)
@@ -518,6 +523,7 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
                     deviations = list(base.deviations)
                 commercial_dump = base.commercial
                 technical = list(base.technical)
+                quotation_doc_id = base.quotation_doc_id
 
             doc.extraction_status = status
             doc.extracted_at = _now()
@@ -543,7 +549,11 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
                 normalized=normalized,
                 technical=resolved["technical"],
                 deviations=resolved["deviations"],
-                overrides=overrides))
+                overrides=overrides,
+                quotation_doc_id=quotation_doc_id,
+                # carried or a re-extraction silently discards the reviewer's
+                # judgement — vocabulary_sha's defect, one field over
+                technical_feedback=base.technical_feedback))
 
             events.append_event(root, slug, Event(
                 at=_now(), run_id=run_id, actor="pipeline",
