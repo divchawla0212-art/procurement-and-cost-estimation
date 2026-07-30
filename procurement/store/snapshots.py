@@ -8,7 +8,8 @@ from contextlib import contextmanager
 
 from procurement.project import load_project, save_project
 from procurement.store import layout
-from procurement.store.models import DocumentRecord, VendorFacts
+from procurement.store.models import (ComplianceResult, DocumentRecord,
+                                      RequirementSet, VendorFacts)
 
 
 def get_generation(root: str, slug: str) -> int:
@@ -73,6 +74,28 @@ def delete_facts(root: str, slug: str, vendor: str) -> bool:
     if os.path.isdir(vdir) and not os.listdir(vdir):
         os.rmdir(vdir)
     return True
+
+
+def load_requirements(root: str, slug: str) -> RequirementSet:
+    """Absent snapshot -> an empty set, not None. 'No spec has been extracted'
+    and 'the spec stated nothing' are the same thing to every reader here, and
+    an Optional return would put a None-check in front of each of them."""
+    raw = layout.read_json(layout.requirements_path(root, slug))
+    return RequirementSet.model_validate(raw) if raw is not None else RequirementSet()
+
+
+def save_requirements(root: str, slug: str, reqset: RequirementSet) -> None:
+    layout.atomic_write_json(layout.requirements_path(root, slug), reqset.model_dump())
+
+
+def load_compliance(root: str, slug: str) -> list[ComplianceResult]:
+    raw = layout.read_json(layout.compliance_path(root, slug), default=[])
+    return [ComplianceResult.model_validate(r) for r in raw]
+
+
+def save_compliance(root: str, slug: str, results: list[ComplianceResult]) -> None:
+    layout.atomic_write_json(layout.compliance_path(root, slug),
+                             [r.model_dump() for r in results])
 
 
 def list_fact_vendors(root: str, slug: str) -> list[str]:

@@ -91,3 +91,73 @@ class DeviationRecord(BaseModel):
     statement: str
     disposition: str = "noted"       # comply | deviate | noted
     doc_id: str
+
+
+def req_id_for(source_doc_id: str, clause_ref: str) -> str:
+    """Stable across re-extraction: same document + same printed clause ref ->
+    same id. That is what lets an override on requirements[<id>].value survive
+    a re-run, since list order is not stable and index paths are forbidden."""
+    key = f"{source_doc_id}:{(clause_ref or '').strip().lower()}"
+    return "r-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:10]
+
+
+def amendment_id_for(source_doc_id: str, clause_ref: str | None, text: str) -> str:
+    """All three participate. Clause ref alone collides whenever one meeting
+    changes the same clause twice; text alone collides across documents."""
+    key = f"{source_doc_id}:{(clause_ref or '').strip().lower()}:{text.strip().lower()}"
+    return "a-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:10]
+
+
+class RequirementRecord(BaseModel):
+    """One clause of the RFQ, with amendments already applied.
+
+    `base_body` holds the as-extracted body whenever an amendment changed it,
+    so re-applying amendments is idempotent across runs and withdrawing the
+    MOM restores the original clause exactly.
+    """
+    req_id: str
+    clause_ref: str
+    text: str
+    category: str = "technical"      # technical|commercial|documentation|testing|codes
+    checkability: str = "judgement"  # auto|judgement
+    parameter: str | None = None     # auto only
+    operator: str | None = None      # >= | <= | == | in
+    value: str | float | list | None = None
+    unit: str | None = None
+    source_doc_id: str
+    amended_by: str | None = None    # amendment_id, or None
+    base_body: dict | None = None    # pre-amendment body, for audit and revert
+    withdrawn: bool = False          # a MOM removed the clause; kept for audit
+
+
+class Amendment(BaseModel):
+    """A change a MOM makes to a clause. Stored separately from the
+    requirement so both the original and the meeting's change stay visible."""
+    amendment_id: str
+    clause_ref: str | None = None
+    req_id: str | None = None        # resolved target; None means unmatched
+    text: str
+    parameter: str | None = None
+    operator: str | None = None
+    value: str | float | list | None = None
+    unit: str | None = None
+    action: str = "modify"           # modify | withdraw
+    source_doc_id: str
+
+
+class RequirementSet(BaseModel):
+    requirements: list[RequirementRecord] = []
+    amendments: list[Amendment] = []
+    overrides: list[Override] = []
+
+
+class ComplianceResult(BaseModel):
+    """One cell of the requirement x vendor matrix. Lives here rather than in
+    compliance.py so snapshots.py can serialise it without an import cycle."""
+    req_id: str
+    vendor: str
+    verdict: str                     # pass|fail|deviation|unanswered|review
+    fact_id: str | None = None
+    doc_id: str | None = None
+    rationale: str = ""
+    evaluated_at: str

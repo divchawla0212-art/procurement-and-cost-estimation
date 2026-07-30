@@ -30,6 +30,14 @@ def facts_path(root: str, slug: str, vendor: str) -> str:
     return os.path.join(store_dir(root, slug), "vendors", vendor, "facts.json")
 
 
+def requirements_path(root: str, slug: str) -> str:
+    return os.path.join(store_dir(root, slug), "requirements.json")
+
+
+def compliance_path(root: str, slug: str) -> str:
+    return os.path.join(store_dir(root, slug), "compliance.json")
+
+
 def migration_marker_path(root: str, slug: str) -> str:
     """Positive record that the legacy dataset.json import completed."""
     return os.path.join(store_dir(root, slug), "migrated.json")

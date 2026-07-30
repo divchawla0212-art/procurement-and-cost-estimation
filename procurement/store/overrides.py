@@ -41,7 +41,12 @@ def _parse(field_path: str) -> list[tuple[str, str | None]]:
 
 
 def _id_of(item: dict) -> str | None:
-    for key in ("fact_id", "req_id", "doc_id", "clause_ref"):
+    # Most specific key first. A DeviationRecord dump carries both
+    # deviation_id and doc_id, and an Amendment carries both amendment_id and
+    # req_id; falling through to the broader key made every record from one
+    # source document resolve to whichever came first in the list.
+    for key in ("fact_id", "deviation_id", "amendment_id", "req_id",
+                "doc_id", "clause_ref"):
         if key in item:
             return item[key]
     return None
