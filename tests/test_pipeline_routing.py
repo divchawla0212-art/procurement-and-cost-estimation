@@ -53,6 +53,22 @@ class RoutingClient:
         return {"currency": "USD", "base_price": 1000.0, "freight_included": True}
 
 
+class FailingOnSchema(RoutingClient):
+    """Behaves like RoutingClient, except it raises whenever the model is
+    asked for the given output shape (identified by one of its fields) -
+    used to simulate a transient extractor failure on a specific document
+    class while leaving classification and the other extractors working."""
+
+    def __init__(self, fail_field):
+        super().__init__()
+        self.fail_field = fail_field
+
+    def classify_structure(self, prompt, output_schema, context_text, images=None):
+        if self.fail_field in output_schema.model_fields:
+            raise RuntimeError("provider unavailable")
+        return super().classify_structure(prompt, output_schema, context_text, images=images)
+
+
 def test_every_document_is_classified(tmp_path):
     root = _project(tmp_path)
     run_ingestion(root, "p", RoutingClient())
@@ -154,6 +170,57 @@ def test_superseded_document_is_not_extracted(tmp_path):
     assert old.extraction_status == "skipped"
     assert "superseded" in old.notes
     assert new.extraction_status == "ok"
+
+
+def test_failed_datasheet_reextraction_preserves_prior_facts(tmp_path):
+    root = _project(tmp_path)
+    run_ingestion(root, "p", RoutingClient())
+    before = snapshots.load_facts(root, "p", "KERUI")
+    touched_doc = next(d.doc_id for d in snapshots.load_documents(root, "p")
+                       if d.path.endswith("01 DataSheet Gas Generator.txt"))
+    before_fact = next(f for f in before.technical if f["doc_id"] == touched_doc)
+
+    (tmp_path / "p" / "vendors" / "KERUI"
+     / "01 DataSheet Gas Generator.txt").write_bytes(b"Continuous rating 600 kW")
+    run_ingestion(root, "p", FailingOnSchema("facts"))
+
+    after = snapshots.load_facts(root, "p", "KERUI")
+    # the previously-good fact for the now-failing document must survive,
+    # byte-for-byte, rather than being wiped by the empty result of the
+    # failed re-extraction
+    assert before_fact in after.technical
+    assert len(after.technical) == len(before.technical)
+    docs = {d.doc_id: d for d in snapshots.load_documents(root, "p")}
+    assert docs[touched_doc].extraction_status == "failed"
+
+
+def test_failed_deviation_reextraction_preserves_prior_facts(tmp_path):
+    root = _project(tmp_path)
+    run_ingestion(root, "p", RoutingClient())
+    before = snapshots.load_facts(root, "p", "KERUI")
+    touched_doc = next(d.doc_id for d in snapshots.load_documents(root, "p")
+                       if d.path.endswith("03 Attachment-2 Vendor Deviation Form.txt"))
+    before_deviation = next(d for d in before.deviations if d["doc_id"] == touched_doc)
+
+    (tmp_path / "p" / "vendors" / "KERUI"
+     / "03 Attachment-2 Vendor Deviation Form.txt").write_bytes(b"Clause 9.9.9 deviation revised")
+    run_ingestion(root, "p", FailingOnSchema("deviations"))
+
+    after = snapshots.load_facts(root, "p", "KERUI")
+    assert before_deviation in after.deviations
+    assert len(after.deviations) == len(before.deviations)
+    docs = {d.doc_id: d for d in snapshots.load_documents(root, "p")}
+    assert docs[touched_doc].extraction_status == "failed"
+
+
+def test_failed_quotation_extraction_records_notes(tmp_path):
+    root = _project(tmp_path)
+    run_ingestion(root, "p", FailingOnSchema("currency"))
+    docs = {d.path.rsplit("/", 1)[-1]: d for d in snapshots.load_documents(root, "p")}
+    quote = docs["Quotation of Gas Generator.txt"]
+    assert quote.extraction_status == "failed"
+    assert quote.notes
+    assert "provider unavailable" in quote.notes
 
 
 def test_prompt_versions_are_per_class():

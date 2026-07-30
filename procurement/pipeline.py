@@ -155,22 +155,33 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
             if doc.doc_class == "quotation":
                 bid = extract_bid(doc.vendor, [full], client, pdf_fallback=pdf_fallback)
                 status = bid.extraction_status
+                doc.notes = bid.notes
                 commercial_dump = bid.model_dump()
                 technical = list(base.technical)
                 deviations = list(base.deviations)
             elif doc.doc_class == "datasheet":
                 facts, status = extract_tech_facts(doc.doc_id, full, client,
                                                    pdf_fallback=pdf_fallback)
-                # replace only this document's facts; other datasheets survive
-                technical = [f for f in base.technical if f.get("doc_id") != doc.doc_id]
-                technical += [f.model_dump() for f in facts]
+                if status == "ok":
+                    # replace only this document's facts; other datasheets survive
+                    technical = [f for f in base.technical if f.get("doc_id") != doc.doc_id]
+                    technical += [f.model_dump() for f in facts]
+                else:
+                    # a failed re-extraction must not erase this document's
+                    # previously-good, already-stored facts
+                    technical = list(base.technical)
                 commercial_dump = base.commercial
                 deviations = list(base.deviations)
             else:   # deviation
                 items, status = extract_deviations(doc.doc_id, full, client,
                                                    pdf_fallback=pdf_fallback)
-                deviations = [d for d in base.deviations if d.get("doc_id") != doc.doc_id]
-                deviations += [d.model_dump() for d in items]
+                if status == "ok":
+                    deviations = [d for d in base.deviations if d.get("doc_id") != doc.doc_id]
+                    deviations += [d.model_dump() for d in items]
+                else:
+                    # same guard as the datasheet branch: a failed re-extraction
+                    # must not erase this document's previously-good deviations
+                    deviations = list(base.deviations)
                 commercial_dump = base.commercial
                 technical = list(base.technical)
 
