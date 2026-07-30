@@ -500,3 +500,29 @@ def test_row19_an_amendment_matching_no_clause_is_stored_unapplied(tmp_path):
     assert amendment.clause_ref == "99.9" and amendment.req_id is None
     assert all(r.amended_by is None for r in reqset.requirements)
     assert next(r for r in reqset.requirements if r.clause_ref == "4.2.7").value == 50
+
+
+def test_row20_a_colliding_second_spec_unresolves_a_resolved_amendment(tmp_path):
+    # INV-3: clause numbers are unique only within a document, so once a
+    # second spec prints the same ref there is nothing left to bind by — and
+    # the run that discovers this must undo the resolution it made earlier,
+    # not leave one document silently amended.
+    root = _full_project(tmp_path)
+    run_ingestion(root, "p", MatrixClient())
+    amended = next(r for r in _reqs(root).requirements if r.clause_ref == "4.2.7")
+    assert amended.value == 60 and amended.base_body is not None
+
+    _write_rfq(tmp_path, "ADN-AEC-ME-SPC-027 MR Gas Genset B.txt")
+    run_ingestion(root, "p", MatrixClient())
+
+    reqset = _reqs(root)
+    [amendment] = reqset.amendments
+    assert amendment.req_id is None
+    documents = {r.source_doc_id for r in reqset.requirements
+                 if r.clause_ref == "4.2.7"}
+    assert len(documents) == 2
+    assert all(d in amendment.unresolved_reason for d in documents)
+
+    reverted = [r for r in reqset.requirements if r.clause_ref == "4.2.7"]
+    assert all(r.value == 50 and r.amended_by is None and r.base_body is None
+               for r in reverted)

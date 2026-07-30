@@ -49,7 +49,7 @@ Every invariant is owned by exactly one task and defended by at least one row of
 |---|---|---|---|
 | **INV-1** | Every id in `requirements.json` is a pure function of its source: re-extracting an unchanged spec yields exactly the same set of `req_id`s and `amendment_id`s, and each record type resolves by its own id key. | Task 1 | 12 |
 | **INV-2** | Every requirement stored with `checkability == "auto"` carries exactly all four of `parameter`, `operator`, `value`, `unit`. A clause missing any of them is stored as `judgement`. | Task 2 | 18 |
-| **INV-3** | Every amendment in `requirements.json` names exactly one `source_doc_id` and the `clause_ref` it targets. An amendment matching no requirement is stored with `req_id = None` — never dropped, never applied. | Task 3 | 19 |
+| **INV-3** | Every amendment in `requirements.json` names exactly one `source_doc_id` and the `clause_ref` it targets, and is applied only when **exactly one** stored requirement matches that clause. Matching none — or more than one, since clause numbers are unique only within a document — stores it with `req_id = None` and a stated `unresolved_reason`: never dropped, never applied. | Task 3 | 19, 20 |
 | **INV-4** | `requirements.json` contains exactly the requirements of the currently-authoritative (non-superseded, still-present, still-spec-routed) RFQ documents — no more, no fewer. | Task 4 | 1, 3, 4, 5, 6, 7, 8, 9, 10 |
 | **INV-5** | An amendment sourced from a superseded or deleted MOM never contributes to a requirement's effective value: every requirement's `amended_by` names a live amendment or is `None`, and a requirement with `amended_by is None` equals its `base_body`. | Task 4 | 2, 11 |
 | **INV-6** | `compliance.json` has exactly one cell per (live requirement, live vendor) pair and no cell for any other pair. | Task 6 | 15 |
@@ -722,11 +722,13 @@ git add procurement/extract_requirements.py shared/llm/prompts/requirements_v1.t
   - `MOM_PROMPT_VERSION: str = "mom_amend_v1"`
   - `extract_amendments(doc_id: str, path: str, client, pdf_fallback=None) -> tuple[list[Amendment], str, str | None]`
   - `apply_amendments(requirements: list[RequirementRecord], amendments: list[Amendment]) -> tuple[list[RequirementRecord], list[Amendment]]` — returns the resolved requirements **and** the amendments with their `req_id` targets filled in. Pure; mutates neither argument.
-- **Store invariant owned (INV-3):** every amendment in `requirements.json` names exactly one `source_doc_id` and the `clause_ref` it targets; an amendment whose clause matches no stored requirement is kept with `req_id = None` — never dropped, and never applied to anything.
+- **Store invariant owned (INV-3):** every amendment in `requirements.json` names exactly one `source_doc_id` and the `clause_ref` it targets, and is applied only when **exactly one** stored requirement matches that clause. An amendment whose clause matches no stored requirement — or more than one — is kept with `req_id = None` and an `unresolved_reason` saying which case it is: never dropped, and never applied to anything.
 
 `apply_amendments` is the idempotence guarantee. It always rebuilds each requirement from `base_body or <current body>`, so running it twice over the same inputs produces the same output, and removing an amendment reverts the clause exactly. Getting this wrong is how a second run would amend an already-amended value — the arithmetic equivalent of phase 2's **C1**.
 
 An unmatched amendment is stored, not discarded: a MOM changing a clause the extractor missed is a signal that the requirements are incomplete, and phase 4's Requirements screen shows it. Discarding it would hide the gap.
+
+An **ambiguous** amendment is not applied at all. Clause numbers are unique only within one document, and the RFQ side has several live spec documents, so the same printed ref appearing in two of them is a coincidence rather than a shared clause. Neither the `Amendment` nor the `RequirementRecord` names a target document, and a MOM saying "clause 4.2.7 revised" gives a human nothing to disambiguate with either — so there is nothing to scope the match by, and binding to whichever requirement happens to come first in the list is a coin flip dressed as a decision. `unresolved_reason` distinguishes the two unresolved cases in words, because "the requirements are incomplete" and "say which document you meant" need different responses from a reviewer.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1024,7 +1026,7 @@ def apply_amendments(requirements: list[RequirementRecord],
     out = [r.model_copy(deep=True) for r in requirements]
     linked = [a.model_copy(deep=True) for a in amendments]
 
-    by_clause: dict[str, RequirementRecord] = {}
+    by_clause: dict[str, list[RequirementRecord]] = {}
     for req in out:
         base = req.base_body or {k: getattr(req, k) for k in _BODY}
         for k, v in base.items():
@@ -1032,13 +1034,26 @@ def apply_amendments(requirements: list[RequirementRecord],
         req.base_body = None
         req.amended_by = None
         req.withdrawn = False
-        by_clause.setdefault(_norm_clause(req.clause_ref), req)
+        # every match, not the first: keeping one would silently pick a
+        # document when two of them print the same clause number
+        by_clause.setdefault(_norm_clause(req.clause_ref), []).append(req)
 
     for amend in linked:
-        target = by_clause.get(_norm_clause(amend.clause_ref))
-        if target is None:
-            amend.req_id = None      # kept and visible, never applied
+        # cleared first, or a reason outlives the collision that caused it
+        amend.unresolved_reason = None
+        matches = by_clause.get(_norm_clause(amend.clause_ref), [])
+        if len(matches) != 1:
+            # kept and visible, never applied. Two cases, and a reviewer
+            # responds to them differently, so they read differently.
+            amend.req_id = None
+            amend.unresolved_reason = (
+                f"no requirement states clause {amend.clause_ref!r}"
+                if not matches else
+                f"clause {amend.clause_ref!r} matches {len(matches)} "
+                f"requirements (documents: ...); the amendment names no "
+                "target document")
             continue
+        target = matches[0]
         amend.req_id = target.req_id
         if target.base_body is None:
             target.base_body = {k: getattr(target, k) for k in _BODY}
@@ -2714,6 +2729,7 @@ One test per row, in `tests/test_phase3_lifecycle.py`, each named for the row it
 | 17 | a datasheet changes, so facts change after compliance was last computed | INV-9 | every verdict's `evaluated_at` is at or after run 2's `run.started`, and the changed fact's cell reflects the new value |
 | 18 | the model returns an `auto`-looking clause whose `unit` is `null` | INV-2 | it is stored as `judgement`; its cell is `review`, never a numeric `pass` |
 | 19 | the MOM amends a `clause_ref` no requirement has | INV-3 | the amendment is stored with `req_id is None`, no requirement's `amended_by` is set, and no requirement's value changed |
+| 20 | a second spec document printing the same `clause_ref` arrives, after a run in which the amendment resolved | INV-3 | the amendment reverts to `req_id is None` with an `unresolved_reason` naming both documents, the previously-amended requirement is back at its `base_body` values with `base_body is None`, and neither document's requirement is amended |
 
 - [ ] **Step 4c: Verify the matrix is real, not decorative**
 
@@ -2740,6 +2756,7 @@ Minimum defect list, one per row:
 | 17 | move `evaluate_project` above `_prune_orphan_facts` |
 | 18 | drop the `auto` demotion in `extract_requirements` |
 | 19 | drop unmatched amendments instead of storing them |
+| 20 | bind to `matches[0]` instead of requiring exactly one match |
 
 - [ ] **Step 5: Commit**
 
