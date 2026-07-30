@@ -19,7 +19,7 @@ def _client():
 
 
 def test_extracts_facts_with_stable_ids_and_provenance(tmp_path):
-    facts, status = extract_tech_facts("d1", _txt(tmp_path), _client())
+    facts, status, _notes = extract_tech_facts("d1", _txt(tmp_path), _client())
     assert status == "ok"
     assert [f.parameter for f in facts] == ["continuous_rating", "h2s_tolerance"]
     assert all(f.doc_id == "d1" for f in facts)
@@ -28,8 +28,8 @@ def test_extracts_facts_with_stable_ids_and_provenance(tmp_path):
 
 
 def test_ids_are_reproducible_across_runs(tmp_path):
-    first, _ = extract_tech_facts("d1", _txt(tmp_path), _client())
-    second, _ = extract_tech_facts("d1", _txt(tmp_path), _client())
+    first, _, _notes = extract_tech_facts("d1", _txt(tmp_path), _client())
+    second, _, _notes = extract_tech_facts("d1", _txt(tmp_path), _client())
     assert [f.fact_id for f in first] == [f.fact_id for f in second]
 
 
@@ -38,19 +38,19 @@ def test_facts_without_a_parameter_name_are_dropped(tmp_path):
         {"parameter": "", "value": 1.0},
         {"parameter": "kw", "value": 550.0},
     ]})
-    facts, status = extract_tech_facts("d1", _txt(tmp_path), client)
+    facts, status, _notes = extract_tech_facts("d1", _txt(tmp_path), client)
     assert status == "ok"
     assert [f.parameter for f in facts] == ["kw"]
 
 
 def test_a_missing_value_is_kept_as_none_not_zero(tmp_path):
     client = MockLLMClient(response={"facts": [{"parameter": "h2s", "unit": "ppm"}]})
-    facts, _ = extract_tech_facts("d1", _txt(tmp_path), client)
+    facts, _, _notes = extract_tech_facts("d1", _txt(tmp_path), client)
     assert facts[0].value is None
 
 
 def test_empty_result_is_ok_not_failed(tmp_path):
-    facts, status = extract_tech_facts("d1", _txt(tmp_path),
+    facts, status, _notes = extract_tech_facts("d1", _txt(tmp_path),
                                        MockLLMClient(response={"facts": []}))
     assert facts == [] and status == "ok"
 
@@ -65,8 +65,20 @@ def test_extraction_error_returns_failed_without_raising(tmp_path):
         def classify_structure(self, *a, **k):
             raise RuntimeError("provider down")
 
-    facts, status = extract_tech_facts("d1", _txt(tmp_path), Boom())
+    facts, status, notes = extract_tech_facts("d1", _txt(tmp_path), Boom())
     assert facts == [] and status == "failed"
+    # the reason must survive the except: without it a permanently-failing
+    # datasheet is retried on every run with nothing to diagnose it by
+    assert notes and "provider down" in notes
+
+
+def test_a_response_omitting_the_facts_key_is_ok_with_no_facts(tmp_path):
+    # a tool call may legitimately omit an optional array (real clients return
+    # dict(block.input) verbatim). "No facts" is an empty extraction, not a
+    # failed one - calling it failed makes the document a permanent per-run charge.
+    facts, status, notes = extract_tech_facts("d1", _txt(tmp_path),
+                                              MockLLMClient(response={}))
+    assert facts == [] and status == "ok" and notes is None
 
 
 def test_parameter_vocabulary_is_passed_to_the_model(tmp_path):
@@ -82,7 +94,7 @@ def test_malformed_fact_entry_is_skipped_not_whole_datasheet(tmp_path):
         {"parameter": "bad_one", "unit": 123},
         {"parameter": "kw", "value": 550.0, "unit": "kW"},
     ]})
-    facts, status = extract_tech_facts("d1", _txt(tmp_path), client)
+    facts, status, _notes = extract_tech_facts("d1", _txt(tmp_path), client)
     assert status == "ok"
     assert [f.parameter for f in facts] == ["kw"]
 

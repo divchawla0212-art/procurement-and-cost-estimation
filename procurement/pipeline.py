@@ -30,6 +30,61 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _rel_path(pdir: str, path: str) -> str:
+    """A store-facing document path: relative to the project dir, posix separators."""
+    return os.path.relpath(path, pdir).replace(os.sep, "/")
+
+
+def _prune_orphan_facts(root: str, slug: str, run_id: str, vendors: list[str],
+                        documents: list[DocumentRecord]) -> None:
+    """Drop facts belonging to documents that are no longer extractable.
+
+    Lineage stops an obsolete revision from being *re-extracted*; it does not
+    remove what an earlier run already stored, so a superseded, reclassified or
+    deleted document would keep contributing withdrawn numbers to every
+    downstream reader (phase 3's compliance matrix among them). In phase 1 one
+    document per vendor overwrote `VendorFacts` wholesale, which pruned itself;
+    multi-document accumulation removed that property, so this replaces it.
+
+    Vendors are walked from the project rather than from `documents`, because a
+    vendor whose only datasheet was deleted produces no document at all.
+    """
+    live_by_vendor: dict[str, set[str]] = {}
+    for doc in documents:
+        # "failed" counts as live: the document is still present and still
+        # routed to an extractor, so a transient provider outage must not
+        # delete the facts an earlier successful run stored for it.
+        if doc.vendor and doc.extraction_status in ("ok", "failed"):
+            live_by_vendor.setdefault(doc.vendor, set()).add(doc.doc_id)
+
+    for vendor in vendors:
+        facts = snapshots.load_facts(root, slug, vendor)
+        if facts is None:
+            continue
+        live = live_by_vendor.get(vendor, set())
+        technical = [f for f in facts.technical if f.get("doc_id") in live]
+        deviations = [d for d in facts.deviations if d.get("doc_id") in live]
+        if (len(technical) == len(facts.technical)
+                and len(deviations) == len(facts.deviations)):
+            continue
+        dropped = sorted(
+            {f.get("doc_id") for f in facts.technical if f.get("doc_id") not in live}
+            | {d.get("doc_id") for d in facts.deviations if d.get("doc_id") not in live})
+        detail = {"doc_ids": dropped,
+                  "technical_dropped": len(facts.technical) - len(technical),
+                  "deviations_dropped": len(facts.deviations) - len(deviations)}
+        facts.technical = technical
+        facts.deviations = deviations
+        # Overrides are left untouched: they are re-reconciled against the
+        # fresh extraction on the next run, where a path that no longer
+        # resolves correctly raises conflict=True. Re-reconciling here would
+        # compare against already-resolved values and corrupt extracted_value.
+        snapshots.save_facts(root, slug, facts)
+        events.append_event(root, slug, Event(
+            at=_now(), run_id=run_id, actor="pipeline",
+            action="facts.pruned", target=vendor, detail=detail))
+
+
 def inventory_documents(root: str, slug: str) -> list[DocumentRecord]:
     """Hash and record every vendor file. Classification is phase 2, so
     doc_class stays 'unclassified' here."""
@@ -38,7 +93,7 @@ def inventory_documents(root: str, slug: str) -> list[DocumentRecord]:
     out: list[DocumentRecord] = []
     for vendor in project.vendors:
         for path in vendor_files(root, slug, vendor):
-            rel = os.path.relpath(path, pdir).replace(os.sep, "/")
+            rel = _rel_path(pdir, path)
             out.append(DocumentRecord(
                 doc_id=layout.doc_id_for(vendor, rel),
                 path=rel,
@@ -65,8 +120,13 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
     # for the leftovers the rules declined.
     for doc in fresh_docs:
         prior = prior_docs.get(doc.doc_id)
+        # classified_by is part of the gate: "llm-failed" means the model never
+        # answered, so the stored "other" is a degraded placeholder, not a
+        # classification. Caching it would let one network blip demote a
+        # document out of extraction permanently.
         if (prior is not None and prior.content_sha256 == doc.content_sha256
                 and prior.doc_class != "unclassified"
+                and prior.classified_by != "llm-failed"
                 and prior.classified_with == CLASSIFY_PROMPT_VERSION):
             doc.doc_class = prior.doc_class
             doc.classified_by = prior.classified_by
@@ -90,22 +150,56 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
     # Pass 2: lineage, so an obsolete revision is never extracted.
     fresh_docs = resolve_supersession(fresh_docs)
 
-    # Order quotations first within each vendor: facts_view["commercial"] is
-    # None until a vendor's quotation has been extracted, and a field path
-    # that does not resolve is flagged conflict=True. Processing a datasheet
-    # first would raise a spurious conflict on any commercial.* override.
-    fresh_docs.sort(key=lambda d: (d.vendor or "", d.doc_class != "quotation", d.path))
-
     # Among several quotations for one vendor, pick_quote still chooses which
     # one carries the commercial terms.
     quote_rel_by_vendor: dict[str, str] = {}
+    inferred_quotes: set[str] = set()   # doc_ids routed to the quotation
+                                        # extractor despite their doc_class
     for vendor in project.vendors:
-        candidates = [os.path.join(pdir, d.path) for d in fresh_docs
-                      if d.vendor == vendor and d.doc_class == "quotation"
-                      and d.superseded_by is None]
-        chosen = pick_quote(candidates)
-        if chosen:
-            quote_rel_by_vendor[vendor] = os.path.relpath(chosen, pdir).replace(os.sep, "/")
+        live = [d for d in fresh_docs
+                if d.vendor == vendor and d.superseded_by is None]
+        chosen = pick_quote([os.path.join(pdir, d.path) for d in live
+                             if d.doc_class == "quotation"])
+        if chosen is not None:
+            quote_rel_by_vendor[vendor] = _rel_path(pdir, chosen)
+            continue
+
+        # Phase 1 ran pick_quote over every vendor file with max(), so a vendor
+        # always had a quotation candidate and never silently left the
+        # comparison. Classification can now decline every document a vendor
+        # uploaded — which is exactly the shape of a real opaque quotation
+        # filename — so fall back to the phase-1 heuristic and record the
+        # inference, instead of dropping the vendor without a word. The pool
+        # excludes documents another extractor already claims: stealing a
+        # datasheet to guess a price would lose its technical facts.
+        fallback = [d for d in live if d.doc_class not in _EXTRACTABLE]
+        chosen = pick_quote([os.path.join(pdir, d.path) for d in fallback])
+        if chosen is None:
+            events.append_event(root, slug, Event(
+                at=_now(), run_id=run_id, actor="pipeline",
+                action="vendor.no_quotation", target=vendor,
+                detail={"reason": "no document could serve as a quotation",
+                        "documents": len(live)}))
+            continue
+        rel = _rel_path(pdir, chosen)
+        doc = next(d for d in fallback if d.path == rel)
+        inferred_quotes.add(doc.doc_id)
+        quote_rel_by_vendor[vendor] = rel
+        events.append_event(root, slug, Event(
+            at=_now(), run_id=run_id, actor="pipeline",
+            action="vendor.quotation_inferred", target=vendor,
+            detail={"doc_id": doc.doc_id, "path": rel,
+                    "doc_class": doc.doc_class}))
+
+    # Order quotations first within each vendor: facts_view["commercial"] is
+    # None until a vendor's quotation has been extracted, and a field path
+    # that does not resolve is flagged conflict=True. Processing a datasheet
+    # first would raise a spurious conflict on any commercial.* override. An
+    # inferred quotation must sort first too, hence this runs after selection.
+    fresh_docs.sort(key=lambda d: (
+        d.vendor or "",
+        d.doc_class != "quotation" and d.doc_id not in inferred_quotes,
+        d.path))
 
     documents: list[DocumentRecord] = []
     extracted, failed = 0, 0
@@ -113,14 +207,19 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
     with snapshots.transaction(root, slug):
         for doc in fresh_docs:
             prior = prior_docs.get(doc.doc_id)
-            expected_version = PROMPT_VERSION_BY_CLASS.get(doc.doc_class)
+            # A document the fallback above picked as a vendor's quotation is
+            # extracted as one whatever the classifier called it. doc_class
+            # itself is left alone: documents.json must keep reporting what the
+            # classifier actually decided, not what routing did with it.
+            route = "quotation" if doc.doc_id in inferred_quotes else doc.doc_class
+            expected_version = PROMPT_VERSION_BY_CLASS.get(route)
 
             skip_reason = None
             if doc.superseded_by is not None:
                 skip_reason = f"superseded by {doc.superseded_by}"
-            elif doc.doc_class not in _EXTRACTABLE:
+            elif route not in _EXTRACTABLE:
                 skip_reason = f"{doc.doc_class} documents are not extracted"
-            elif (doc.doc_class == "quotation"
+            elif (route == "quotation"
                   and quote_rel_by_vendor.get(doc.vendor) != doc.path):
                 skip_reason = "not the selected quotation document"
 
@@ -139,7 +238,21 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
                          and prior.prompt_version == expected_version
                          and prior.extraction_status == "ok")
             if unchanged and not force:
-                documents.append(prior)
+                # Carry the cached extraction forward onto the *fresh* record
+                # rather than appending `prior` verbatim. Passes 1 and 2 wrote
+                # this run's classification and lineage onto `doc`; appending
+                # `prior` threw both away, so a CLASSIFY_PROMPT_VERSION bump
+                # never persisted (re-classifying every cached document on
+                # every run, forever) and a revision arriving in a second
+                # upload lost its `supersedes` pointer. Cache semantics are
+                # unchanged: nothing here triggers an extraction.
+                doc.extraction_status = prior.extraction_status
+                doc.notes = prior.notes
+                doc.extracted_at = prior.extracted_at
+                doc.extractor = prior.extractor
+                doc.prompt_version = prior.prompt_version
+                doc.text_source = prior.text_source
+                documents.append(doc)
                 extracted += 1
                 events.append_event(root, slug, Event(
                     at=_now(), run_id=run_id, actor="pipeline",
@@ -152,16 +265,21 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
             base = prior_facts or VendorFacts(vendor=doc.vendor)
             status = "ok"
 
-            if doc.doc_class == "quotation":
+            if route == "quotation":
                 bid = extract_bid(doc.vendor, [full], client, pdf_fallback=pdf_fallback)
                 status = bid.extraction_status
                 doc.notes = bid.notes
-                commercial_dump = bid.model_dump()
+                # the same guard the other two branches carry: phase 2 keeps
+                # technical and deviations in this file too, so a failed
+                # overwrite would publish a half-good record - facts intact,
+                # commercial blanked - straight into the comparison
+                commercial_dump = bid.model_dump() if status == "ok" else base.commercial
                 technical = list(base.technical)
                 deviations = list(base.deviations)
-            elif doc.doc_class == "datasheet":
-                facts, status = extract_tech_facts(doc.doc_id, full, client,
-                                                   pdf_fallback=pdf_fallback)
+            elif route == "datasheet":
+                facts, status, notes = extract_tech_facts(doc.doc_id, full, client,
+                                                          pdf_fallback=pdf_fallback)
+                doc.notes = notes
                 if status == "ok":
                     # replace only this document's facts; other datasheets survive
                     technical = [f for f in base.technical if f.get("doc_id") != doc.doc_id]
@@ -173,8 +291,9 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
                 commercial_dump = base.commercial
                 deviations = list(base.deviations)
             else:   # deviation
-                items, status = extract_deviations(doc.doc_id, full, client,
-                                                   pdf_fallback=pdf_fallback)
+                items, status, notes = extract_deviations(doc.doc_id, full, client,
+                                                          pdf_fallback=pdf_fallback)
+                doc.notes = notes
                 if status == "ok":
                     deviations = [d for d in base.deviations if d.get("doc_id") != doc.doc_id]
                     deviations += [d.model_dump() for d in items]
@@ -221,6 +340,8 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
                         at=_now(), run_id=run_id, actor="pipeline",
                         action="override.conflicted", target=doc.doc_id,
                         detail={"field_path": o.field_path}))
+
+        _prune_orphan_facts(root, slug, run_id, project.vendors, documents)
 
         # A vendor removed from the project must not keep haunting the
         # comparison: documents.json is replaced wholesale every run, but

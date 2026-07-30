@@ -4,11 +4,14 @@
 "comply". Silently upgrading an unreadable entry to compliance is the one
 failure mode here that could corrupt an award decision.
 """
+import logging
 from pathlib import Path
 from pydantic import BaseModel
 
 from procurement.loaders import read_text
 from procurement.store.models import DeviationRecord, deviation_id_for
+
+_log = logging.getLogger(__name__)
 
 DEVIATION_PROMPT_VERSION = "deviation_v1"
 _PROMPT = (Path(__file__).parents[1] / "shared" / "llm" / "prompts"
@@ -27,16 +30,21 @@ class _DeviationList(BaseModel):
 
 
 def extract_deviations(doc_id: str, path: str, client, pdf_fallback=None
-                       ) -> tuple[list[DeviationRecord], str]:
-    """Return (deviations, status). Status is "ok" or "failed"; a failure
-    never raises."""
+                       ) -> tuple[list[DeviationRecord], str, str | None]:
+    """Return (deviations, status, notes). Status is "ok" or "failed"; a failure
+    never raises. `notes` carries the reason on failure and is None on success —
+    without it a permanently failing document is retried on every run with no
+    record of why it fails."""
     try:
         text = read_text(path, llm_fallback=pdf_fallback)
         prompt = _PROMPT.read_text(encoding="utf-8")
         raw = client.classify_structure(prompt, _DeviationList, text)
-        raw_items = list(raw["deviations"])
-    except Exception:
-        return [], "failed"
+        # Same reasoning as extract_tech_facts: an omitted optional array is an
+        # empty extraction, not a failed one.
+        raw_items = list(raw.get("deviations") or [])
+    except Exception as exc:
+        _log.warning("deviation extraction failed for %s: %s", path, exc)
+        return [], "failed", f"extraction error: {exc}"
 
     out: list[DeviationRecord] = []
     for raw_item in raw_items:
@@ -58,4 +66,4 @@ def extract_deviations(doc_id: str, path: str, client, pdf_fallback=None
             disposition=disposition if disposition in _DISPOSITIONS else "noted",
             doc_id=doc_id,
         ))
-    return out, "ok"
+    return out, "ok", None

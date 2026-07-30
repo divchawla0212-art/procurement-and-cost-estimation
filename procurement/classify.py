@@ -4,8 +4,11 @@ Two passes: deterministic filename rules first, an LLM call only for what
 the rules cannot decide. `classified_by` records which pass decided, so the
 model's calls can be audited separately from the free ones.
 """
+import logging
 import os
 import re
+
+_log = logging.getLogger(__name__)
 
 DOC_CLASSES = ("spec", "quotation", "datasheet", "deviation",
                "bom", "drawing", "mom", "other")
@@ -75,6 +78,10 @@ def classify_document(path: str, client, text_head: str = "") -> tuple[str, str]
         result = _DocClass.model_validate(
             client.classify_structure(prompt, _DocClass, context))
         answer = result.doc_class
-    except Exception:
+    except Exception as exc:
+        # "llm-failed" is what lets the caller retry a transient outage rather
+        # than caching the degraded answer; without a log line there is no way
+        # to tell a provider blip from a genuinely unclassifiable document.
+        _log.warning("classification failed for %s: %s", os.path.basename(path), exc)
         return "other", "llm-failed"
     return (answer if answer in DOC_CLASSES else "other"), "llm"
