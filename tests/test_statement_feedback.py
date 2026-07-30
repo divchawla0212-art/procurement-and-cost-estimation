@@ -1,4 +1,5 @@
 import pathlib
+import re
 
 from procurement.compliance import VERDICTS
 from procurement.pipeline import run_ingestion
@@ -30,19 +31,29 @@ def _store_bytes(root) -> dict[str, bytes]:
             for p in sorted(pathlib.Path(root).rglob("*")) if p.is_file()}
 
 
+_RENDERED_TALLY = re.compile(r"\d+\s*(" + "|".join(VERDICTS) + r")", re.I)
+
+
 def _holds_verdict_counts(value) -> bool:
-    """Any mapping from a verdict name to a number, anywhere in the tree.
+    """Any mapping from a verdict name to a number, anywhere in the tree,
+    OR any string that reads as a rendered tally.
+
     A substring scan of the dump cannot do this job: `deviations` is already
     a legitimate VendorFacts field, so `"deviation" in str(stored)` is true
-    before a single tally is written — and a scan would equally miss a tally
-    stored under keys of its author's choosing."""
+    before a single tally is written. But the structural half alone is not
+    enough either — a tally cached as the string "1 pass · 1 review", which
+    is the tempting shape once a view wants to pre-fill it, is a dict of
+    neither verdicts nor ints. Both halves are needed."""
     if isinstance(value, dict):
         if any(k in VERDICTS and isinstance(v, int) for k, v in value.items()):
             return True
-        return any(_holds_verdict_counts(v) for v in value.values())
+        # technical_feedback is a reviewer's prose and may legitimately say
+        # "3 pass"; every other field is fair game.
+        return any(_holds_verdict_counts(v) for k, v in value.items()
+                   if k != "technical_feedback")
     if isinstance(value, list):
         return any(_holds_verdict_counts(v) for v in value)
-    return False
+    return isinstance(value, str) and bool(_RENDERED_TALLY.search(value))
 
 
 def test_a_note_survives_a_forced_reextraction(tmp_path):
@@ -104,15 +115,33 @@ def test_the_tally_counts_only_verdicts_that_occur():
     assert compliance_tally(results, "KERUI") == {"fail": 1, "review": 1}
 
 
-def test_the_tally_ignores_a_verdict_the_vocabulary_does_not_define():
-    """Nothing validates `verdict` as an enum, so a typo or a future value
-    must not be counted into a column a reviewer reads as authoritative."""
+def test_a_verdict_the_vocabulary_does_not_define_is_counted_apart():
+    """Nothing validates `verdict` as an enum, so a typo or a verdict added
+    to evaluate() without updating VERDICTS must not be counted into a
+    column a reviewer reads as authoritative. Nor may it be dropped: the
+    tally's counts have to sum to the requirements actually evaluated, or
+    `1 pass` over two evaluated requirements says one was never checked."""
     results = [ComplianceResult(req_id="a", vendor="KERUI", verdict="passed",
                                 evaluated_at="t"),
                ComplianceResult(req_id="b", vendor="KERUI", verdict="pass",
                                 evaluated_at="t")]
 
-    assert compliance_tally(results, "KERUI") == {"pass": 1}
+    assert compliance_tally(results, "KERUI") == {"pass": 1, "other": 1}
+
+
+def test_the_tally_reads_in_the_specs_verdict_order():
+    """Not alphabetical, and not the order the results happen to arrive in.
+    Encounter order is per-vendor, so one column would read `3 fail · 1 pass`
+    beside another's `1 pass · 3 fail` — and the reviewer is comparing
+    columns. These three verdicts disagree under all three orderings."""
+    results = [ComplianceResult(req_id="a", vendor="K", verdict="review",
+                                evaluated_at="t"),
+               ComplianceResult(req_id="b", vendor="K", verdict="deviation",
+                                evaluated_at="t"),
+               ComplianceResult(req_id="c", vendor="K", verdict="pass",
+                                evaluated_at="t")]
+
+    assert list(compliance_tally(results, "K")) == ["pass", "deviation", "review"]
 
 
 def test_the_cell_shows_the_tally_when_no_note_is_written(tmp_path):
@@ -150,6 +179,31 @@ def test_a_vendor_with_neither_a_note_nor_a_verdict_gets_no_cell(tmp_path):
         "fixture assumption changed"
 
     assert _feedback(root, "MKON") is None
+
+
+def test_a_note_cleared_to_empty_reads_as_absent(tmp_path):
+    """Task 7's text area stores "" when a reviewer clears it. The text rows
+    already treat blank as unknown; this row must agree, or the cell renders
+    an empty judgement beside a real tally."""
+    root = _project(tmp_path)
+    run_ingestion(root, "p", RfqClient())
+    _note(root, "KERUI", "")
+
+    cell = _feedback(root, "KERUI")
+    assert cell.text is None
+    assert cell.note == "1 pass · 1 review"
+
+
+def test_the_feedback_row_is_labelled_for_the_reader(tmp_path):
+    """Task 6 exports `label` as the Description column, so it is
+    user-visible text and not an internal name."""
+    root = _project(tmp_path)
+    run_ingestion(root, "p", RfqClient())
+
+    row = next(r for r in build_statement(root, "p").rows
+               if r.key == "technical_feedback")
+    assert row.label == "Technical Feedback"
+    assert row.kind == "text"
 
 
 def test_a_note_alone_is_shown_when_no_requirement_was_evaluated(tmp_path):

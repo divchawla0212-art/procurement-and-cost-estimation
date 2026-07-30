@@ -76,14 +76,35 @@ def compliance_tally(results, vendor: str) -> dict[str, int]:
     Never stored (INV-S4). Phase 3 recomputes compliance.json wholesale on
     every run precisely so the matrix cannot drift from its sources; a copy
     of these counts in facts.json would reintroduce that drift one level
-    down, where nothing recomputes it. Verdicts outside VERDICTS are ignored
-    rather than counted — `verdict` is a plain str with no enum validation,
-    and a typo must not silently enlarge a total a reviewer trusts."""
+    down, where nothing recomputes it.
+
+    `verdict` is a plain str with no enum validation, so anything outside
+    VERDICTS — a typo, or a verdict added to evaluate() without updating the
+    vocabulary — lands in a single `other` bucket. Not counted as itself,
+    which would put an unvetted label in a column a reviewer reads as
+    authoritative; and not dropped either, because these counts must sum to
+    the requirements actually evaluated. `1 pass` over two evaluated
+    requirements would say one was never checked when it was.
+
+    The counts are of requirement RECORDS, not distinct clauses. Duplicate
+    requirement documents inflate both alike — see spec §10.
+
+    Iteration order is VERDICTS order, and the caller renders it verbatim:
+    neither alphabetical nor the order results happen to arrive in, since
+    encounter order is per-vendor and the reviewer is comparing columns."""
     counts = {v: 0 for v in VERDICTS}
+    other = 0
     for r in results:
-        if r.vendor == vendor and r.verdict in counts:
+        if r.vendor != vendor:
+            continue
+        if r.verdict in counts:
             counts[r.verdict] += 1
-    return {v: n for v, n in counts.items() if n}
+        else:
+            other += 1
+    tally = {v: n for v, n in counts.items() if n}
+    if other:
+        tally["other"] = other
+    return tally
 
 
 def _tally_text(counts: dict[str, int]) -> str | None:
@@ -347,7 +368,9 @@ def build_statement(root: str, slug: str) -> Statement:
     for vendor in project.vendors:
         f = facts[vendor]
         tally = _tally_text(compliance_tally(results, vendor))
-        text = f.technical_feedback if f else None
+        # `or None`: Task 7's text area stores "" when a reviewer clears the
+        # note, and the text rows above already treat blank as unknown.
+        text = (f.technical_feedback or None) if f else None
         if tally or text:
             feedback.cells[vendor] = StatementCell(text=text, note=tally)
     statement.rows.append(feedback)
