@@ -130,7 +130,7 @@ order — the same reason `field_path` addresses list members by id.
 | 5 | VAT Included · Discount % | value | `vat_included`, `discount_pct` |
 | 6 | Discount Amount | priced | rule (a) below |
 | 7 | **FINAL VALUE** | priced | column sum |
-| 8 | Normalised (ex-VAT, ex-options, `<target>`) | priced | `NormalizedBid.normalized_total` |
+| 8 | Normalised (ex-VAT, ex-options, `<target>`) | priced | `NormalizedBid.normalized_total`, gated on a known base price — see below |
 | 9 | Engine Make · Delivery Time · Delivery Terms · Payment Terms | text | `BidExtraction` |
 | 10 | Vendor Quotation File Name | text | live `quotation` `DocumentRecord.path`, basename |
 | 11 | Technical Feedback | text | compliance tally + stored note (§6) |
@@ -306,6 +306,35 @@ invariant it defends and is verified by reinstating the defect:
 with the status in its header — never zeros, per CLAUDE.md's coercion rule. Missing
 `commercial`, absent facts, or `normalized_total is None` render blank without crashing.
 A project with no vendors or no documents shows a message, not an empty grid.
+
+**Amended during Task 4 — the schema's non-null defaults.** `BidExtraction` gives
+`base_price: float = 0.0` and `currency: str = ""`, so an extraction that *succeeded and
+found nothing* is byte-identical to one that found zero, and `extraction_status` stays
+`"ok"`. Three rows therefore need more than the `is None` checks this section originally
+described:
+
+- **Base scope / FINAL VALUE** — a `base_price` of `0.0` is read as unknown, not as free.
+  No vendor quotes a zero base scope, and a `0.00` FINAL VALUE sorts to the top of the
+  award screen as the cheapest bid.
+- **Normalised** — `normalize_bid` derives its total *from* `base_price`, so this row
+  inherits the same zero. It is blanked when the **base** is unknown, not when the total
+  is zero: a 100% discount normalises to a genuine `0.0` that FINAL VALUE also prints,
+  and the two rows must not contradict each other. The gate also covers a `normalized`
+  that outlives its `commercial` — [`pipeline.py`](../../../procurement/pipeline.py)
+  carries the prior one forward whenever a run resolves no commercial terms.
+- **Freight** — `freight_amount: float = 0.0` likewise, but a zero freight contributes
+  zero to the column either way, so suppressing the row is the whole of it.
+
+The proper fix is nullable defaults on `BidExtraction`; that changes the extractor prompt
+contract and `normalize_bid`, both outside this plan's scope, and is carried in the phase
+ledger as an open escalation. Until then `VAT Included: NO` and `Discount %: 0%` still
+appear for vendors whose quotation mentioned neither.
+
+**A blank cell may carry a note.** `total is None` with `note` set now occurs on the
+optional rows (`included in base price`), on FINAL VALUE (`base price not stated`,
+`excludes N option(s) with no stated price`), and on VAT (`included`). §7's priced table
+defines only Qty / Unit Price / Total sub-columns, so the note renders into the Total
+cell — Task 6's export must not assume that column is numeric.
 
 ---
 

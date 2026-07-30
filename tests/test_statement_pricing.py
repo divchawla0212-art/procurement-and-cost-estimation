@@ -338,15 +338,90 @@ def test_a_flag_is_not_a_price(tmp_path):
 
 
 def test_a_column_with_options_but_no_base_says_why_it_has_no_total(tmp_path):
-    """Blank beats a partial sum, but a reviewer looking at 100500 of
-    visible prices and an empty FINAL VALUE deserves the reason."""
+    """Blank beats a partial sum, but a reviewer looking at a visible price
+    and an empty FINAL VALUE deserves the reason. Options ALONE must trigger
+    it — a test supplying options and freight together cannot tell this
+    condition apart from one that demands both."""
     root = _project(tmp_path)
-    _facts(root, "KERUI", freight_amount=17500.0, optional_items=[
-        {"description": "PEMS", "total": 83000.0}])
+    _facts(root, "KERUI", optional_items=[{"description": "PEMS", "total": 83000.0}])
 
     final = _cell(build_statement(root, "p"), "final_value", "KERUI")
     assert final.total is None
     assert final.note == "base price not stated"
+
+
+def test_a_column_with_freight_but_no_base_says_why_it_has_no_total(tmp_path):
+    """The other half of the disjunction — freight alone, no options."""
+    root = _project(tmp_path)
+    _facts(root, "KERUI", freight_amount=17500.0)
+
+    final = _cell(build_statement(root, "p"), "final_value", "KERUI")
+    assert final.total is None
+    assert final.note == "base price not stated"
+
+
+def test_a_column_with_only_an_unpriced_option_still_says_why(tmp_path):
+    """The option row is blank and so is FINAL VALUE. Without a note the
+    column offers a reviewer nothing to distinguish 'no bid' from 'bid whose
+    numbers we could not read'."""
+    root = _project(tmp_path)
+    _facts(root, "KERUI", optional_items=[{"description": "PEMS"}])
+
+    final = _cell(build_statement(root, "p"), "final_value", "KERUI")
+    assert final.total is None
+    assert "base price not stated" in final.note
+    assert "excludes 1 option(s) with no stated price" in final.note
+
+
+def test_a_vendor_who_stated_nothing_gets_no_final_value_cell_at_all(tmp_path):
+    """There is nothing to explain: no price, no option, no freight. An
+    explanatory blank here would assert a bid that was never made."""
+    root = _project(tmp_path)
+    _stored(root, VendorBid(vendor="KERUI"))
+
+    assert _cell(build_statement(root, "p"), "final_value", "KERUI") is None
+
+
+def test_a_freight_of_zero_is_not_a_freight_charge(tmp_path):
+    """freight_amount defaults to 0.0, so a quotation silent on freight
+    stores the same value as one quoting free delivery. Emitting the row
+    would put a 0.00 in a money column on every vendor in the corpus. Built
+    from the pipeline's shape — commercial=None reaches the guard as None
+    and cannot tell a `if freight` guard from a `if freight is not None`."""
+    root = _project(tmp_path)
+    _stored(root, VendorBid(vendor="KERUI", currency="USD", base_price=1000.0))
+
+    assert _cell(build_statement(root, "p"), "freight", "KERUI") is None
+
+
+def test_a_genuine_zero_normalises_to_zero_and_is_shown(tmp_path):
+    """A 100% discount really does normalise to nothing. The Normalised row
+    is blanked by an unknown BASE, not by a zero total — FINAL VALUE prints
+    0.00 for this same bid, and the two rows must not disagree."""
+    root = _project(tmp_path)
+    _stored(root, VendorBid(vendor="KERUI", currency="USD", base_price=1000.0,
+                            discount_pct=1.0))
+
+    statement = build_statement(root, "p")
+    assert _cell(statement, "final_value", "KERUI").total == 0.0
+    assert _cell(statement, "normalised", "KERUI").total == 0.0
+
+
+def test_a_flag_is_not_a_rate(tmp_path):
+    """`Override.value` is an unvalidated Any, so a bool or a string can
+    reach vat_rate and discount_pct. True read as a rate means a 100%
+    discount and a 0.00 FINAL VALUE — the cheapest bid on the screen — and
+    a string crashes build_statement outright."""
+    root = _project(tmp_path)
+    project_vendors_extended(root, "MKON")
+    _facts(root, "KERUI", base_price=1000.0, discount_pct=True, vat_rate=True)
+    _facts(root, "MKON", base_price=1000.0, discount_pct="10%")
+
+    statement = build_statement(root, "p")
+    for vendor in ("KERUI", "MKON"):
+        assert _cell(statement, "final_value", vendor).total == 1000.0
+        assert _cell(statement, "discount_amount", vendor) is None
+    assert _cell(statement, "vat", "KERUI") is None
 
 
 def test_building_twice_writes_nothing(tmp_path):

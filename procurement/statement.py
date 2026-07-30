@@ -69,6 +69,16 @@ def _money(value) -> float | None:
     return float(value)
 
 
+def _excluded(count: int) -> str | None:
+    """The FINAL VALUE annotation for options that could not join the sum.
+    Shared by the priced and the blank branch so the two cannot drift."""
+    return f"excludes {count} option(s) with no stated price" if count else None
+
+
+def _notes(*parts) -> list[str]:
+    return [p for p in parts if p]
+
+
 def _priced_rows(project, facts) -> list[StatementRow]:
     """The priced rows (base scope, optionals, freight, VAT, discount, FINAL
     VALUE) plus the two value rows and the Normalised row that sit among
@@ -161,12 +171,17 @@ def _priced_rows(project, facts) -> list[StatementRow]:
             cell("vat_included", "VAT Included", "value", vendor,
                  text="YES" if included else "NO")
 
-        pct = c.get("discount_pct")
-        if isinstance(pct, (int, float)):
+        # Both rates go through _money for the same reason base_price does.
+        # Override.value is an unvalidated `Any`, so a bool or a string can
+        # reach either: True read as a rate is a 100% discount and a 0.00
+        # FINAL VALUE — the cheapest bid on the screen — and a string raises
+        # straight out of build_statement.
+        pct = _money(c.get("discount_pct"))
+        if pct is not None:
             cell("discount_pct", "Discount %", "value", vendor,
                  text=f"{pct * 100:g}%")
 
-        rate = c.get("vat_rate") or 0.0
+        rate = _money(c.get("vat_rate")) or 0.0
         # vat_raw is the UNROUNDED base*rate — it must feed final_value's
         # sum below. Rounding it first, then summing, then rounding again
         # loses a cent on numbers like ADPOWER's (rounded VAT + rounded
@@ -189,10 +204,15 @@ def _priced_rows(project, facts) -> list[StatementRow]:
         # normalize_bid derives its total FROM base_price, so a vendor who
         # stated no price normalises to 0.0 — and spec §5(c) makes Normalised
         # THE row compared across columns, where a 0.00 beside a real bid
-        # reads as the cheapest offer. The `base is not None` gate is the
-        # honest form of it: a normalised total derived from an unknown base
-        # is not a figure, whatever normalize_bid returned.
-        norm_total = _money((normalized or {}).get("normalized_total")) or None
+        # reads as the cheapest offer.
+        #
+        # The gate is on `base`, not on the total being non-zero. Gating the
+        # total would also hide a GENUINE zero — a 100% discount really does
+        # normalise to nothing — and FINAL VALUE prints 0.00 for that same
+        # bid, so the two rows would contradict each other. What makes the
+        # figure meaningless is an unknown base, whatever normalize_bid
+        # returned from it.
+        norm_total = _money((normalized or {}).get("normalized_total"))
         if norm_total is not None and base is not None:
             cell("normalised",
                  f"Normalised (ex-VAT, ex-options, {project.target_currency})",
@@ -202,12 +222,16 @@ def _priced_rows(project, facts) -> list[StatementRow]:
         s = sums.get(vendor, {})
         if not s.get("has_prices"):
             # Blank, never a zeroed or partial total. But a column showing
-            # priced options and freight with an empty FINAL VALUE and no
+            # any priced or named scope with an empty FINAL VALUE and no
             # reason invites the reader to add it up themselves, which is the
-            # partial sum this branch exists to refuse.
-            if s.get("options") or s.get("freight"):
+            # partial sum this branch exists to refuse. An unpriced option
+            # counts: the row is there, visibly blank, and needs explaining
+            # as much as a priced one does. A vendor who stated nothing at
+            # all gets no cell — there is no bid here to annotate.
+            if s.get("options") or s.get("freight") or s.get("unpriced"):
                 cell("final_value", "FINAL VALUE", "priced", vendor,
-                     note="base price not stated")
+                     note="; ".join(_notes("base price not stated",
+                                           _excluded(s["unpriced"]))))
             continue
         pre_vat = s["base"] + s["options"] + s["freight"]
         # Rule (a): the discount base excludes VAT — computed here, on the
@@ -221,10 +245,9 @@ def _priced_rows(project, facts) -> list[StatementRow]:
         # VALUE. That is deliberate: the reference sheet is the authority and
         # it sums the unrounded components. Do not "fix" it by summing the
         # rounded cells — that reproduces neither the sheet nor the tests.
-        n = s["unpriced"]
         cell("final_value", "FINAL VALUE", "priced", vendor,
              total=round(pre_vat + s["vat_raw"] - discount_raw, 2),
-             note=(f"excludes {n} option(s) with no stated price" if n else None))
+             note=_excluded(s["unpriced"]))
 
     ordered = (["base_scope"] + order +
                ["freight", "vat", "vat_included", "discount_pct",
