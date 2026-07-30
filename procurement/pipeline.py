@@ -8,13 +8,19 @@ from procurement.compare import build_comparison
 from procurement.quote_select import pick_quote
 from procurement.models import VendorBid, NormalizedBid
 from procurement.store import events, layout, migrate, snapshots
-from procurement.store.models import DocumentRecord, Event, VendorFacts
+from procurement.store.models import (Amendment, DocumentRecord, Event,
+                                      RequirementRecord, RequirementSet,
+                                      VendorFacts)
 from procurement.store.overrides import apply_overrides, reconcile
 from procurement.classify import (classify_by_rules, classify_document,
                                   CLASSIFY_PROMPT_VERSION)
 from procurement.revisions import resolve_supersession
 from procurement.extract_tech import extract_tech_facts, TECH_PROMPT_VERSION
 from procurement.extract_deviation import extract_deviations, DEVIATION_PROMPT_VERSION
+from procurement.extract_requirements import (extract_requirements,
+                                              REQUIREMENTS_PROMPT_VERSION)
+from procurement.extract_mom import (apply_amendments, extract_amendments,
+                                     MOM_PROMPT_VERSION)
 from procurement.loaders import read_text
 
 PROMPT_VERSION = "bid_extract_v1"        # kept: the quotation prompt version
@@ -24,6 +30,15 @@ PROMPT_VERSION_BY_CLASS = {
     "deviation": DEVIATION_PROMPT_VERSION,
 }
 _EXTRACTABLE = tuple(PROMPT_VERSION_BY_CLASS)
+
+# The RFQ side routes by its own table: the same doc_class means something
+# different on the client's side of the tender. A `datasheet` here is the
+# client's blank datasheet — a statement of what is required, not of what a
+# vendor offers — so it is routed as a spec (see `_rfq_route`).
+RFQ_PROMPT_VERSION_BY_CLASS = {
+    "spec": REQUIREMENTS_PROMPT_VERSION,
+    "mom": MOM_PROMPT_VERSION,
+}
 
 
 def _now() -> str:
@@ -103,27 +118,42 @@ def inventory_documents(root: str, slug: str) -> list[DocumentRecord]:
     return out
 
 
-def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
-                  force: bool = False) -> dict:
-    migrate.migrate_dataset_json(root, slug)
-
-    project = load_project(root, slug)
-    run_id = events.new_run_id()
-    events.append_event(root, slug, Event(at=_now(), run_id=run_id, actor="pipeline",
-                                          action="run.started"))
-
-    prior_docs = {d.doc_id: d for d in snapshots.load_documents(root, slug)}
-    fresh_docs = inventory_documents(root, slug)
+def inventory_rfq_documents(root: str, slug: str) -> list[DocumentRecord]:
+    """Hash and record every file under requirements/. vendor is None, which
+    is what keeps these documents out of every VendorFacts code path."""
     pdir = layout.project_dir(root, slug)
+    rdir = os.path.join(pdir, "requirements")
+    out: list[DocumentRecord] = []
+    for dirpath, _dirs, files in os.walk(rdir):
+        for name in sorted(files):
+            if name.startswith(".") or name.startswith("~$"):
+                continue
+            full = os.path.join(dirpath, name)
+            rel = _rel_path(pdir, full)
+            out.append(DocumentRecord(
+                doc_id=layout.doc_id_for(None, rel),
+                path=rel,
+                vendor=None,
+                content_sha256=layout.content_sha256(full),
+            ))
+    return out
 
-    # Pass 1: classify. Rules decide most of it for free; text is read only
-    # for the leftovers the rules declined.
-    for doc in fresh_docs:
+
+def _classify_pass(root: str, slug: str, docs: list[DocumentRecord],
+                   prior_docs: dict[str, DocumentRecord], client,
+                   run_id: str) -> None:
+    """Assign doc_class/classified_by/classified_with to every document.
+
+    Shared by the vendor and RFQ passes on purpose. classified_by is part of
+    the gate: "llm-failed" means the model never answered, so the stored
+    "other" is a degraded placeholder, not a classification, and caching it
+    would let one network blip demote a document out of extraction
+    permanently. A second copy of this loop would be a second place for that
+    condition — and for the persisted classified_with beside it — to rot.
+    """
+    pdir = layout.project_dir(root, slug)
+    for doc in docs:
         prior = prior_docs.get(doc.doc_id)
-        # classified_by is part of the gate: "llm-failed" means the model never
-        # answered, so the stored "other" is a degraded placeholder, not a
-        # classification. Caching it would let one network blip demote a
-        # document out of extraction permanently.
         if (prior is not None and prior.content_sha256 == doc.content_sha256
                 and prior.doc_class != "unclassified"
                 and prior.classified_by != "llm-failed"
@@ -146,6 +176,163 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
             at=_now(), run_id=run_id, actor="pipeline",
             action="document.classified", target=doc.doc_id,
             detail={"doc_class": doc.doc_class, "by": doc.classified_by}))
+
+
+def _rfq_route(doc: DocumentRecord) -> str:
+    """An RFQ-side datasheet is the client's blank datasheet: it states what is
+    required, so it feeds requirements_v1. doc_class is left alone — documents
+    .json must keep reporting what the classifier decided, not what routing
+    did with it (the same rule the quotation fallback follows)."""
+    return "spec" if doc.doc_class == "datasheet" else doc.doc_class
+
+
+def _run_rfq_pass(root: str, slug: str, client,
+                  prior_docs: dict[str, DocumentRecord], run_id: str,
+                  pdf_fallback=None, force: bool = False
+                  ) -> tuple[list[DocumentRecord], int, int]:
+    """Extract requirements and amendments. Returns (documents, ok, failed).
+
+    Mirrors the vendor pass — inventory, classify, resolve lineage, route,
+    cache per class — and then prunes, because lineage only stops an obsolete
+    document from being re-extracted; it does not remove what an earlier run
+    already stored. A stale amendment is worse than a stale fact: it does not
+    merely sit there, it rewrites a live requirement's value.
+    """
+    pdir = layout.project_dir(root, slug)
+    docs = inventory_rfq_documents(root, slug)
+    _classify_pass(root, slug, docs, prior_docs, client, run_id)
+    docs = resolve_supersession(docs)
+
+    prior = snapshots.load_requirements(root, slug)
+    requirements = list(prior.requirements)
+    amendments = list(prior.amendments)
+    extracted = failed = 0
+
+    for doc in docs:
+        route = _rfq_route(doc)
+        if route == "spec" and route != doc.doc_class:
+            events.append_event(root, slug, Event(
+                at=_now(), run_id=run_id, actor="pipeline",
+                action="rfq.requirements_inferred", target=doc.doc_id,
+                detail={"doc_class": doc.doc_class, "path": doc.path}))
+        expected_version = RFQ_PROMPT_VERSION_BY_CLASS.get(route)
+
+        skip_reason = None
+        if doc.superseded_by is not None:
+            skip_reason = f"superseded by {doc.superseded_by}"
+        elif expected_version is None:
+            skip_reason = f"{doc.doc_class} documents are not extracted"
+        if skip_reason is not None:
+            doc.extraction_status = "skipped"
+            doc.notes = skip_reason
+            events.append_event(root, slug, Event(
+                at=_now(), run_id=run_id, actor="pipeline",
+                action="document.skipped", target=doc.doc_id,
+                detail={"reason": skip_reason}))
+            continue
+
+        prior_doc = prior_docs.get(doc.doc_id)
+        unchanged = (prior_doc is not None
+                     and prior_doc.content_sha256 == doc.content_sha256
+                     and prior_doc.prompt_version == expected_version
+                     and prior_doc.extraction_status == "ok")
+        if unchanged and not force:
+            # Carry the cached extraction forward onto the fresh record, never
+            # append `prior_doc` — that was C2, which threw away this run's
+            # classification and lineage.
+            doc.extraction_status = prior_doc.extraction_status
+            doc.notes = prior_doc.notes
+            doc.extracted_at = prior_doc.extracted_at
+            doc.extractor = prior_doc.extractor
+            doc.prompt_version = prior_doc.prompt_version
+            doc.text_source = prior_doc.text_source
+            extracted += 1
+            events.append_event(root, slug, Event(
+                at=_now(), run_id=run_id, actor="pipeline",
+                action="document.skipped", target=doc.doc_id,
+                detail={"reason": "unchanged"}))
+            continue
+
+        full = os.path.join(pdir, doc.path)
+        if route == "spec":
+            fresh, status, notes = extract_requirements(
+                doc.doc_id, full, client, pdf_fallback=pdf_fallback)
+            if status == "ok":
+                # replace only this document's requirements; other specs survive
+                requirements = [r for r in requirements
+                                if r.source_doc_id != doc.doc_id] + fresh
+            # on failure the previously-stored records for this document stay
+        else:
+            fresh, status, notes = extract_amendments(
+                doc.doc_id, full, client, pdf_fallback=pdf_fallback)
+            if status == "ok":
+                amendments = [a for a in amendments
+                              if a.source_doc_id != doc.doc_id] + fresh
+
+        doc.notes = notes
+        doc.extraction_status = status
+        doc.extracted_at = _now()
+        doc.extractor = f"llm:{expected_version}"
+        doc.prompt_version = expected_version
+        extracted += 1 if status == "ok" else 0
+        failed += 0 if status == "ok" else 1
+        events.append_event(root, slug, Event(
+            at=_now(), run_id=run_id, actor="pipeline",
+            action="document.extracted", target=doc.doc_id,
+            detail={"status": status, "doc_class": doc.doc_class}))
+
+    # Prune BEFORE applying: an amendment removed here must not still be named
+    # by a requirement's amended_by. "failed" counts as live for the same
+    # reason it does in _prune_orphan_facts — a transient outage must not
+    # delete what a good earlier run stored.
+    live_spec = {d.doc_id for d in docs if _rfq_route(d) == "spec"
+                 and d.extraction_status in ("ok", "failed")}
+    live_mom = {d.doc_id for d in docs if _rfq_route(d) == "mom"
+                and d.extraction_status in ("ok", "failed")}
+    kept_reqs = [r for r in requirements if r.source_doc_id in live_spec]
+    kept_amends = [a for a in amendments if a.source_doc_id in live_mom]
+    if len(kept_reqs) != len(requirements) or len(kept_amends) != len(amendments):
+        events.append_event(root, slug, Event(
+            at=_now(), run_id=run_id, actor="pipeline",
+            action="requirements.pruned", target=None,
+            detail={"requirements_dropped": len(requirements) - len(kept_reqs),
+                    "amendments_dropped": len(amendments) - len(kept_amends)}))
+
+    resolved_reqs, linked_amends = apply_amendments(kept_reqs, kept_amends)
+    view = {"requirements": [r.model_dump() for r in resolved_reqs],
+            "amendments": [a.model_dump() for a in linked_amends]}
+    overrides = reconcile(prior.overrides, view)
+    applied = apply_overrides(view, overrides)
+    snapshots.save_requirements(root, slug, RequirementSet(
+        requirements=[RequirementRecord.model_validate(r)
+                      for r in applied["requirements"]],
+        amendments=[Amendment.model_validate(a) for a in applied["amendments"]],
+        overrides=overrides))
+    for o in overrides:
+        if o.conflict:
+            events.append_event(root, slug, Event(
+                at=_now(), run_id=run_id, actor="pipeline",
+                action="override.conflicted", target=None,
+                detail={"field_path": o.field_path}))
+    return docs, extracted, failed
+
+
+def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
+                  force: bool = False) -> dict:
+    migrate.migrate_dataset_json(root, slug)
+
+    project = load_project(root, slug)
+    run_id = events.new_run_id()
+    events.append_event(root, slug, Event(at=_now(), run_id=run_id, actor="pipeline",
+                                          action="run.started"))
+
+    prior_docs = {d.doc_id: d for d in snapshots.load_documents(root, slug)}
+    fresh_docs = inventory_documents(root, slug)
+    pdir = layout.project_dir(root, slug)
+
+    # Pass 1: classify. Rules decide most of it for free; text is read only
+    # for the leftovers the rules declined.
+    _classify_pass(root, slug, fresh_docs, prior_docs, client, run_id)
 
     # Pass 2: lineage, so an obsolete revision is never extracted.
     fresh_docs = resolve_supersession(fresh_docs)
@@ -205,6 +392,14 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
     extracted, failed = 0, 0
 
     with snapshots.transaction(root, slug):
+        # The RFQ side first: it writes requirements.json, which phase 3's
+        # datasheet pass reads for its parameter vocabulary.
+        rfq_docs, rfq_ok, rfq_failed = _run_rfq_pass(
+            root, slug, client, prior_docs, run_id,
+            pdf_fallback=pdf_fallback, force=force)
+        extracted += rfq_ok
+        failed += rfq_failed
+
         for doc in fresh_docs:
             prior = prior_docs.get(doc.doc_id)
             # A document the fallback above picked as a vendor's quotation is
@@ -358,7 +553,11 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
                     action="vendor.pruned", target=vendor,
                     detail={"reason": "no longer in the project"}))
 
-        snapshots.save_documents(root, slug, documents)
+        # Both lists, always. documents.json is replaced wholesale every run,
+        # so saving only the vendor half would drop every RFQ record and the
+        # next run would re-classify and re-extract the MR from scratch — an
+        # unbounded per-run cost of exactly the C2a kind.
+        snapshots.save_documents(root, slug, rfq_docs + documents)
 
     project = load_project(root, slug)
     project.status = ("failed" if extracted == 0
@@ -368,7 +567,8 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
     events.append_event(root, slug, Event(
         at=_now(), run_id=run_id, actor="pipeline", action="run.finished",
         detail={"extracted": extracted, "failed": failed,
-                "documents": len(documents), "status": project.status}))
+                "documents": len(rfq_docs) + len(documents),
+                "status": project.status}))
 
     return load_dataset(root, slug) or {}
 
