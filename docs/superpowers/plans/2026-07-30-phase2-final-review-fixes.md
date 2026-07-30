@@ -194,11 +194,17 @@ Two flagged as already resolved: `deviation_id_for`'s docstring was added in a f
 
 ## For phases 3 and 4 — change the plan template
 
+**Status: actioned.** All three changes are written up as house rules in
+[`docs/superpowers/PLAN-TEMPLATE.md`](PLAN-TEMPLATE.md), which phase 3's and phase 4's plans must follow. Summary of what landed there:
+
 The reviewer's diagnosis is worth acting on. Every plan defect caught *during* phase 2 execution was inside a single function's contract; every defect that survived to the final review needed two runs or two modules to see. Per-task TDD structurally produces single-run, single-module tests, and every task passed its own review honestly. The gap is architectural, not a reviewer failing.
 
 1. **Give the integration task an explicit two-run test rubric** — a named mutation matrix like the one above, not "test the pipeline". Every Critical and Important above would have been caught by one row. Phase 3 is *more* exposed, because requirements and amendments create a second accumulating collection with C1's exact orphaning shape.
+   → Template Rule 2: a three-column matrix (`mutation | invariant at risk | assert`) with nine required rows, one per defect that actually shipped, plus phase-specific rows for every new accumulating collection. Each row must name an invariant from Rule 1, and the matrix must be verified by reinstating each defect and confirming the intended row fails.
 2. **Require each task brief to name the store invariant it owns**, not just its return value. "`extract_tech_facts` returns `(facts, status)`" is a function contract. "`VendorFacts.technical` contains exactly the facts of the vendor's currently-extractable documents" is a store invariant — the one C1 violates. No phase-2 task owned it, so nobody tested it.
+   → Template Rule 1: a **Store invariant owned** bullet on every task's `Interfaces` block, phrased over stored state, using "exactly" rather than "includes". Four phase-3 invariants are pre-declared there, all carrying C1's orphaning shape.
 3. **State in the plan that reference code is intent, not paste-able.** Five defects in five samples is a strong signal.
+   → Template Rule 3: a required banner above the first reference block, plus a table of the **seven** phase-2 samples that were wrong (the audit found more than five). Two became shipped defects — notably the reference `classify_document` returning `("other", "llm")` instead of `("other", "llm-failed")`, which removed the marker I1's fix depends on *and* whose matching plan test locked the defect in under TDD.
 
 ---
 
