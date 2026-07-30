@@ -189,3 +189,81 @@ def test_a_missing_vendor_unit_is_assumed_to_match_a_stated_requirement_unit():
 def test_an_unknown_operator_raises_rather_than_defaulting_to_pass():
     with pytest.raises(Unconvertible):
         compare("approximately", 50.0, "ppm", 50.0, "ppm", parameter="x")
+
+
+# --- identical units, and the condition a unit is sometimes printed with -----
+
+@pytest.mark.parametrize("unit,expected,condition", [
+    ("dB(A) at 1m", "dB(A)", "at 1m"),
+    ("kW@ 55 Deg C", "kW", "@ 55 Deg C"),
+    ("mg/Nm3@3% O2", "mg/Nm3", "@3% O2"),
+    ("mg/Nm3, To 3% O2", "mg/Nm3", ", To 3% O2"),
+    ("kW", "kW", ""),
+    ("kg.m2", "kg.m2", ""),          # a dot is not a condition
+    ("", "", ""),
+    (None, "", ""),
+])
+def test_a_measurement_condition_is_split_off_the_unit(unit, expected, condition):
+    from procurement.units import _strip_qualifier
+    got_unit, got_condition = _strip_qualifier(unit)
+    assert got_unit == expected
+    assert got_condition.strip() == condition.strip()
+
+
+def test_identical_units_compare_without_any_conversion():
+    # both sides say mg/Nm3, so no molar mass is needed and refusing is absurd
+    ok, why = compare("<=", 10.0, "mg/Nm3", 10.0, "mg/Nm3",
+                      parameter="particulate_matter_limit")
+    assert ok is True and "mg/nm3" in why.lower()
+
+
+def test_identical_units_still_compare_when_the_unit_has_no_family():
+    ok, _ = compare(">=", 1250.0, "Amp", 1250.0, "Amp",
+                    parameter="generator_breaker_rating")
+    assert ok is True
+
+
+def test_identical_units_do_not_turn_a_real_shortfall_into_a_pass():
+    # the shortcut must skip the conversion, not the comparison
+    ok, _ = compare(">=", 1250.0, "Amp", 800.0, "Amp",
+                    parameter="generator_breaker_rating")
+    assert ok is False
+
+
+def test_a_condition_is_ignored_for_comparison_and_named_in_the_rationale():
+    ok, why = compare("<=", 85.0, "dB(A)", 85.0, "dB(A) at 1m",
+                      parameter="noise_limit")
+    assert ok is True
+    assert "at 1m" in why           # the reader is told what was dropped
+
+
+def test_stripping_a_condition_never_unifies_two_different_quantities():
+    # kW@55degC folds to kW, which is still not volts
+    with pytest.raises(Unconvertible):
+        compare("<=", 10.0, "kW", 220.0, "V", parameter="heater_rating")
+
+
+def test_a_condition_is_stripped_before_the_family_is_decided():
+    # "kW@ 55 Deg C" must read as power, not as an unrecognised unit
+    ok, _ = compare(">=", 0.5, "MW", 550.0, "kW@ 55 Deg C",
+                    parameter="continuous_rating")
+    assert ok is True
+
+
+def test_a_gauge_pressure_never_compares_against_an_absolute_one():
+    # barg and bar differ by one atmosphere; treating them as equal would
+    # misjudge a fuel gas requirement
+    with pytest.raises(Unconvertible):
+        compare(">=", 2.76, "barg", 2.76, "bar", parameter="fuel_gas_pressure")
+
+
+def test_between_also_skips_conversion_for_identical_units():
+    ok, _ = compare("between", [2.76, 4.14], "barg", 3.5, "barg",
+                    parameter="fuel_gas_pressure")
+    assert ok is True
+
+
+def test_between_on_identical_units_still_rejects_a_value_outside():
+    ok, _ = compare("between", [2.76, 4.14], "barg", 5.0, "barg",
+                    parameter="fuel_gas_pressure")
+    assert ok is False

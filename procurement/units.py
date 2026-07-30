@@ -59,14 +59,36 @@ _MOLAR_MASS = {"h2s": 34.081, "no2": 46.0055, "nox": 46.0055, "so2": 64.066,
 _MOLAR_VOLUME = 22.414
 
 
+# A unit is sometimes printed with the condition it was measured under:
+# "dB(A) at 1m", "kW@ 55 Deg C", "mg/Nm3, To 3% O2". The condition is not part
+# of the unit, but it is not noise either - it is dropped for the comparison
+# and quoted in the rationale, so a reviewer sees exactly what was ignored.
+_QUALIFIER = re.compile(r"\s*(?:@|,|\bat\b).*$", re.IGNORECASE)
+
+
+def _strip_qualifier(unit: str | None) -> tuple[str, str]:
+    """Split a printed unit into (unit, the condition it was measured under)."""
+    text = (unit or "").strip()
+    match = _QUALIFIER.search(text)
+    if match is None:
+        return text, ""
+    return text[:match.start()].strip(), match.group(0).strip()
+
+
 def _fold(unit: str | None) -> str:
     """Fold a printed unit onto one spelling. Spaced aliases ("deg C") are
     tried before the space-stripped form, so both spellings resolve."""
-    spaced = (unit or "").strip().lower()
+    spaced, _condition = _strip_qualifier(unit)
+    spaced = spaced.lower()
     if spaced in _ALIASES:
         return _ALIASES[spaced]
     squeezed = spaced.replace(" ", "")
     return _ALIASES.get(squeezed, squeezed)
+
+
+def _same_unit(req_unit, fact_unit) -> bool:
+    """True when both sides print the same unit, however it is spelled."""
+    return _fold(req_unit) == _fold(fact_unit)
 
 
 def to_number(value) -> float | None:
@@ -180,6 +202,32 @@ def _require_same_family(req_unit, fact_unit, parameter: str | None) -> None:
         f"quantities ({lhs_family} vs {rhs_family})")
 
 
+def _align(req_values: list[float], fact_value: float, req_unit, fact_unit,
+           parameter: str | None) -> tuple[list[float], float, str, str]:
+    """Bring both sides into one unit. Returns (req_values, fact_value,
+    unit name, condition note).
+
+    Identical units are the whole point: two numbers already printed in the
+    same unit need no arithmetic, so no conversion is entitled to refuse them.
+    `mg/Nm3` against `mg/Nm3` was being declined for an unknown molar mass it
+    never needed.
+    """
+    conditions = [c for c in (_strip_qualifier(req_unit)[1],
+                              _strip_qualifier(fact_unit)[1]) if c]
+    note = (f" (ignoring {', '.join(repr(c) for c in conditions)})"
+            if conditions else "")
+    if _same_unit(req_unit, fact_unit):
+        return list(req_values), float(fact_value), _fold(req_unit), note
+
+    _require_same_family(req_unit, fact_unit, parameter)
+    aligned, canonical = [], ""
+    for value in req_values:
+        converted, canonical = to_canonical(value, req_unit, parameter)
+        aligned.append(converted)
+    fact_c, _ = to_canonical(fact_value, fact_unit, parameter)
+    return aligned, fact_c, canonical, note
+
+
 def _members(value) -> list[str]:
     if isinstance(value, (list, tuple)):
         return [str(v).strip().lower() for v in value]
@@ -218,10 +266,9 @@ def compare(operator: str, req_value, req_unit, fact_value, fact_unit,
             raise Unconvertible(f"vendor value {fact_value!r} is not a number")
 
         fact_unit, note = _assume_unit(req_unit, fact_unit)
-        _require_same_family(req_unit, fact_unit, parameter)
-        low_c, canonical = to_canonical(low, req_unit, parameter)
-        high_c, _ = to_canonical(high, req_unit, parameter)
-        got_c, _ = to_canonical(got, fact_unit, parameter)
+        (low_c, high_c), got_c, canonical, condition = _align(
+            [low, high], got, req_unit, fact_unit, parameter)
+        note += condition
         if low_c > high_c:                      # printed high-to-low
             low_c, high_c = high_c, low_c
         inside = ((got_c >= low_c or math.isclose(got_c, low_c, rel_tol=1e-9))
@@ -243,10 +290,9 @@ def compare(operator: str, req_value, req_unit, fact_value, fact_unit,
         raise Unconvertible(f"vendor value {fact_value!r} is not a number")
 
     fact_unit, note = _assume_unit(req_unit, fact_unit)
-    _require_same_family(req_unit, fact_unit, parameter)
-
-    lhs_c, canonical = to_canonical(lhs, req_unit, parameter)
-    rhs_c, _ = to_canonical(rhs, fact_unit, parameter)
+    (lhs_c,), rhs_c, canonical, condition = _align(
+        [lhs], rhs, req_unit, fact_unit, parameter)
+    note += condition
     if operator == ">=":
         ok = rhs_c >= lhs_c or math.isclose(rhs_c, lhs_c, rel_tol=1e-9)
     elif operator == "<=":
