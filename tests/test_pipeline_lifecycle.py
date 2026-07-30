@@ -417,3 +417,35 @@ def test_a_failed_quotation_extraction_keeps_the_previous_prices(tmp_path):
     facts = snapshots.load_facts(root, "p", "KERUI")
     assert facts.commercial["base_price"] == 424242.0
     assert facts.normalized is not None
+
+
+def test_a_reclassified_quotation_document_prunes_the_stored_prices(tmp_path):
+    """INV-S6, the half deletion doesn't cover. `doc_id` is path-based, so a
+    document reclassified away from 'quotation' keeps the same doc_id and
+    stays in the class-agnostic live set - it must still lose its old price,
+    because it is no longer the document that produced it.
+    """
+    root = _project(tmp_path, {
+        "KERUI/ADP-13158-2024-935.txt": b"base price 1000",
+        "KERUI/01 DataSheet A.txt": b"Continuous rating 550 kW",
+    })
+    run_ingestion(root, "p", RoutingClient(doc_class="quotation"))
+    before = snapshots.load_facts(root, "p", "KERUI")
+    assert before.commercial is not None
+    assert before.quotation_doc_id is not None
+    assert len(before.technical) == 1
+
+    # same path, changed content: forces reclassification rather than hitting
+    # the classification cache, and the second run's classifier calls it a
+    # datasheet instead - the document is still present and still extracted,
+    # just no longer as a quotation
+    _write(tmp_path, "KERUI", "ADP-13158-2024-935.txt", b"Continuous rating 600 kW")
+    run_ingestion(root, "p", RoutingClient(doc_class="datasheet"))
+
+    facts = snapshots.load_facts(root, "p", "KERUI")
+    assert facts.commercial is None
+    assert facts.normalized is None
+    assert facts.quotation_doc_id is None
+    # the untouched datasheet's facts, and the reclassified document's own new
+    # facts, both survive: pruning is per-source, not per-vendor
+    assert len(facts.technical) == 2

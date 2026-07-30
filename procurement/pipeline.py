@@ -53,7 +53,8 @@ def _rel_path(pdir: str, path: str) -> str:
 
 
 def _prune_orphan_facts(root: str, slug: str, run_id: str, vendors: list[str],
-                        documents: list[DocumentRecord]) -> None:
+                        documents: list[DocumentRecord],
+                        inferred_quotes: set[str]) -> None:
     """Drop facts belonging to documents that are no longer extractable.
 
     Lineage stops an obsolete revision from being *re-extracted*; it does not
@@ -67,28 +68,41 @@ def _prune_orphan_facts(root: str, slug: str, run_id: str, vendors: list[str],
     vendor whose only datasheet was deleted produces no document at all.
     """
     live_by_vendor: dict[str, set[str]] = {}
+    live_quotations_by_vendor: dict[str, set[str]] = {}
     for doc in documents:
         # "failed" counts as live: the document is still present and still
         # routed to an extractor, so a transient provider outage must not
         # delete the facts an earlier successful run stored for it.
         if doc.vendor and doc.extraction_status in ("ok", "failed"):
             live_by_vendor.setdefault(doc.vendor, set()).add(doc.doc_id)
+            # A quotation candidate is either classified as one or, for a
+            # vendor with no recognised quotation, inferred as one (routing
+            # leaves doc_class untouched, so that case cannot be read back off
+            # the document alone). `live` alone is class-agnostic - a document
+            # reclassified from quotation to datasheet stays in it under its
+            # new class - so commercial needs this narrower, class-aware set.
+            if doc.doc_class == "quotation" or doc.doc_id in inferred_quotes:
+                live_quotations_by_vendor.setdefault(doc.vendor, set()).add(doc.doc_id)
 
     for vendor in vendors:
         facts = snapshots.load_facts(root, slug, vendor)
         if facts is None:
             continue
         live = live_by_vendor.get(vendor, set())
+        live_quotations = live_quotations_by_vendor.get(vendor, set())
         technical = [f for f in facts.technical if f.get("doc_id") in live]
         deviations = [d for d in facts.deviations if d.get("doc_id") in live]
         # commercial has no per-record doc_id, so it is pruned via the stored
-        # link. A vendor whose quotation was deleted or reclassified away kept
-        # its prices forever: the technical half's C1, one field over. The
-        # None guard matters: facts written before quotation_doc_id existed
-        # have no link, and reading that absence as "dead" would delete every
-        # pre-existing vendor's prices on the first run after upgrade.
+        # link, checked against the live *quotation* set above rather than the
+        # class-agnostic `live`: a vendor whose quotation was deleted, or whose
+        # document is still present but no longer classifies (or infers) as a
+        # quotation, kept its prices forever otherwise - the technical half's
+        # C1, one field over. The None guard matters: facts written before
+        # quotation_doc_id existed have no link, and reading that absence as
+        # "dead" would delete every pre-existing vendor's prices on the first
+        # run after upgrade.
         commercial_dead = (facts.quotation_doc_id is not None
-                           and facts.quotation_doc_id not in live)
+                           and facts.quotation_doc_id not in live_quotations)
         if (len(technical) == len(facts.technical)
                 and len(deviations) == len(facts.deviations)
                 and not commercial_dead):
@@ -580,7 +594,8 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
                         action="override.conflicted", target=doc.doc_id,
                         detail={"field_path": o.field_path}))
 
-        _prune_orphan_facts(root, slug, run_id, project.vendors, documents)
+        _prune_orphan_facts(root, slug, run_id, project.vendors, documents,
+                            inferred_quotes)
 
         # A vendor removed from the project must not keep haunting the
         # comparison: documents.json is replaced wholesale every run, but
