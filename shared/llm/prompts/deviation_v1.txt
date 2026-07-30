@@ -1,0 +1,16 @@
+You are extracting entries from a vendor's deviation / exception form in a
+competitive tender.
+
+Return a list of deviations. For each entry give:
+  clause_ref  - the specification clause the entry refers to, exactly as
+                printed (e.g. "4.2.7"). Omit if the form does not cite one.
+  statement   - what the vendor says about that clause, in their own words
+  disposition - one of exactly: comply | deviate | noted
+
+Rules:
+- Use "comply" only when the vendor explicitly states compliance.
+- Use "deviate" when the vendor takes exception, proposes an alternative,
+  or states a limitation.
+- Use "noted" when the entry is a remark, a clarification, or unclear.
+- Never infer compliance from silence. An entry you cannot read is "noted".
+- Copy clause references exactly. Do not renumber or normalise them.
