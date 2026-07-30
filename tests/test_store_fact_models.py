@@ -40,6 +40,27 @@ def test_deviation_id_falls_back_to_the_statement_when_no_clause():
     assert a != b
 
 
+def test_deviation_id_avoids_collision_same_clause_different_statements():
+    """Two records sharing a clause_ref but with different statements get different ids."""
+    a = deviation_id_for("d1", "4.2.7", "Vendor proposes an alternative")
+    b = deviation_id_for("d1", "4.2.7", "Uses 60 Hz instead")
+    assert a != b
+
+
+def test_deviation_id_identical_clause_and_statement_produce_same_id():
+    """Two records sharing a clause_ref AND the same statement get the same id."""
+    a = deviation_id_for("d1", "4.2.7", "Vendor proposes an alternative")
+    b = deviation_id_for("d1", "4.2.7", "Vendor proposes an alternative")
+    assert a == b
+
+
+def test_deviation_id_ignores_case_and_whitespace_on_both_components():
+    """Case insensitivity and whitespace trimming apply to both clause_ref and statement."""
+    a = deviation_id_for("d1", "  4.2.7 ", "  Vendor Proposes An Alternative ")
+    b = deviation_id_for("d1", "4.2.7", "vendor proposes an alternative")
+    assert a == b
+
+
 def test_records_round_trip_through_json():
     f = FactRecord(fact_id="f-1", parameter="kw", value=550.0, unit="kW",
                    verbatim="550 kW continuous", doc_id="d1")

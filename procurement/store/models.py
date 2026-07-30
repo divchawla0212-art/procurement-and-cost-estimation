@@ -64,7 +64,11 @@ def fact_id_for(doc_id: str, parameter: str) -> str:
 
 
 def deviation_id_for(doc_id: str, clause_ref: str | None, statement: str) -> str:
-    key = f"{doc_id}:{(clause_ref or statement).strip().lower()}"
+    """Stable across re-extraction for a given (document, clause_ref, statement) triple.
+    Both clause_ref and statement participate in the key. Trade-off: if the model
+    rewords a statement on later extraction, the id shifts and an override orphans.
+    That is strictly better than an override silently retargeting the wrong row."""
+    key = f"{doc_id}:{(clause_ref or '').strip().lower()}:{statement.strip().lower()}"
     return "v-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:10]
 
 
