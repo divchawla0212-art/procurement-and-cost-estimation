@@ -21,6 +21,7 @@ from procurement.extract_requirements import (extract_requirements,
                                               REQUIREMENTS_PROMPT_VERSION)
 from procurement.extract_mom import (apply_amendments, extract_amendments,
                                      MOM_PROMPT_VERSION)
+from procurement import compliance
 from procurement.compliance import vocabulary, vocabulary_sha
 from procurement.loaders import read_text
 
@@ -577,6 +578,18 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
         # next run would re-classify and re-extract the MR from scratch — an
         # unbounded per-run cost of exactly the C2a kind.
         snapshots.save_documents(root, slug, rfq_docs + documents)
+
+        # Last inside the transaction, on purpose: every earlier position would
+        # evaluate against facts that _prune_orphan_facts or the stale-vendor
+        # sweep then removes, producing a verdict citing a fact that no longer
+        # exists.
+        results = compliance.evaluate_project(root, slug)
+        events.append_event(root, slug, Event(
+            at=_now(), run_id=run_id, actor="pipeline",
+            action="compliance.evaluated", target=None,
+            detail={"cells": len(results),
+                    "by_verdict": {v: sum(1 for r in results if r.verdict == v)
+                                   for v in compliance.VERDICTS}}))
 
     project = load_project(root, slug)
     project.status = ("failed" if extracted == 0
