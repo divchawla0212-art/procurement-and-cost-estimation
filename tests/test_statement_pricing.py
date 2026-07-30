@@ -1,4 +1,5 @@
-from procurement.models import VendorBid
+from procurement.models import OptionalItem, VendorBid
+from procurement.normalize import normalize_bid
 from procurement.project import load_project, save_project
 from procurement.statement import build_statement
 from procurement.store import snapshots
@@ -14,6 +15,16 @@ def project_vendors_extended(root, name):
     project = load_project(root, "p")
     project.vendors = list(project.vendors) + [name]
     save_project(root, project)
+
+
+def _stored(root, bid):
+    """Store a bid the way pipeline.py does — `commercial` alongside the
+    `normalize_bid` output, not a hand-written `normalized` dict. Every
+    defect this file was extended for hid behind a hand-written one: the
+    schema's non-null defaults only surface on the real shape."""
+    snapshots.save_facts(root, "p", VendorFacts(
+        vendor=bid.vendor, commercial=bid.model_dump(),
+        normalized=normalize_bid(bid, "USD", {}).model_dump()))
 
 
 def _cell(statement, key, vendor):
@@ -157,7 +168,7 @@ def test_an_option_with_no_price_at_all_is_flagged_on_the_final_value(tmp_path):
     assert _cell(statement, "opt:tools", "KERUI").total is None
     final = _cell(statement, "final_value", "KERUI")
     assert final.total == 1000.0
-    assert "1" in final.note and "no stated price" in final.note
+    assert final.note == "excludes 1 option(s) with no stated price"
 
 
 def test_two_options_that_normalise_alike_reconcile_with_the_column(tmp_path):
@@ -237,6 +248,105 @@ def test_an_unknown_currency_is_none_not_blank(tmp_path):
         vendor="KERUI", commercial=VendorBid(vendor="KERUI").model_dump()))
 
     assert build_statement(root, "p").currencies["KERUI"] is None
+
+
+def test_the_normalised_row_does_not_print_an_invented_zero(tmp_path):
+    """normalize_bid derives its total FROM base_price, so a vendor who
+    stated no price normalises to 0.0 — and spec §5(c) makes Normalised THE
+    row compared across columns. A 0.00 there beside a real bid reads as the
+    cheapest offer on the sheet."""
+    root = _project(tmp_path)
+    project_vendors_extended(root, "MKON")
+    _stored(root, VendorBid(vendor="KERUI", currency="USD", base_price=1170000.0))
+    _stored(root, VendorBid(vendor="MKON"))       # succeeded, found nothing
+
+    statement = build_statement(root, "p")
+    assert statement.statuses["MKON"] == "ok"     # not a failed extraction
+    assert _cell(statement, "normalised", "KERUI").total == 1170000.0
+    cell = _cell(statement, "normalised", "MKON")
+    assert cell is None or cell.total is None
+
+
+def test_a_normalised_total_outliving_its_commercial_terms_is_not_shown(tmp_path):
+    """pipeline.py carries the prior `normalized` forward whenever the fresh
+    run resolves no commercial terms, so this pairing is reachable without
+    any pruning bug. The figure was derived from a base price the store no
+    longer holds; printing it puts a number in the comparison row that
+    nothing on the sheet backs."""
+    root = _project(tmp_path)
+    snapshots.save_facts(root, "p", VendorFacts(
+        vendor="KERUI", commercial=None,
+        normalized={"vendor": "KERUI", "normalized_currency": "USD",
+                    "normalized_total": 999.0, "adjustments": [],
+                    "extraction_status": "ok"}))
+
+    statement = build_statement(root, "p")
+    cell = _cell(statement, "normalised", "KERUI")
+    assert cell is None or cell.total is None
+
+
+def test_a_merged_option_never_claims_to_be_both_included_and_priced(tmp_path):
+    """One line stated as already inside the base price, another priced
+    separately, both normalising to one key. Carrying the 'included' note
+    onto the merged cell would claim the scope is inside the base AND added
+    to it — while its total is in FINAL VALUE."""
+    root = _project(tmp_path)
+    _stored(root, VendorBid(vendor="KERUI", currency="USD", base_price=1000.0,
+                            optional_items=[
+                                OptionalItem(description="Tools - Optional",
+                                             included_in_base=True),
+                                OptionalItem(description="Tools", total=5000.0)]))
+
+    statement = build_statement(root, "p")
+    cell = _cell(statement, "opt:tools", "KERUI")
+    assert cell.total == 5000.0
+    assert cell.note != "included in base price"
+    assert _cell(statement, "final_value", "KERUI").total == 6000.0
+
+
+def test_an_included_option_is_not_counted_as_unpriced(tmp_path):
+    """It has no total by design, not by omission — the column excludes
+    nothing and must not say it does."""
+    root = _project(tmp_path)
+    _facts(root, "KERUI", base_price=1000.0, optional_items=[
+        {"description": "Spares", "total": 30000.0, "included_in_base": True}])
+
+    assert _cell(build_statement(root, "p"), "final_value", "KERUI").note is None
+
+
+def test_one_vendors_unpriced_option_does_not_annotate_anothers_column(tmp_path):
+    root = _project(tmp_path)
+    project_vendors_extended(root, "MKON")
+    _facts(root, "KERUI", base_price=1000.0,
+           optional_items=[{"description": "Tools"}])
+    _facts(root, "MKON", base_price=2000.0,
+           optional_items=[{"description": "Tools", "total": 10.0}])
+
+    statement = build_statement(root, "p")
+    assert _cell(statement, "final_value", "KERUI").note is not None
+    assert _cell(statement, "final_value", "MKON").note is None
+
+
+def test_a_flag_is_not_a_price(tmp_path):
+    """isinstance(True, int) is True, so an unguarded _money would read a
+    stray bool as 1.0 and print it in a money column."""
+    root = _project(tmp_path)
+    _facts(root, "KERUI", base_price=True)
+
+    cell = _cell(build_statement(root, "p"), "base_scope", "KERUI")
+    assert cell is None or cell.total is None
+
+
+def test_a_column_with_options_but_no_base_says_why_it_has_no_total(tmp_path):
+    """Blank beats a partial sum, but a reviewer looking at 100500 of
+    visible prices and an empty FINAL VALUE deserves the reason."""
+    root = _project(tmp_path)
+    _facts(root, "KERUI", freight_amount=17500.0, optional_items=[
+        {"description": "PEMS", "total": 83000.0}])
+
+    final = _cell(build_statement(root, "p"), "final_value", "KERUI")
+    assert final.total is None
+    assert final.note == "base price not stated"
 
 
 def test_building_twice_writes_nothing(tmp_path):

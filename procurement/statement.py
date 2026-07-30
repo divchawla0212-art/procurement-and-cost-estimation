@@ -92,8 +92,15 @@ def _priced_rows(project, facts) -> list[StatementRow]:
             row.cells[vendor] = StatementCell(**kw)
             return
         totals = [t for t in (prior.total, kw.get("total")) if t is not None]
-        row.cells[vendor] = StatementCell(total=sum(totals) if totals else None,
-                                          note=prior.note or kw.get("note"))
+        total = sum(totals) if totals else None
+        note = prior.note or kw.get("note")
+        if total is not None and note == "included in base price":
+            # One merged line was stated as already inside the base price and
+            # another was priced separately. Keeping the note beside a real
+            # total would claim the same scope is both inside the base and
+            # added to it — while that total sits in FINAL VALUE.
+            note = "part stated as included in base price"
+        row.cells[vendor] = StatementCell(total=total, note=note)
 
     order: list[str] = []           # optional-row keys, first-seen across columns
     sums: dict[str, dict] = {}
@@ -142,7 +149,10 @@ def _priced_rows(project, facts) -> list[StatementRow]:
 
         freight = None
         if not c.get("freight_included"):
-            freight = _money(c.get("freight_amount")) or None
+            # No `or None` here, unlike base: a zero freight contributes zero
+            # to the column either way, so the `if freight` guard below is the
+            # whole of it. Freight's zero is not award-changing; base's is.
+            freight = _money(c.get("freight_amount"))
             if freight:
                 cell("freight", "Freight Charges", "priced", vendor, total=freight)
 
@@ -175,8 +185,15 @@ def _priced_rows(project, facts) -> list[StatementRow]:
                         "has_prices": base is not None}
 
         normalized = f.normalized if f else None
-        norm_total = _money((normalized or {}).get("normalized_total"))
-        if norm_total is not None:
+        # The same invented zero as base_price, one row down and worse:
+        # normalize_bid derives its total FROM base_price, so a vendor who
+        # stated no price normalises to 0.0 — and spec §5(c) makes Normalised
+        # THE row compared across columns, where a 0.00 beside a real bid
+        # reads as the cheapest offer. The `base is not None` gate is the
+        # honest form of it: a normalised total derived from an unknown base
+        # is not a figure, whatever normalize_bid returned.
+        norm_total = _money((normalized or {}).get("normalized_total")) or None
+        if norm_total is not None and base is not None:
             cell("normalised",
                  f"Normalised (ex-VAT, ex-options, {project.target_currency})",
                  "priced", vendor, total=norm_total)
@@ -184,7 +201,14 @@ def _priced_rows(project, facts) -> list[StatementRow]:
     for vendor in project.vendors:
         s = sums.get(vendor, {})
         if not s.get("has_prices"):
-            continue                    # blank column, not a zeroed one
+            # Blank, never a zeroed or partial total. But a column showing
+            # priced options and freight with an empty FINAL VALUE and no
+            # reason invites the reader to add it up themselves, which is the
+            # partial sum this branch exists to refuse.
+            if s.get("options") or s.get("freight"):
+                cell("final_value", "FINAL VALUE", "priced", vendor,
+                     note="base price not stated")
+            continue
         pre_vat = s["base"] + s["options"] + s["freight"]
         # Rule (a): the discount base excludes VAT — computed here, on the
         # unrounded pre_vat, and carried unrounded into final_value below.
