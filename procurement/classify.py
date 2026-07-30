@@ -11,19 +11,20 @@ DOC_CLASSES = ("spec", "quotation", "datasheet", "deviation",
                "bom", "drawing", "mom", "other")
 
 # Ordered: the first class whose keywords match wins, so specific beats broad.
-# Short keywords use word-boundary regex to avoid false matches in larger words.
+# Short keywords use lookaround patterns to avoid false matches in larger words
+# while correctly treating underscore as a delimiter (not a word character).
 # Longer phrases use substring matching which is already unambiguous.
 _RULES: tuple[tuple[str, tuple[str | re.Pattern, ...]], ...] = (
     ("datasheet", ("datasheet", "data sheet")),
     ("deviation", ("deviation",)),
-    ("mom", (re.compile(r"\bmom\b"), "minutes of meeting")),
-    ("bom", (re.compile(r"\bbom\b"), "bill of material")),
-    ("drawing", ("drawing", "layout", re.compile(r"\bp&id\b"), re.compile(r"\bpid\b"), "single line",
+    ("mom", (re.compile(r"(?<![a-z0-9])mom(?![a-z0-9])"), "minutes of meeting")),
+    ("bom", (re.compile(r"(?<![a-z0-9])bom(?![a-z0-9])"), "bill of material")),
+    ("drawing", ("drawing", "layout", re.compile(r"(?<![a-z0-9])p&id(?![a-z0-9])"), re.compile(r"(?<![a-z0-9])pid(?![a-z0-9])"), "single line",
                  "nameplate", "name plate", "outline", "general arrangement",
                  "diagram", "architecture")),
     ("quotation", ("quotation", "quote", "offer", "proposal",
                    "techno commercial", "commercial proposal")),
-    ("spec", ("material requisition", re.compile(r"\bmr\b"), "spc-", re.compile(r"\bspec\b"))),
+    ("spec", ("material requisition", re.compile(r"(?<![a-z0-9])mr(?![a-z0-9])"), "spc-", re.compile(r"(?<![a-z0-9])spec(?![a-z0-9])"))),
     # Supporting documents: recognised so they cost no LLM call, but not
     # extractable this phase. Phase 3 may promote some of these.
     ("other", ("consumption", "equipment list", "special tools", "spares",

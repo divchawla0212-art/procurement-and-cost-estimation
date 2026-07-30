@@ -70,3 +70,15 @@ def test_word_boundary_prevents_false_matches(filename, not_expected):
     """Verify that short keywords require word boundaries and don't match inside larger words."""
     result = classify_by_rules(filename)
     assert result != not_expected
+
+
+@pytest.mark.parametrize("filename,expected", [
+    # Underscore-delimited keywords: prove lookarounds treat underscore as a delimiter
+    ("Copy of ADN-AEC-ME-SPC-026_MR_Gas_Genset.xlsx", "spec"),  # Real client file with underscore-delimited MR
+    ("vendor_bom_rev2.pdf", "bom"),  # underscore-delimited bom
+    ("genset_spec_final.pdf", "spec"),  # underscore-delimited spec
+    ("some_bombay_office_quotation.pdf", "quotation"),  # Verify underscore didn't loosen bom matching
+])
+def test_underscore_delimited_keywords_match(filename, expected):
+    """Verify that underscore-delimited keywords correctly match and don't reintroduce false positives."""
+    assert classify_by_rules(filename) == expected
