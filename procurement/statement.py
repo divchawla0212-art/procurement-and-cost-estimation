@@ -8,6 +8,7 @@ import re
 
 from pydantic import BaseModel
 
+from procurement.compliance import VERDICTS
 from procurement.project import load_project
 from procurement.store import snapshots
 
@@ -67,6 +68,28 @@ def _money(value) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return float(value)
+
+
+def compliance_tally(results, vendor: str) -> dict[str, int]:
+    """Count this vendor's verdicts, at read time, every time.
+
+    Never stored (INV-S4). Phase 3 recomputes compliance.json wholesale on
+    every run precisely so the matrix cannot drift from its sources; a copy
+    of these counts in facts.json would reintroduce that drift one level
+    down, where nothing recomputes it. Verdicts outside VERDICTS are ignored
+    rather than counted — `verdict` is a plain str with no enum validation,
+    and a typo must not silently enlarge a total a reviewer trusts."""
+    counts = {v: 0 for v in VERDICTS}
+    for r in results:
+        if r.vendor == vendor and r.verdict in counts:
+            counts[r.verdict] += 1
+    return {v: n for v, n in counts.items() if n}
+
+
+def _tally_text(counts: dict[str, int]) -> str | None:
+    """Zero-count verdicts are omitted upstream, so a clean vendor reads
+    `25 pass` rather than a row of four zeros beside it."""
+    return " · ".join(f"{n} {v}" for v, n in counts.items()) or None
 
 
 def _excluded(count: int) -> str | None:
@@ -268,6 +291,7 @@ def _live_quote(vendor_facts, docs):
 def build_statement(root: str, slug: str) -> Statement:
     project = load_project(root, slug)
     docs = {d.doc_id: d for d in snapshots.load_documents(root, slug)}
+    results = snapshots.load_compliance(root, slug)
     # Columns come from project.vendors, never snapshots.list_fact_vendors:
     # a vendor with no extractable document must still get a column (INV-S2),
     # and a vendor the project no longer has must not get one.
@@ -313,8 +337,18 @@ def build_statement(root: str, slug: str) -> Statement:
             quote_row.cells[vendor] = StatementCell(text=quote.path.rsplit("/", 1)[-1])
     statement.rows.append(quote_row)
 
-    # Task 5 fills this row's cells from VendorFacts.technical_feedback; the
-    # empty row still needs to exist so the ordering contract holds.
-    statement.rows.append(StatementRow(key="technical_feedback",
-                                       label="Technical Feedback", kind="text"))
+    # Both values are shown, never one instead of the other. `text` is the
+    # reviewer's judgement, made at one moment; `note` is the tally, which
+    # moves under it as extractions change. Side by side, a stale note can
+    # be seen to be stale — the visibility `conflict` gives a real override,
+    # without inventing a conflict the store would then have to carry.
+    feedback = StatementRow(key="technical_feedback", label="Technical Feedback",
+                            kind="text")
+    for vendor in project.vendors:
+        f = facts[vendor]
+        tally = _tally_text(compliance_tally(results, vendor))
+        text = f.technical_feedback if f else None
+        if tally or text:
+            feedback.cells[vendor] = StatementCell(text=text, note=tally)
+    statement.rows.append(feedback)
     return statement
