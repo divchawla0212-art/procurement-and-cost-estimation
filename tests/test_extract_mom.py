@@ -108,10 +108,15 @@ def test_applying_an_amendment_preserves_the_base_body_and_names_both_sides():
 
 
 def test_applying_twice_is_idempotent():
-    once, amendments = apply_amendments([_requirement()], [_amendment()])
-    twice, _ = apply_amendments(once, amendments)
+    once, once_amendments = apply_amendments([_requirement()], [_amendment()])
+    twice, twice_amendments = apply_amendments(once, once_amendments)
     assert twice[0].value == 60.0
     assert twice[0].base_body["value"] == 50.0     # not 60.0 - no re-baselining
+    # Full-record equality, not just the bound: a text-folding implementation
+    # that appends amendment text on every call would still pass a
+    # value-only assertion while corrupting `text` on the second pass.
+    assert once[0].model_dump() == twice[0].model_dump()
+    assert once_amendments[0].model_dump() == twice_amendments[0].model_dump()
 
 
 def test_removing_the_amendment_reverts_the_requirement_exactly():
