@@ -81,7 +81,7 @@ def test_a_spec_document_produces_stored_requirements(tmp_path):
     assert reqset.requirements[0].checkability == "auto"
     doc = next(d for d in snapshots.load_documents(root, "p") if d.vendor is None)
     assert (doc.doc_class, doc.extraction_status) == ("spec", "ok")
-    assert doc.prompt_version == "requirements_v2"
+    assert doc.prompt_version == "requirements_v3"
 
 
 def test_a_mom_amends_the_requirement_and_keeps_the_base(tmp_path):
@@ -104,7 +104,7 @@ def test_an_rfq_datasheet_is_routed_to_requirements_with_an_event(tmp_path):
     doc = next(d for d in snapshots.load_documents(root, "p") if d.vendor is None)
     assert doc.doc_class == "datasheet"          # the classifier's answer stands
     assert doc.extraction_status == "ok"
-    assert doc.prompt_version == "requirements_v2"
+    assert doc.prompt_version == "requirements_v3"
     assert snapshots.load_requirements(root, "p").requirements
     actions = [e.action for e in events.read_events(root, "p")]
     assert "rfq.requirements_inferred" in actions
@@ -208,7 +208,7 @@ def test_a_failed_spec_extraction_keeps_the_previous_requirements(tmp_path):
 
 
 def test_rfq_prompt_versions_are_per_class():
-    assert RFQ_PROMPT_VERSION_BY_CLASS == {"spec": "requirements_v2",
+    assert RFQ_PROMPT_VERSION_BY_CLASS == {"spec": "requirements_v3",
                                            "mom": "mom_amend_v1"}
 
 

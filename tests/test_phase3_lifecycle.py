@@ -192,7 +192,7 @@ def test_row3_a_sibling_revision_arriving_later_takes_over(tmp_path):
 # this patch are the same input to the cache gate.
 _BUMPS = [
     # the bumped value must differ from the shipped one, or the patch is a no-op
-    ("REQUIREMENTS_PROMPT_VERSION", "requirements", _MR, "requirements_v3"),
+    ("REQUIREMENTS_PROMPT_VERSION", "requirements", _MR, "requirements_v4"),
     ("MOM_PROMPT_VERSION", "amendments", _MOM, "mom_amend_v2"),
     ("TECH_PROMPT_VERSION", "facts", _DATASHEET, "tech_facts_v2"),
     ("DEVIATION_PROMPT_VERSION", "deviations", _DEVIATION, "deviation_v2"),
@@ -269,7 +269,7 @@ def test_row7_an_rfq_datasheet_is_still_routed_to_requirements(tmp_path):
 
     doc = _doc(root, "DOD-30201 DataSheet Gas Generator.txt")
     assert doc.doc_class == "datasheet"          # the classifier's answer stands
-    assert doc.prompt_version == "requirements_v2"
+    assert doc.prompt_version == "requirements_v3"
     assert _reqs(root).requirements
     assert "rfq.requirements_inferred" in [e.action for e in
                                            events.read_events(root, "p")]

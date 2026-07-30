@@ -182,7 +182,30 @@ def test_a_two_member_list_under_in_is_left_as_membership(tmp_path):
 
 
 def test_the_prompt_version_is_the_prompt_filename():
-    assert REQUIREMENTS_PROMPT_VERSION == "requirements_v2"
+    assert REQUIREMENTS_PROMPT_VERSION == "requirements_v3"
+
+
+def test_the_prompt_tells_the_model_which_operator_a_limit_takes():
+    # the prompt is the fix here, so the prompt is what the test inspects
+    from procurement.extract_requirements import _PROMPT
+    text = _PROMPT.read_text(encoding="utf-8").lower()
+    assert "maximum" in text and "minimum" in text
+    assert "<=" in text and ">=" in text
+    # v2 already said all of the above. What it never said - and what the live
+    # run's false FAILs came from - is which operator a stated limit takes and
+    # what == is reserved for.
+    assert "up to" in text
+    assert "== only when" in text
+
+
+def test_a_maximum_clause_extracted_as_a_limit_is_stored_as_one(tmp_path):
+    entry = {"clause_ref": "2.5.1", "text": "H2S content up to 700 ppm",
+             "category": "technical", "checkability": "auto",
+             "parameter": "h2s_content", "operator": "<=", "value": 700,
+             "unit": "ppm"}
+    [record], status, _ = extract_requirements(
+        "d1", _spec(tmp_path), StubClient({"requirements": [entry]}))
+    assert (status, record.operator, record.value) == ("ok", "<=", 700)
 
 
 def test_stored_auto_requirements_all_carry_four_bounds(tmp_path):

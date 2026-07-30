@@ -15,9 +15,9 @@ from procurement.store.models import RequirementRecord, req_id_for
 
 _log = logging.getLogger(__name__)
 
-REQUIREMENTS_PROMPT_VERSION = "requirements_v2"
+REQUIREMENTS_PROMPT_VERSION = "requirements_v3"
 _PROMPT = (Path(__file__).parents[1] / "shared" / "llm" / "prompts"
-           / "requirements_v2.txt")
+           / "requirements_v3.txt")
 
 # `in` is a set of permitted values ("50 or 60 Hz"); `between` is a stated
 # range ("5-58 deg C"). They are decided by the model and never inferred from
