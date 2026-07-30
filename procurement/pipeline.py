@@ -21,6 +21,7 @@ from procurement.extract_requirements import (extract_requirements,
                                               REQUIREMENTS_PROMPT_VERSION)
 from procurement.extract_mom import (apply_amendments, extract_amendments,
                                      MOM_PROMPT_VERSION)
+from procurement.compliance import vocabulary, vocabulary_sha
 from procurement.loaders import read_text
 
 PROMPT_VERSION = "bid_extract_v1"        # kept: the quotation prompt version
@@ -400,6 +401,13 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
         extracted += rfq_ok
         failed += rfq_failed
 
+        # Requirements first, then their vocabulary, then the datasheets — the
+        # ordering spec section 7 requires. Read back from the store rather
+        # than from the pass's return value, so overrides applied to a
+        # requirement's parameter are part of the vocabulary too.
+        parameters = vocabulary(snapshots.load_requirements(root, slug))
+        vocab_sha = vocabulary_sha(parameters)
+
         for doc in fresh_docs:
             prior = prior_docs.get(doc.doc_id)
             # A document the fallback above picked as a vendor's quotation is
@@ -428,10 +436,16 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
                     detail={"reason": skip_reason}))
                 continue
 
+            # The vocabulary is an input to the tech_facts_v1 prompt, so it
+            # belongs in the datasheet cache key and nowhere else: a quotation
+            # or deviation form is never asked about parameters, and folding it
+            # into their key would re-extract them for nothing.
             unchanged = (prior is not None
                          and prior.content_sha256 == doc.content_sha256
                          and prior.prompt_version == expected_version
-                         and prior.extraction_status == "ok")
+                         and prior.extraction_status == "ok"
+                         and (route != "datasheet"
+                              or prior.vocabulary_sha == vocab_sha))
             if unchanged and not force:
                 # Carry the cached extraction forward onto the *fresh* record
                 # rather than appending `prior` verbatim. Passes 1 and 2 wrote
@@ -447,6 +461,9 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
                 doc.extractor = prior.extractor
                 doc.prompt_version = prior.prompt_version
                 doc.text_source = prior.text_source
+                # carried forward or the bump never persists, and every
+                # datasheet re-extracts on every run forever — C2a exactly
+                doc.vocabulary_sha = prior.vocabulary_sha
                 documents.append(doc)
                 extracted += 1
                 events.append_event(root, slug, Event(
@@ -472,8 +489,10 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
                 technical = list(base.technical)
                 deviations = list(base.deviations)
             elif route == "datasheet":
-                facts, status, notes = extract_tech_facts(doc.doc_id, full, client,
-                                                          pdf_fallback=pdf_fallback)
+                facts, status, notes = extract_tech_facts(
+                    doc.doc_id, full, client, pdf_fallback=pdf_fallback,
+                    parameters=parameters)
+                doc.vocabulary_sha = vocab_sha
                 doc.notes = notes
                 if status == "ok":
                     # replace only this document's facts; other datasheets survive

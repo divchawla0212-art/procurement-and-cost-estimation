@@ -13,6 +13,9 @@ class RfqClient:
 
     def __init__(self, fail_on=(), h2s=50):
         self.calls, self._fail_on, self._h2s = [], set(fail_on), h2s
+        # the `auto` parameter the spec is read as stating; overridden by the
+        # vocabulary suite to make a requirement edit change the vocabulary
+        self.requirement_parameter = "h2s_tolerance"
 
     def classify_structure(self, prompt, output_schema, context_text, images=None):
         fields = output_schema.model_fields
@@ -28,7 +31,7 @@ class RfqClient:
             return {"requirements": [
                 {"clause_ref": "4.2.7", "text": "H2S at least 50 ppm",
                  "category": "technical", "checkability": "auto",
-                 "parameter": "h2s_tolerance", "operator": ">=",
+                 "parameter": self.requirement_parameter, "operator": ">=",
                  "value": self._h2s, "unit": "ppm"},
                 {"clause_ref": "9.1", "text": "Submit an O&M manual",
                  "category": "documentation", "checkability": "judgement"},

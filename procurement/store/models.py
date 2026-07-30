@@ -32,6 +32,11 @@ class DocumentRecord(BaseModel):
     extracted_at: str | None = None
     extractor: str | None = None
     prompt_version: str | None = None
+    # Fingerprint of the `auto` requirement vocabulary this document's facts
+    # were extracted under. Part of the datasheet cache key: the vocabulary is
+    # an input to the tech_facts_v1 prompt, so a requirement edit that changes
+    # it must re-ask the datasheets exactly once. None for every other class.
+    vocabulary_sha: str | None = None
 
 
 class VendorFacts(BaseModel):
