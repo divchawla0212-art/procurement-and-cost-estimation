@@ -148,6 +148,9 @@ class Amendment(BaseModel):
     unit: str | None = None
     action: str = "modify"           # modify | withdraw
     source_doc_id: str
+    # Why req_id is None, in words a reviewer can act on: "the requirements are
+    # incomplete" and "say which document you meant" need different responses.
+    unresolved_reason: str | None = None
 
 
 class RequirementSet(BaseModel):

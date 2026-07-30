@@ -133,6 +133,24 @@ def test_a_superseded_spec_is_never_extracted(tmp_path):
     assert {r.source_doc_id for r in reqs} == {new.doc_id}
 
 
+def test_a_mom_clause_matching_two_spec_documents_is_stored_unapplied(tmp_path):
+    # INV-3, over a loaded snapshot: the real RFQ has several live spec
+    # documents, and neither side names a target document
+    root = _rfq(tmp_path, {
+        _MR: "4.2.7 H2S at least 50 ppm",
+        "ADN-AEC-ME-SPC-027 MR Gas Genset B.txt": "4.2.7 H2S at least 50 ppm",
+        _MOM: "Clause 4.2.7 revised to 60 ppm"})
+    run_ingestion(root, "p", RfqClient())
+    reqset = snapshots.load_requirements(root, "p")
+
+    [amendment] = reqset.amendments
+    assert amendment.req_id is None
+    assert "4.2.7" in amendment.unresolved_reason
+    assert all(r.amended_by is None for r in reqset.requirements)
+    assert all(r.value == 50 for r in reqset.requirements
+               if r.checkability == "auto")
+
+
 def test_rerunning_an_unchanged_rfq_makes_zero_llm_calls(tmp_path):
     root = _rfq(tmp_path, {_MR: "4.2.7 H2S at least 50 ppm",
                            _MOM: "Clause 4.2.7 revised to 60 ppm"})

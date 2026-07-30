@@ -142,6 +142,65 @@ def test_an_amendment_matching_no_requirement_is_kept_unapplied():
     assert linked.req_id is None              # kept, visible, never applied
 
 
+def test_an_amendment_is_unapplied_when_two_documents_share_the_clause():
+    # clause numbering is per document, so "4.2.7" in two documents is a
+    # coincidence, not a shared clause. Neither the MOM nor the requirement
+    # records name a target document, so applying to either is a coin flip.
+    a, b = _requirement(doc="d1"), _requirement(doc="d2")
+    [ra, rb], [linked] = apply_amendments([a, b], [_amendment()])
+    assert (ra.value, rb.value) == (50.0, 50.0)
+    assert ra.amended_by is None and rb.amended_by is None
+    assert ra.base_body is None and rb.base_body is None
+    assert linked.req_id is None
+
+
+def test_an_ambiguous_amendment_names_the_documents_that_collided():
+    _, [linked] = apply_amendments(
+        [_requirement(doc="d1"), _requirement(doc="d2")], [_amendment()])
+    assert "d1" in linked.unresolved_reason and "d2" in linked.unresolved_reason
+
+
+def test_an_unmatched_reason_reads_differently_from_an_ambiguous_one():
+    # a human seeing req_id=None must be able to tell "the requirements are
+    # incomplete" from "say which document you meant"
+    _, [unmatched] = apply_amendments([_requirement()], [_amendment(clause="99.9")])
+    _, [ambiguous] = apply_amendments(
+        [_requirement(doc="d1"), _requirement(doc="d2")], [_amendment()])
+    assert "no requirement" in unmatched.unresolved_reason.lower()
+    assert "no requirement" not in ambiguous.unresolved_reason.lower()
+
+
+def test_two_clauses_under_one_ref_in_one_document_are_ambiguous_too():
+    # the rule is "exactly one match", not "one document"
+    a = _requirement(doc="d1")
+    b = _requirement(doc="d1", text="a second clause printed under the same ref")
+    b.req_id = "r-second"
+    [ra, rb], [linked] = apply_amendments([a, b], [_amendment()])
+    assert (ra.value, rb.value) == (50.0, 50.0) and linked.req_id is None
+
+
+def test_a_clause_unique_to_one_document_still_resolves():
+    here, elsewhere = _requirement(doc="d1"), _requirement(clause="5.1", doc="d2")
+    [ra, rb], [linked] = apply_amendments([here, elsewhere], [_amendment()])
+    assert ra.value == 60.0 and linked.req_id == here.req_id
+    assert rb.value == 50.0
+    assert linked.unresolved_reason is None      # cleared once it resolves
+
+
+def test_a_second_document_arriving_later_reverts_a_resolved_amendment():
+    # the self-healing case: a store written before the collision existed has
+    # the amendment applied. Once the colliding document lands, the next run
+    # must undo it rather than leave one document silently amended.
+    amended, [linked] = apply_amendments([_requirement(doc="d1")], [_amendment()])
+    assert amended[0].value == 60.0
+
+    [ra, rb], [relinked] = apply_amendments(
+        amended + [_requirement(doc="d2")], [linked])
+    assert (ra.value, rb.value) == (50.0, 50.0)
+    assert ra.amended_by is None and ra.base_body is None
+    assert relinked.req_id is None and relinked.unresolved_reason
+
+
 def test_clause_refs_match_across_printing_differences():
     req = _requirement(clause="4.2.7")
     [resolved], _ = apply_amendments([req], [_amendment(clause=" Clause 4.2.7 ")])

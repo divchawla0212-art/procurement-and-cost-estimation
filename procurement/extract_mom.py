@@ -111,11 +111,17 @@ def apply_amendments(requirements: list[RequirementRecord],
     output, and what makes removing an amendment revert the clause exactly -
     the arithmetic equivalent of the orphaning defect `_prune_orphan_facts`
     guards against in pipeline.py.
+
+    An amendment is applied only when **exactly one** stored requirement
+    matches its clause ref. Zero matches and two-or-more matches are both
+    stored unapplied with `req_id = None` and an `unresolved_reason`, because
+    clause numbers are only unique within one document and nothing here names
+    which document the meeting meant.
     """
     out = [r.model_copy(deep=True) for r in requirements]
     linked = [a.model_copy(deep=True) for a in amendments]
 
-    by_clause: dict[str, RequirementRecord] = {}
+    by_clause: dict[str, list[RequirementRecord]] = {}
     for req in out:
         base = req.base_body or {field: getattr(req, field) for field in _BODY_FIELDS}
         for field, value in base.items():
@@ -123,15 +129,38 @@ def apply_amendments(requirements: list[RequirementRecord],
         req.base_body = None
         req.amended_by = None
         req.withdrawn = False
-        by_clause.setdefault(_norm_clause(req.clause_ref), req)
+        by_clause.setdefault(_norm_clause(req.clause_ref), []).append(req)
 
     for amend in linked:
-        target = by_clause.get(_norm_clause(amend.clause_ref))
-        if target is None:
+        # Cleared first: a reason left over from a previous run would outlive
+        # the collision that caused it.
+        amend.unresolved_reason = None
+        matches = by_clause.get(_norm_clause(amend.clause_ref), [])
+
+        if not matches:
             # A MOM changing a clause the requirements extractor missed is a
             # signal the requirements are incomplete, not something to hide.
             amend.req_id = None
+            amend.unresolved_reason = (
+                f"no requirement states clause {amend.clause_ref!r}")
             continue
+
+        if len(matches) > 1:
+            # Clause numbering is per document, so one printed ref appearing in
+            # two documents is a coincidence, not a shared clause. Neither the
+            # amendment nor the requirement records name a target document, so
+            # there is nothing to scope the match by - and applying it to
+            # whichever requirement happens to come first in the list is a coin
+            # flip dressed as a decision. Kept, visible, and never applied.
+            documents = sorted({r.source_doc_id for r in matches})
+            amend.req_id = None
+            amend.unresolved_reason = (
+                f"clause {amend.clause_ref!r} matches {len(matches)} "
+                f"requirements (documents: {', '.join(documents)}); the "
+                "amendment names no target document")
+            continue
+
+        target = matches[0]
         amend.req_id = target.req_id
 
         if target.base_body is None:
