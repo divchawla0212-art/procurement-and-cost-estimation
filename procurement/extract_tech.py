@@ -37,13 +37,19 @@ def extract_tech_facts(doc_id: str, path: str, client, pdf_fallback=None,
             text += ("\n\nThe buyer will check these parameters. Report them "
                       "when the document states them:\n"
                       + "\n".join(f"- {p}" for p in parameters))
-        parsed = _TechFactList.model_validate(
-            client.classify_structure(prompt, _TechFactList, text))
+        raw = client.classify_structure(prompt, _TechFactList, text)
+        raw_items = list(raw["facts"])
     except Exception:
         return [], "failed"
 
     out: list[FactRecord] = []
-    for fact in parsed.facts:
+    for raw_item in raw_items:
+        try:
+            fact = _TechFact.model_validate(raw_item)
+        except Exception:
+            # One malformed field on one fact must not discard every other,
+            # well-formed fact extracted from the same datasheet.
+            continue
         name = fact.parameter.strip()
         if not name:
             continue          # a fact with no parameter name cannot be checked

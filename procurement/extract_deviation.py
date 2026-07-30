@@ -33,13 +33,20 @@ def extract_deviations(doc_id: str, path: str, client, pdf_fallback=None
     try:
         text = read_text(path, llm_fallback=pdf_fallback)
         prompt = _PROMPT.read_text(encoding="utf-8")
-        parsed = _DeviationList.model_validate(
-            client.classify_structure(prompt, _DeviationList, text))
+        raw = client.classify_structure(prompt, _DeviationList, text)
+        raw_items = list(raw["deviations"])
     except Exception:
         return [], "failed"
 
     out: list[DeviationRecord] = []
-    for item in parsed.deviations:
+    for raw_item in raw_items:
+        try:
+            item = _Deviation.model_validate(raw_item)
+        except Exception:
+            # One malformed row (e.g. a null or numeric field the model
+            # emitted) must not discard every other, well-formed row in the
+            # same document.
+            continue
         statement = item.statement.strip()
         if not statement:
             continue

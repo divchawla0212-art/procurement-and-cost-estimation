@@ -77,5 +77,15 @@ def test_parameter_vocabulary_is_passed_to_the_model(tmp_path):
     assert "h2s_tolerance" in sent and "ambient_temp" in sent
 
 
+def test_malformed_fact_entry_is_skipped_not_whole_datasheet(tmp_path):
+    client = MockLLMClient(response={"facts": [
+        {"parameter": "bad_one", "unit": 123},
+        {"parameter": "kw", "value": 550.0, "unit": "kW"},
+    ]})
+    facts, status = extract_tech_facts("d1", _txt(tmp_path), client)
+    assert status == "ok"
+    assert [f.parameter for f in facts] == ["kw"]
+
+
 def test_prompt_version_is_exposed():
     assert TECH_PROMPT_VERSION == "tech_facts_v1"

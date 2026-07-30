@@ -68,5 +68,25 @@ def test_extraction_error_returns_failed_without_raising(tmp_path):
     assert items == [] and status == "failed"
 
 
+def test_malformed_disposition_type_is_skipped_not_whole_document(tmp_path):
+    client = MockLLMClient(response={"deviations": [
+        {"clause_ref": "1.1", "statement": "bad row", "disposition": None},
+        {"clause_ref": "1.2", "statement": "good row", "disposition": "comply"},
+    ]})
+    items, status = extract_deviations("d1", _txt(tmp_path), client)
+    assert status == "ok"
+    assert [i.clause_ref for i in items] == ["1.2"]
+
+
+def test_malformed_clause_ref_type_is_skipped_not_whole_document(tmp_path):
+    client = MockLLMClient(response={"deviations": [
+        {"clause_ref": 4.2, "statement": "bad row", "disposition": "deviate"},
+        {"clause_ref": "5.1", "statement": "good row", "disposition": "comply"},
+    ]})
+    items, status = extract_deviations("d1", _txt(tmp_path), client)
+    assert status == "ok"
+    assert [i.clause_ref for i in items] == ["5.1"]
+
+
 def test_prompt_version_is_exposed():
     assert DEVIATION_PROMPT_VERSION == "deviation_v1"
