@@ -15,12 +15,32 @@ from procurement.store.models import RequirementRecord, req_id_for
 
 _log = logging.getLogger(__name__)
 
-REQUIREMENTS_PROMPT_VERSION = "requirements_v1"
+REQUIREMENTS_PROMPT_VERSION = "requirements_v2"
 _PROMPT = (Path(__file__).parents[1] / "shared" / "llm" / "prompts"
-           / "requirements_v1.txt")
+           / "requirements_v2.txt")
 
-_OPERATORS = (">=", "<=", "==", "in")
+# `in` is a set of permitted values ("50 or 60 Hz"); `between` is a stated
+# range ("5-58 deg C"). They are decided by the model and never inferred from
+# the value's shape: [50, 60] read as a range would accept 55 Hz, and [5, 58]
+# read as a set fails a vendor offering 55 degC for meeting the requirement.
+_OPERATORS = (">=", "<=", "==", "in", "between")
 _CATEGORIES = ("technical", "commercial", "documentation", "testing", "codes")
+
+
+def _is_range(value) -> bool:
+    """Exactly two numeric bounds. Anything else is not a usable range."""
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return False
+    for bound in value:
+        if isinstance(bound, bool):
+            return False
+        if isinstance(bound, (int, float)):
+            continue
+        try:
+            float(str(bound).strip().replace(",", ""))
+        except (TypeError, ValueError):
+            return False
+    return True
 
 
 class _Requirement(BaseModel):
@@ -77,6 +97,10 @@ def extract_requirements(doc_id: str, path: str, client, pdf_fallback=None
 
         operator = (item.operator or "").strip()
         operator = operator if operator in _OPERATORS else None
+        if operator == "between" and not _is_range(item.value):
+            # a range missing an end is a half-stated bound, and INV-2 says
+            # those are judgement - compliance.py must never receive one
+            operator = None
         auto = (item.checkability == "auto"
                 and bool((item.parameter or "").strip())
                 and operator is not None

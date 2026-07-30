@@ -146,8 +146,43 @@ def test_duplicate_clause_refs_in_one_document_do_not_collide_silently(tmp_path)
     assert len({r.req_id for r in records}) == len(records)
 
 
+def test_a_stated_range_is_stored_with_the_between_operator(tmp_path):
+    entry = {"clause_ref": "1.1", "text": "Temperature 5-58 deg C",
+             "category": "technical", "checkability": "auto",
+             "parameter": "ambient_design_temp", "operator": "between",
+             "value": [5, 58], "unit": "degC"}
+    [record], status, _ = extract_requirements(
+        "d1", _spec(tmp_path), StubClient({"requirements": [entry]}))
+    assert (status, record.checkability) == ("ok", "auto")
+    assert record.operator == "between" and record.value == [5, 58]
+
+
+@pytest.mark.parametrize("bad", [5, [5], [1, 2, 3], "5-58"])
+def test_a_between_clause_without_exactly_two_bounds_is_demoted(tmp_path, bad):
+    # INV-2 again: a range missing an end is a half-stated bound, and
+    # compliance.py must never be handed one
+    entry = {"clause_ref": "1.1", "text": "Temperature range", "category": "technical",
+             "checkability": "auto", "parameter": "ambient_design_temp",
+             "operator": "between", "value": bad, "unit": "degC"}
+    [record], status, _ = extract_requirements(
+        "d1", _spec(tmp_path), StubClient({"requirements": [entry]}))
+    assert (status, record.checkability, record.operator) == ("ok", "judgement", None)
+
+
+def test_a_two_member_list_under_in_is_left_as_membership(tmp_path):
+    # `in` and `between` are decided by the model, never inferred from shape:
+    # "50 or 60 Hz" is a two-member list and is not a range
+    entry = {"clause_ref": "3.1", "text": "Frequency 50 or 60 Hz",
+             "category": "technical", "checkability": "auto",
+             "parameter": "frequency", "operator": "in", "value": [50, 60],
+             "unit": "Hz"}
+    [record], _, _ = extract_requirements(
+        "d1", _spec(tmp_path), StubClient({"requirements": [entry]}))
+    assert record.operator == "in" and record.value == [50, 60]
+
+
 def test_the_prompt_version_is_the_prompt_filename():
-    assert REQUIREMENTS_PROMPT_VERSION == "requirements_v1"
+    assert REQUIREMENTS_PROMPT_VERSION == "requirements_v2"
 
 
 def test_stored_auto_requirements_all_carry_four_bounds(tmp_path):

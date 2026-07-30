@@ -115,6 +115,51 @@ def test_in_accepts_a_list_or_a_comma_string():
     assert not compare("in", "50, 60", "Hz", 55, "Hz", parameter="frequency")[0]
 
 
+def test_between_accepts_a_value_inside_the_range():
+    # the live failure: the MR states "Temperature 5-58 deg C" and a vendor
+    # offering 55 degC was FAILED, because `in` is set membership
+    ok, why = compare("between", [5, 58], "degC", 55, "degC",
+                      parameter="ambient_design_temp")
+    assert ok is True and "55" in why
+
+
+def test_between_rejects_a_value_outside_the_range():
+    ok, _ = compare("between", [5, 58], "degC", 60, "degC",
+                    parameter="ambient_design_temp")
+    assert ok is False
+
+
+@pytest.mark.parametrize("edge", [5, 58])
+def test_between_is_inclusive_at_both_bounds(edge):
+    assert compare("between", [5, 58], "degC", edge, "degC")[0] is True
+
+
+def test_between_converts_units_before_comparing():
+    ok, _ = compare("between", [0.4, 0.6], "MW", 550.0, "kW",
+                    parameter="continuous_rating")
+    assert ok is True
+
+
+def test_between_tolerates_bounds_stated_in_either_order():
+    assert compare("between", [58, 5], "degC", 55, "degC")[0] is True
+
+
+@pytest.mark.parametrize("bad", [50, [50], [1, 2, 3], "5-58", None])
+def test_between_needs_exactly_two_bounds(bad):
+    # one end of a range is a half-stated bound; guessing the other is how a
+    # compliant vendor gets failed
+    with pytest.raises(Unconvertible):
+        compare("between", bad, "degC", 55, "degC")
+
+
+def test_in_stays_strict_membership_and_never_accepts_a_midpoint():
+    # 55 Hz is not permitted just because 50 and 60 are. This is why `in` and
+    # `between` have to be different operators rather than one shape-sniffing
+    # rule: reading [50, 60] as a range would pass this.
+    ok, _ = compare("in", [50, 60], "Hz", 55, "Hz", parameter="frequency")
+    assert ok is False
+
+
 def test_in_matches_non_numeric_members_case_insensitively():
     ok, _ = compare("in", ["API 616", "ISO 8528"], None, "iso 8528", None,
                     parameter="applicable_standard")

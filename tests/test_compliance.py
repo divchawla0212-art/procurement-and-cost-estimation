@@ -102,6 +102,23 @@ def test_units_are_converted_before_comparing():
     assert r.verdict == "pass"
 
 
+def test_a_range_requirement_passes_a_value_inside_it():
+    # end to end for the live false-fail: 55 degC against "5-58 deg C"
+    r = evaluate(_req(parameter="ambient_design_temp", operator="between",
+                      value=[5, 58], unit="degC"),
+                 [_fact(parameter="ambient_design_temp", value=55, unit="degC")],
+                 [], "KERUI", NOW)
+    assert r.verdict == "pass"
+
+
+def test_a_range_requirement_fails_a_value_outside_it():
+    r = evaluate(_req(parameter="ambient_design_temp", operator="between",
+                      value=[5, 58], unit="degC"),
+                 [_fact(parameter="ambient_design_temp", value=60, unit="degC")],
+                 [], "KERUI", NOW)
+    assert r.verdict == "fail"
+
+
 def test_parameter_matching_tolerates_naming_differences():
     r = evaluate(_req(), [_fact(parameter="H2S Tolerance")], [], "KERUI", NOW)
     assert r.verdict == "pass"

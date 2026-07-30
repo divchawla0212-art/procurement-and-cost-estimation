@@ -126,7 +126,9 @@ class RequirementRecord(BaseModel):
     category: str = "technical"      # technical|commercial|documentation|testing|codes
     checkability: str = "judgement"  # auto|judgement
     parameter: str | None = None     # auto only
-    operator: str | None = None      # >= | <= | == | in
+    # >= | <= | == | in (a set of permitted values) | between (a stated range,
+    # whose value is exactly two bounds)
+    operator: str | None = None
     value: str | float | list | None = None
     unit: str | None = None
     source_doc_id: str

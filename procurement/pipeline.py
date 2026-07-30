@@ -182,7 +182,7 @@ def _classify_pass(root: str, slug: str, docs: list[DocumentRecord],
 
 def _rfq_route(doc: DocumentRecord) -> str:
     """An RFQ-side datasheet is the client's blank datasheet: it states what is
-    required, so it feeds requirements_v1. doc_class is left alone — documents
+    required, so it feeds the requirements prompt. doc_class is left alone — documents
     .json must keep reporting what the classifier decided, not what routing
     did with it (the same rule the quotation fallback follows)."""
     return "spec" if doc.doc_class == "datasheet" else doc.doc_class

@@ -157,6 +157,29 @@ def _family(unit: str | None, parameter: str | None) -> str:
     raise Unconvertible(f"unrecognised unit {unit!r}")
 
 
+def _assume_unit(req_unit, fact_unit) -> tuple[object, str]:
+    """Datasheets routinely print the number in a column headed by the unit.
+    The assumption is stated in the rationale, never made silently."""
+    if fact_unit is None or str(fact_unit).strip() == "":
+        if req_unit not in (None, ""):
+            return req_unit, f" (vendor unit not stated; assumed {req_unit})"
+    return fact_unit, ""
+
+
+def _require_same_family(req_unit, fact_unit, parameter: str | None) -> None:
+    lhs_family = _family(req_unit, parameter)
+    rhs_family = _family(fact_unit, parameter)
+    if lhs_family == rhs_family:
+        return
+    if {lhs_family, rhs_family} == {"power", "apparent_power"}:
+        raise Unconvertible(
+            "cannot compare kW with kVA: the conversion needs a power "
+            "factor, which the documents do not state")
+    raise Unconvertible(
+        f"cannot compare {req_unit!r} with {fact_unit!r}: different "
+        f"quantities ({lhs_family} vs {rhs_family})")
+
+
 def _members(value) -> list[str]:
     if isinstance(value, (list, tuple)):
         return [str(v).strip().lower() for v in value]
@@ -179,6 +202,33 @@ def compare(operator: str, req_value, req_unit, fact_value, fact_unit,
                 return True, f"{fact_value} is one of {allowed}"
         return got in allowed, f"{fact_value} against allowed {allowed}"
 
+    if operator == "between":
+        # A stated range, not a set of permitted values. `in` cannot express
+        # this: read "5-58 degC" as membership and a vendor offering 55 degC
+        # is failed for meeting the requirement.
+        bounds = req_value if isinstance(req_value, (list, tuple)) else None
+        if bounds is None or len(bounds) != 2:
+            raise Unconvertible(
+                f"a range needs exactly two bounds, got {req_value!r}")
+        low, high = to_number(bounds[0]), to_number(bounds[1])
+        got = to_number(fact_value)
+        if low is None or high is None:
+            raise Unconvertible(f"range bounds {req_value!r} are not numbers")
+        if got is None:
+            raise Unconvertible(f"vendor value {fact_value!r} is not a number")
+
+        fact_unit, note = _assume_unit(req_unit, fact_unit)
+        _require_same_family(req_unit, fact_unit, parameter)
+        low_c, canonical = to_canonical(low, req_unit, parameter)
+        high_c, _ = to_canonical(high, req_unit, parameter)
+        got_c, _ = to_canonical(got, fact_unit, parameter)
+        if low_c > high_c:                      # printed high-to-low
+            low_c, high_c = high_c, low_c
+        inside = ((got_c >= low_c or math.isclose(got_c, low_c, rel_tol=1e-9))
+                  and (got_c <= high_c or math.isclose(got_c, high_c, rel_tol=1e-9)))
+        return inside, (f"{fact_value} {fact_unit or ''} = {got_c:g} {canonical} "
+                        f"within {low_c:g}..{high_c:g} {canonical}{note}").strip()
+
     if operator not in (">=", "<=", "=="):
         raise Unconvertible(f"unsupported operator {operator!r}")
 
@@ -192,24 +242,8 @@ def compare(operator: str, req_value, req_unit, fact_value, fact_unit,
             return same, f"{fact_value!r} against required {req_value!r}"
         raise Unconvertible(f"vendor value {fact_value!r} is not a number")
 
-    note = ""
-    if fact_unit is None or str(fact_unit).strip() == "":
-        if req_unit not in (None, ""):
-            # datasheets routinely print the number in a column headed by the
-            # unit; the assumption is stated in the rationale, never silent
-            fact_unit = req_unit
-            note = f" (vendor unit not stated; assumed {req_unit})"
-
-    lhs_family = _family(req_unit, parameter)
-    rhs_family = _family(fact_unit, parameter)
-    if lhs_family != rhs_family:
-        if {lhs_family, rhs_family} == {"power", "apparent_power"}:
-            raise Unconvertible(
-                "cannot compare kW with kVA: the conversion needs a power "
-                "factor, which the documents do not state")
-        raise Unconvertible(
-            f"cannot compare {req_unit!r} with {fact_unit!r}: different "
-            f"quantities ({lhs_family} vs {rhs_family})")
+    fact_unit, note = _assume_unit(req_unit, fact_unit)
+    _require_same_family(req_unit, fact_unit, parameter)
 
     lhs_c, canonical = to_canonical(lhs, req_unit, parameter)
     rhs_c, _ = to_canonical(rhs, fact_unit, parameter)
