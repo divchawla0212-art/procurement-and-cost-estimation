@@ -35,6 +35,7 @@ class MatrixClient(VocabClient):
     def __init__(self, **kw):
         super().__init__(**kw)
         self.requirement_unit = "ppm"
+        self.requirement_operator = None       # None -> the stub's own operator
         self.requirements_response = None      # None -> the default two clauses
         self.amendment_clause = "4.2.7"
         self.fact_value = 70
@@ -50,6 +51,8 @@ class MatrixClient(VocabClient):
             for entry in response["requirements"]:
                 if entry.get("checkability") == "auto":
                     entry["unit"] = self.requirement_unit
+                    if self.requirement_operator is not None:
+                        entry["operator"] = self.requirement_operator
         elif "amendments" in fields:
             for entry in response["amendments"]:
                 entry["clause_ref"] = self.amendment_clause
@@ -527,3 +530,92 @@ def test_row20_a_colliding_second_spec_unresolves_a_resolved_amendment(tmp_path)
     reverted = [r for r in reqset.requirements if r.clause_ref == "4.2.7"]
     assert all(r.value == 50 and r.amended_by is None and r.base_body is None
                for r in reverted)
+
+
+# --- INV-10: `unanswered` means the vendor was silent, not that we could not
+# read the unit. Three rows, each asserting over a loaded snapshot after run 2.
+
+def _auto_cells(root):
+    """The machine-checked cells. `review` is the judgement clause 9.1, which
+    no unit change can move."""
+    return [c for c in snapshots.load_compliance(root, "p") if c.verdict != "review"]
+
+
+def test_row21_a_unit_this_build_can_now_read_stops_being_unanswered(tmp_path):
+    # INV-10. The two sides must state *different* members of the family, or
+    # Task 1's identical-unit shortcut answers without consulting the table at
+    # all and this row passes with the family deleted.
+    root = _project(tmp_path)
+    first = MatrixClient()
+    first.requirement_parameter = "warranty_period"
+    first.requirement_unit, first.fact_unit = "furlongs", "months"
+    run_ingestion(root, "p", first)
+
+    [cell] = _auto_cells(root)
+    assert cell.verdict == "unanswered"
+    assert "unrecognised unit" in cell.rationale
+
+    # both documents are edited, so run 2 re-extracts both sides
+    _write_rfq(tmp_path, _MR, "4.2.7 warranty at least 50 months")
+    (tmp_path / "p" / "vendors" / "KERUI" / _DATASHEET).write_text(
+        "warranty 70 years", encoding="utf-8")
+    second = MatrixClient()
+    second.requirement_parameter = "warranty_period"
+    second.requirement_unit, second.fact_unit = "months", "years"
+    run_ingestion(root, "p", second)
+
+    started = _last_run_started(root)
+    cells = snapshots.load_compliance(root, "p")
+    # 70 years = 840 months >= 50 months, which needs the conversion
+    assert [c.verdict for c in _auto_cells(root)] == ["pass"]
+    assert all(c.evaluated_at >= started for c in cells)
+    assert not any("unrecognised unit" in c.rationale for c in cells)
+
+
+def test_row22_a_reextraction_under_a_bumped_prompt_replaces_the_old_operator(
+        tmp_path, monkeypatch):
+    # INV-7, INV-10 — the live requirements_v2 -> v3 story: a stated limit was
+    # read as `==` and manufactured a FAIL against a vendor that complies.
+    root = _project(tmp_path)
+    first = MatrixClient()
+    first.requirement_operator, first.fact_value = "==", 40
+    run_ingestion(root, "p", first)
+
+    [cell] = _auto_cells(root)
+    assert cell.verdict == "fail"          # 40 == 50 is false
+
+    monkeypatch.setitem(pipeline.RFQ_PROMPT_VERSION_BY_CLASS, "spec",
+                        "requirements_v4")
+    second = MatrixClient()
+    second.requirement_operator, second.fact_value = "<=", 40
+    run_ingestion(root, "p", second)
+
+    stored = {r.operator for r in _reqs(root).requirements
+              if r.checkability == "auto"}
+    assert stored == {"<="}, "the bumped prompt did not re-extract"
+    assert [c.verdict for c in _auto_cells(root)] == ["pass"]
+    # no verdict computed from the old operator outlives it
+    assert all(c.evaluated_at >= _last_run_started(root)
+               for c in snapshots.load_compliance(root, "p"))
+
+
+def test_row23_a_vendor_restating_in_another_family_becomes_unanswered(tmp_path):
+    # INV-10: refusing for a stated physical reason is correct; the cell must
+    # not silently become `pass` or `fail`, and must not read as unrecognised
+    root = _project(tmp_path)
+    first = MatrixClient()
+    first.requirement_unit, first.fact_unit = "barg", "barg"
+    run_ingestion(root, "p", first)
+    assert [c.verdict for c in _auto_cells(root)] == ["pass"]
+
+    # editing the datasheet forces run 2 to re-extract the vendor's answer
+    (tmp_path / "p" / "vendors" / "KERUI" / _DATASHEET).write_text(
+        "H2S up to 70 bar", encoding="utf-8")
+    second = MatrixClient()
+    second.requirement_unit, second.fact_unit = "barg", "bar"
+    run_ingestion(root, "p", second)
+
+    [cell] = _auto_cells(root)
+    assert cell.verdict == "unanswered"
+    assert "different quantities" in cell.rationale
+    assert "unrecognised unit" not in cell.rationale
