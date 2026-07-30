@@ -10,8 +10,20 @@ from procurement.models import VendorBid, NormalizedBid
 from procurement.store import events, layout, migrate, snapshots
 from procurement.store.models import DocumentRecord, Event, VendorFacts
 from procurement.store.overrides import apply_overrides, reconcile
+from procurement.classify import (classify_by_rules, classify_document,
+                                  CLASSIFY_PROMPT_VERSION)
+from procurement.revisions import resolve_supersession
+from procurement.extract_tech import extract_tech_facts, TECH_PROMPT_VERSION
+from procurement.extract_deviation import extract_deviations, DEVIATION_PROMPT_VERSION
+from procurement.loaders import read_text
 
-PROMPT_VERSION = "bid_extract_v1"
+PROMPT_VERSION = "bid_extract_v1"        # kept: the quotation prompt version
+PROMPT_VERSION_BY_CLASS = {
+    "quotation": PROMPT_VERSION,
+    "datasheet": TECH_PROMPT_VERSION,
+    "deviation": DEVIATION_PROMPT_VERSION,
+}
+_EXTRACTABLE = tuple(PROMPT_VERSION_BY_CLASS)
 
 
 def _now() -> str:
@@ -49,11 +61,51 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
     fresh_docs = inventory_documents(root, slug)
     pdir = layout.project_dir(root, slug)
 
+    # Pass 1: classify. Rules decide most of it for free; text is read only
+    # for the leftovers the rules declined.
+    for doc in fresh_docs:
+        prior = prior_docs.get(doc.doc_id)
+        if (prior is not None and prior.content_sha256 == doc.content_sha256
+                and prior.doc_class != "unclassified"
+                and prior.classified_with == CLASSIFY_PROMPT_VERSION):
+            doc.doc_class = prior.doc_class
+            doc.classified_by = prior.classified_by
+            doc.classified_with = prior.classified_with
+            continue
+        full = os.path.join(pdir, doc.path)
+        head = ""
+        if classify_by_rules(full) is None:
+            # only the leftovers cost a text read; rules decide the rest free
+            try:
+                head = read_text(full, llm_fallback=None)[:500]
+            except Exception:
+                head = ""
+        doc.doc_class, doc.classified_by = classify_document(full, client, head)
+        doc.classified_with = CLASSIFY_PROMPT_VERSION
+        events.append_event(root, slug, Event(
+            at=_now(), run_id=run_id, actor="pipeline",
+            action="document.classified", target=doc.doc_id,
+            detail={"doc_class": doc.doc_class, "by": doc.classified_by}))
+
+    # Pass 2: lineage, so an obsolete revision is never extracted.
+    fresh_docs = resolve_supersession(fresh_docs)
+
+    # Order quotations first within each vendor: facts_view["commercial"] is
+    # None until a vendor's quotation has been extracted, and a field path
+    # that does not resolve is flagged conflict=True. Processing a datasheet
+    # first would raise a spurious conflict on any commercial.* override.
+    fresh_docs.sort(key=lambda d: (d.vendor or "", d.doc_class != "quotation", d.path))
+
+    # Among several quotations for one vendor, pick_quote still chooses which
+    # one carries the commercial terms.
     quote_rel_by_vendor: dict[str, str] = {}
     for vendor in project.vendors:
-        quote = pick_quote(vendor_files(root, slug, vendor))
-        if quote:
-            quote_rel_by_vendor[vendor] = os.path.relpath(quote, pdir).replace(os.sep, "/")
+        candidates = [os.path.join(pdir, d.path) for d in fresh_docs
+                      if d.vendor == vendor and d.doc_class == "quotation"
+                      and d.superseded_by is None]
+        chosen = pick_quote(candidates)
+        if chosen:
+            quote_rel_by_vendor[vendor] = os.path.relpath(chosen, pdir).replace(os.sep, "/")
 
     documents: list[DocumentRecord] = []
     extracted, failed = 0, 0
@@ -61,21 +113,30 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
     with snapshots.transaction(root, slug):
         for doc in fresh_docs:
             prior = prior_docs.get(doc.doc_id)
-            is_quote = quote_rel_by_vendor.get(doc.vendor) == doc.path
+            expected_version = PROMPT_VERSION_BY_CLASS.get(doc.doc_class)
 
-            if not is_quote:
+            skip_reason = None
+            if doc.superseded_by is not None:
+                skip_reason = f"superseded by {doc.superseded_by}"
+            elif doc.doc_class not in _EXTRACTABLE:
+                skip_reason = f"{doc.doc_class} documents are not extracted"
+            elif (doc.doc_class == "quotation"
+                  and quote_rel_by_vendor.get(doc.vendor) != doc.path):
+                skip_reason = "not the selected quotation document"
+
+            if skip_reason is not None:
                 doc.extraction_status = "skipped"
-                doc.notes = "not the selected quotation document"
+                doc.notes = skip_reason
                 documents.append(doc)
                 events.append_event(root, slug, Event(
                     at=_now(), run_id=run_id, actor="pipeline",
                     action="document.skipped", target=doc.doc_id,
-                    detail={"reason": "not_quote"}))
+                    detail={"reason": skip_reason}))
                 continue
 
             unchanged = (prior is not None
                          and prior.content_sha256 == doc.content_sha256
-                         and prior.prompt_version == PROMPT_VERSION
+                         and prior.prompt_version == expected_version
                          and prior.extraction_status == "ok")
             if unchanged and not force:
                 documents.append(prior)
@@ -86,44 +147,55 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
                     detail={"reason": "unchanged"}))
                 continue
 
-            bid = extract_bid(doc.vendor, [os.path.join(pdir, doc.path)],
-                              client, pdf_fallback=pdf_fallback)
-            doc.extraction_status = bid.extraction_status
-            doc.notes = bid.notes
-            doc.extracted_at = _now()
-            doc.extractor = f"llm:{PROMPT_VERSION}"
-            doc.prompt_version = PROMPT_VERSION
-            doc.doc_class = "quotation"
-            doc.classified_by = "rule"
-            documents.append(doc)
-
-            if bid.extraction_status == "ok":
-                extracted += 1
-            else:
-                failed += 1
-
+            full = os.path.join(pdir, doc.path)
             prior_facts = snapshots.load_facts(root, slug, doc.vendor)
-            prior_overrides = prior_facts.overrides if prior_facts else []
-            # field_path is relative to the snapshot root (VendorFacts), where
-            # commercial/technical/deviations are siblings - so overrides must
-            # be reconciled and applied against that shape, not against the
-            # bare bid dump. Against the bid dump "commercial.base_price"
-            # simply never resolves and the human's correction is discarded.
-            facts_view = {
-                "commercial": bid.model_dump(),
-                "technical": prior_facts.technical if prior_facts else [],
-                "deviations": prior_facts.deviations if prior_facts else [],
-            }
-            overrides = reconcile(prior_overrides, facts_view)
+            base = prior_facts or VendorFacts(vendor=doc.vendor)
+            status = "ok"
+
+            if doc.doc_class == "quotation":
+                bid = extract_bid(doc.vendor, [full], client, pdf_fallback=pdf_fallback)
+                status = bid.extraction_status
+                commercial_dump = bid.model_dump()
+                technical = list(base.technical)
+                deviations = list(base.deviations)
+            elif doc.doc_class == "datasheet":
+                facts, status = extract_tech_facts(doc.doc_id, full, client,
+                                                   pdf_fallback=pdf_fallback)
+                # replace only this document's facts; other datasheets survive
+                technical = [f for f in base.technical if f.get("doc_id") != doc.doc_id]
+                technical += [f.model_dump() for f in facts]
+                commercial_dump = base.commercial
+                deviations = list(base.deviations)
+            else:   # deviation
+                items, status = extract_deviations(doc.doc_id, full, client,
+                                                   pdf_fallback=pdf_fallback)
+                deviations = [d for d in base.deviations if d.get("doc_id") != doc.doc_id]
+                deviations += [d.model_dump() for d in items]
+                commercial_dump = base.commercial
+                technical = list(base.technical)
+
+            doc.extraction_status = status
+            doc.extracted_at = _now()
+            doc.extractor = f"llm:{expected_version}"
+            doc.prompt_version = expected_version
+            documents.append(doc)
+            extracted += 1 if status == "ok" else 0
+            failed += 0 if status == "ok" else 1
+
+            facts_view = {"commercial": commercial_dump,
+                          "technical": technical,
+                          "deviations": deviations}
+            overrides = reconcile(base.overrides, facts_view)
             resolved = apply_overrides(facts_view, overrides)
-            normalized = normalize_bid(
+            normalized = (normalize_bid(
                 VendorBid.model_validate(resolved["commercial"]),
-                project.target_currency, project.fx_rates)
+                project.target_currency, project.fx_rates).model_dump()
+                if resolved["commercial"] else base.normalized)
 
             snapshots.save_facts(root, slug, VendorFacts(
                 vendor=doc.vendor,
                 commercial=resolved["commercial"],
-                normalized=normalized.model_dump(),
+                normalized=normalized,
                 technical=resolved["technical"],
                 deviations=resolved["deviations"],
                 overrides=overrides))
@@ -131,7 +203,7 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
             events.append_event(root, slug, Event(
                 at=_now(), run_id=run_id, actor="pipeline",
                 action="document.extracted", target=doc.doc_id,
-                detail={"status": bid.extraction_status}))
+                detail={"status": status, "doc_class": doc.doc_class}))
             for o in overrides:
                 if o.conflict:
                     events.append_event(root, slug, Event(
