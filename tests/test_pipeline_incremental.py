@@ -224,6 +224,42 @@ def test_override_conflict_is_recorded_as_an_event(tmp_path):
     assert "override.conflicted" in [e.action for e in events.read_events(root, "p")]
 
 
+def test_a_second_vendor_zip_adds_to_the_project_rather_than_replacing_it(tmp_path):
+    """Vendors arrive one archive at a time, and the earlier ones must survive.
+
+    A buyer who uploads ADPOWER.zip and then MKON.zip has withdrawn nothing —
+    both folders are on disk. Deriving the roster from the last archive alone
+    evicted every earlier vendor from `project.vendors`, so `inventory_documents`
+    never walked their files (they were not extracted, merely absent) and the
+    stale-vendor sweep then deleted whatever an earlier run had stored for them.
+    Withdrawal is removing the folder — the test below — never uploading another.
+    """
+    root = str(tmp_path)
+    create_project(root, "P", target_currency="USD")
+
+    z1 = tmp_path / "adpower.zip"
+    z1.write_bytes(_zip({"ADPOWER/Quotation.txt": b"base price 1200"}))
+    unpack_vendor_zip(root, "p", str(z1))
+
+    z2 = tmp_path / "mkon.zip"
+    z2.write_bytes(_zip({"MKON/Quotation.txt": b"base price 900"}))
+    returned = unpack_vendor_zip(root, "p", str(z2))
+
+    assert load_project(root, "p").vendors == ["ADPOWER", "MKON"]
+    assert returned == ["ADPOWER", "MKON"], \
+        "the portal prints this list back as the project's roster"
+    assert {d.vendor for d in inventory_documents(root, "p")} == {"ADPOWER", "MKON"}
+
+    run_ingestion(root, "p", _client())
+
+    assert snapshots.list_fact_vendors(root, "p") == ["ADPOWER", "MKON"], \
+        "the earlier archive's vendor must still be extracted"
+    assert sorted(r["vendor"] for r in
+                  load_dataset(root, "p")["comparison"]["rows"]) == ["ADPOWER", "MKON"]
+    assert "vendor.pruned" not in [e.action for e in events.read_events(root, "p")], \
+        "a vendor whose folder is still on disk was never withdrawn"
+
+
 def test_withdrawn_vendor_is_dropped_from_the_store_and_the_comparison(tmp_path):
     root = _project(tmp_path)
     run_ingestion(root, "p", _client())

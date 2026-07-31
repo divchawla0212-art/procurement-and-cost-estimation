@@ -69,10 +69,24 @@ def _is_skippable(name: str) -> bool:
     return (not base) or normalized.startswith("__MACOSX") or base.startswith(".") or base.startswith("~$")
 
 
+def list_vendor_dirs(root: str, slug: str) -> list[str]:
+    """The vendors that have actually been uploaded, read off the filesystem.
+
+    `vendors/` is the ground truth for the roster, not any single archive: a
+    buyer sends one ZIP per vendor as each bid arrives, so "what this archive
+    contained" and "what this project has" are different questions.
+    """
+    vdir = os.path.join(_project_dir(root, slug), "vendors")
+    if not os.path.isdir(vdir):
+        return []
+    return sorted(v for v in os.listdir(vdir)
+                  if os.path.isdir(os.path.join(vdir, v)))
+
+
 def unpack_vendor_zip(root: str, slug: str, zip_path: str) -> list[str]:
+    """Unpack one vendor archive and return the project's full vendor roster."""
     _validate_slug(root, slug)
     vendors_dir = os.path.realpath(os.path.join(_project_dir(root, slug), "vendors"))
-    vendors: set[str] = set()
     with zipfile.ZipFile(zip_path) as zf:
         for info in zf.infolist():
             name = info.filename
@@ -81,15 +95,20 @@ def unpack_vendor_zip(root: str, slug: str, zip_path: str) -> list[str]:
             dest = os.path.realpath(os.path.join(vendors_dir, name))
             if not (dest == vendors_dir or dest.startswith(vendors_dir + os.sep)):
                 raise ValueError(f"Unsafe path in archive: {name}")
-            top = name.replace("\\", "/").split("/")[0]
-            vendors.add(top)
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             with zf.open(info) as src, open(dest, "wb") as out:
                 out.write(src.read())
+    # Scanned from disk, never from this archive's top-level names. Assigning
+    # only what the ZIP carried silently withdrew every vendor uploaded before
+    # it: `inventory_documents` walks `project.vendors`, so their files were
+    # never classified or extracted, and the stale-vendor sweep in
+    # `run_ingestion` then deleted the facts an earlier run had stored for
+    # them. A vendor is withdrawn by removing its folder, which this still
+    # reports, because then the folder is genuinely gone.
     project = load_project(root, slug)
-    project.vendors = sorted(vendors)
+    project.vendors = list_vendor_dirs(root, slug)
     save_project(root, project)
-    return sorted(vendors)
+    return list(project.vendors)
 
 
 def vendor_files(root: str, slug: str, vendor: str) -> list[str]:

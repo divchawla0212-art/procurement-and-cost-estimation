@@ -1,6 +1,8 @@
 import os, json
 from pydantic import BaseModel
 
+from shared.llm.anthropic_client import coerce_structured
+
 
 class OpenAIClient:
     supports_vision = True
@@ -23,4 +25,8 @@ class OpenAIClient:
             response_format=self._response_format(output_schema),
             messages=[{"role": "user", "content": f"{prompt}\n\n{context_text}"}],
         )
-        return json.loads(resp.choices[0].message.content)
+        # same seam as the Claude adapters: an envelope around the structure,
+        # or a payload naming no field of the schema, must not validate into a
+        # record of defaults that reports success
+        return coerce_structured(
+            json.loads(resp.choices[0].message.content), output_schema)

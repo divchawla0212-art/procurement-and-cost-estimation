@@ -151,6 +151,77 @@ def test_an_undecodable_list_field_raises_rather_than_reading_as_empty(monkeypat
     assert "facts" in str(exc.value)
 
 
+def test_a_payload_wrapped_in_a_parameters_envelope_is_unwrapped(monkeypatch):
+    """The live shape that blanked two real quotations.
+
+    The model nests the whole structure under "parameters" — not every call,
+    which is what made it look like a per-document extraction problem. Pydantic
+    ignores the unknown key, so every declared field falls back to its default
+    and a fully-populated extraction validates cleanly as an empty one that
+    still reports `ok`.
+    """
+    _patch(monkeypatch, _Message(
+        [_Block("tool_use", input={"parameters": {"facts": _ENTRIES, "label": "x"}})],
+        "tool_use"))
+    out = AnthropicClient(api_key="dummy").classify_structure("p", _Listy, "ctx")
+    assert out == {"facts": _ENTRIES, "label": "x"}
+
+
+def test_an_envelope_is_unwrapped_whatever_the_wrapper_is_called(monkeypatch):
+    # "parameters" is what was observed, but the rule is structural: a lone key
+    # the schema does not declare, wrapping a dict, is never the answer itself
+    _patch(monkeypatch, _Message(
+        [_Block("tool_use", input={"input": {"header_row": 2, "columns": {}}})],
+        "tool_use"))
+    out = AnthropicClient(api_key="dummy").classify_structure("p", _Layout, "ctx")
+    assert out == {"header_row": 2, "columns": {}}
+
+
+def test_a_lone_key_the_schema_declares_is_never_unwrapped(monkeypatch):
+    # _Listy declares `facts`, so this is the field's own value, not an
+    # envelope — unwrapping it would discard the extraction it holds
+    _patch(monkeypatch, _Message(
+        [_Block("tool_use", input={"facts": _ENTRIES})], "tool_use"))
+    out = AnthropicClient(api_key="dummy").classify_structure("p", _Listy, "ctx")
+    assert out == {"facts": _ENTRIES}
+
+
+def test_the_whole_structure_returned_as_a_string_on_a_scalar_field_is_recovered(monkeypatch):
+    """Third live shape on the same two quotations, after the envelope fix.
+
+    The entire JSON answer arrives as the *string value of one scalar field* —
+    `{"base_price": "{\\"currency\\": \\"EUR\\", \\"base_price\\": 1110836, ...}"}`.
+    Only list and dict fields were decoded from strings, so a float field held
+    the whole structure and validation failed on it.
+
+    The recovery stays narrow so it cannot eat a real value: the string must
+    parse as a JSON *object* that names at least one schema field besides the
+    one holding it. "50" on a value field decodes to a number, not an object,
+    and is still passed through untouched.
+    """
+    payload = {"header_row": 7, "columns": {"a": 1}}
+    _patch(monkeypatch, _Message(
+        [_Block("tool_use", input={"header_row": json.dumps(payload)})], "tool_use"))
+    out = AnthropicClient(api_key="dummy").classify_structure("p", _Layout, "ctx")
+    assert out == payload
+
+
+def test_a_payload_naming_no_field_of_the_schema_raises(monkeypatch):
+    """Defence behind the unwrap: never let a blank validate as a real answer.
+
+    Every field of a quotation carries a default, so an unrecognisable payload
+    validates into an all-defaults record — currency "", base_price 0.0 — and
+    is stored as a successful extraction. That is the store invariant in
+    CLAUDE.md ("missing data is never coerced to a passing or zero value")
+    breaking silently. Raising routes it to the extractor's failure path, which
+    keeps the previously-good record and writes the reason into notes.
+    """
+    _patch(monkeypatch, _Message([_Block("tool_use", input={})], "tool_use"))
+    with pytest.raises(RuntimeError) as exc:
+        AnthropicClient(api_key="dummy").classify_structure("p", _Listy, "ctx")
+    assert "no field" in str(exc.value).lower()
+
+
 @pytest.mark.skipif(not os.getenv("ANTHROPIC_API_KEY"), reason="no ANTHROPIC_API_KEY")
 def test_live_classify_structure_returns_dict():
     client = AnthropicClient()

@@ -8,6 +8,7 @@ from procurement.pipeline import run_ingestion, load_dataset
 from procurement.pdf_llm import transcribe_pdf
 from procurement.quote_select import pick_quote
 from shared.llm.factory import get_client
+from portal.views import comparison as comparison_view
 from portal.views import statement as statement_view
 
 load_dotenv()  # load a local .env if present (see .env.example)
@@ -141,6 +142,9 @@ if st.button("Run ingestion", type="primary", disabled=not project.vendors):
 
 # --- Results ---
 st.markdown("### 5. Results")
+# Rendered before the statement: when this roster is present the pre-reviewed
+# comparison is the answer the reviewer came for, and it needs no ingestion run.
+comparison_view.render(project.vendors)
 statement_view.render(ROOT, project.slug)
 
 dataset = load_dataset(ROOT, project.slug)

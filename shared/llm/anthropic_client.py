@@ -37,8 +37,91 @@ def check_truncated(stop_reason: str | None, model: str) -> None:
             "the document.")
 
 
+_MAX_ENVELOPE_DEPTH = 3
+
+
+def unwrap_envelope(data: dict, output_schema: type[BaseModel]) -> dict:
+    """Strip a wrapper the model put around the whole structure.
+
+    Observed live on real quotations: the entire answer arrives nested under
+    `parameters` — `{"parameters": {"currency": "EUR", "base_price": ...}}` —
+    and only on some calls, which is what disguised it as a per-document
+    extraction problem. Pydantic ignores unknown keys, so the wrapped payload
+    validates into a record with every field at its default and is stored as a
+    successful extraction of nothing.
+
+    The test is structural, not a list of known wrapper names: a payload of one
+    key that the schema does not declare, holding a dict, cannot be the answer
+    itself. A lone key the schema *does* declare is that field's value and is
+    left alone, so a single-field schema is never mistaken for an envelope.
+    """
+    fields = set(output_schema.model_fields)
+    for _ in range(_MAX_ENVELOPE_DEPTH):
+        if len(data) != 1 or (set(data) & fields):
+            break
+        inner = next(iter(data.values()))
+        if not isinstance(inner, dict):
+            break
+        data = inner
+    return data
+
+
+def recover_stringified_envelope(data: dict, output_schema: type[BaseModel]) -> dict:
+    """Recover the structure when it arrives as a string on one scalar field.
+
+    Observed live on the same quotations the `parameters` envelope hit, and
+    only on some calls: the whole answer comes back as the string value of a
+    single field — `{"base_price": "{\\"currency\\": \\"EUR\\", ...}"}`. The
+    list/dict decoding below cannot reach it, because `base_price` is a float,
+    so the string reached pydantic and failed validation on that one field.
+
+    Deliberately narrow, so it can never swallow a value the vendor actually
+    printed: the string must parse as a JSON *object* naming at least one
+    schema field *other* than the one carrying it. `"50"` decodes to a number
+    rather than an object and is left alone, and `{"facts": "{\\"facts\\":
+    [...]}"}` — a list field wrapped in its own envelope — names no other
+    field, so it still falls through to the list decoding that handles it.
+    """
+    fields = set(output_schema.model_fields)
+    for name, value in data.items():
+        if name not in fields or not isinstance(value, str):
+            continue
+        try:
+            decoded = json.loads(value)
+        except ValueError:
+            continue
+        if isinstance(decoded, dict) and (set(decoded) & fields) - {name}:
+            return decoded
+    return data
+
+
+def require_known_field(data: dict, output_schema: type[BaseModel]) -> None:
+    """Reject a payload naming nothing the schema declares.
+
+    Defence behind `unwrap_envelope`, for the shapes it cannot repair. Every
+    field of a quotation carries a default, so such a payload validates into an
+    all-defaults record — currency "", base_price 0.0 — that reports `ok`. That
+    silently breaks the store invariant "missing data is never coerced to a
+    passing or zero value", and the zero then flows into the comparison as a
+    real bid. Raising routes it to each extractor's failure path, which keeps
+    the previously-good record and writes the reason into DocumentRecord.notes.
+    """
+    if set(data) & set(output_schema.model_fields):
+        return
+    raise RuntimeError(
+        f"the model returned no field of {output_schema.__name__}: "
+        f"got keys {sorted(data)!r}, expected any of "
+        f"{sorted(output_schema.model_fields)!r}. Treating this as an empty "
+        "extraction would store defaults as if they were the vendor's terms.")
+
+
 def coerce_structured(data: dict, output_schema: type[BaseModel]) -> dict:
-    """Decode list-valued fields the model returned as a JSON string.
+    """Normalise a model's structured answer, or raise if it cannot be read.
+
+    Unwraps an envelope around the whole structure (nested under a wrapper key,
+    or stringified onto one scalar field), rejects a payload that names nothing
+    the schema declares, then decodes list-valued fields returned as a JSON
+    string.
 
     Observed against the real client MR: `requirements` came back as a string
     holding the whole `{"requirements": [...]}` envelope. Callers then do
@@ -51,7 +134,10 @@ def coerce_structured(data: dict, output_schema: type[BaseModel]) -> dict:
     field is left exactly as it arrived, because "50" on a value field is the
     vendor's printed text, not a number waiting to be parsed.
     """
-    out = dict(data)
+    out = unwrap_envelope(dict(data), output_schema)
+    out = recover_stringified_envelope(out, output_schema)
+    require_known_field(out, output_schema)
+    out = dict(out)
     for name, field in output_schema.model_fields.items():
         if typing.get_origin(field.annotation) not in (list, dict):
             continue
