@@ -19,12 +19,31 @@ python -m pytest
 Run from the repo root. Tests are key-free — they use `shared/llm/mock_client.py`,
 and no test may require `ANTHROPIC_API_KEY`.
 
-**One test fails for everyone with a populated `.env`, and it is not yours to
+**One test fails for anyone with a populated `.env`, and it is not yours to
 fix in passing:** `tests/test_portal_app.py::test_missing_api_key_does_not_block_creation`.
 `portal/app.py` calls `load_dotenv()`, which repopulates `ANTHROPIC_API_KEY`
-after that test's `monkeypatch.delenv`, so it passes or fails depending on the
-developer's `.env`. The current green baseline is therefore **272 passed,
-3 skipped, 1 failed**. Anything else is a real regression.
+after that test's `monkeypatch.delenv`. `load_dotenv()` resolves the file
+relative to `portal/app.py`, not to your working directory, so running pytest
+from somewhere else does not dodge it — only the absence of a `.env` does.
+
+There are therefore **two** green baselines, and both are correct:
+
+| where | baseline |
+|---|---|
+| a developer workstation, `.env` and `data/` present | **627 passed, 3 skipped, 1 failed** |
+| CI, and any clean checkout | **625 passed, 6 skipped, 0 failed** |
+
+Anything else is a real regression.
+
+CI being green is not luck. With no `.env` the key stays deleted, the advisory
+warning fires, and the test passes. The three extra skips are not credential
+failures: they are the tests guarded on the untracked `data/` sample directory,
+which a workstation has and a fresh checkout does not.
+
+CI runs that same command on every pull request into `main`, via
+[`.github/workflows/tests.yml`](.github/workflows/tests.yml) — Ubuntu, Python
+3.12, no provider secrets. Keep it that way: a test that needs a key belongs
+behind a skip guard, not behind a repository secret.
 
 The portal runs via the `procurement-portal` entry in `.claude/launch.json` —
 use the preview tooling, not a bare `streamlit run`.

@@ -1,0 +1,54 @@
+# Test suite gate for pull requests into main.
+#
+# No ANTHROPIC_API_KEY (or any other provider secret) is configured here, and
+# that is deliberate. The suite is key-free by design — it runs against
+# shared/llm/mock_client.py — so CI needs no secret to be meaningful. Supplying
+# one would convert the skip-guarded live tests into billed API calls on every
+# pull request, put network flakiness in the merge gate, and widen the key's
+# blast radius to fork PRs. The trade is stated plainly: the live-provider paths
+# are not exercised here.
+#
+# Expected on a clean checkout: 625 passed, 6 skipped, 0 failed.
+#
+# Six skips are expected, not a defect: three need provider credentials, three
+# need a `data/` sample directory that is not tracked in git.
+#
+# Note that a local run differs, and is not a regression. Anyone with a
+# populated `.env` sees one failure that CI does not — see the "Running things"
+# section of CLAUDE.md for why.
+
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A newer push to the same branch makes an in-flight run obsolete.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # 3.12 is the requires-python floor in pyproject.toml. There is no version
+      # matrix on purpose: nothing consumes this repo as a library, so the only
+      # interpreter that matters is the one the code targets.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package and test dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Run tests
+        run: python -m pytest -q
