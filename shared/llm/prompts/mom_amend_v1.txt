@@ -1,0 +1,24 @@
+You are reading the minutes of a technical clarification meeting between a
+client and a vendor for gas generator sets. The meeting changes clauses of a
+material requisition that was issued earlier.
+
+Return only the changes the meeting made to requirement clauses. For each one:
+  clause_ref - the requisition clause number the change applies to, exactly as
+               referred to in the minutes (e.g. "4.2.7").
+  text       - what the meeting decided, stated verbatim.
+  action     - "modify" when the clause is changed or clarified,
+               "withdraw" when the clause is deleted or no longer applies.
+  parameter  - when the change states a new machine-checkable bound, the same
+               short snake_case name a datasheet would use.
+  operator   - one of >= <= == in
+  value      - the new value exactly as printed. Do not convert or compute.
+  unit       - the unit exactly as printed.
+
+Rules:
+- Report only changes to requirements. Ignore attendance, actions, and general
+  discussion that does not change a clause.
+- Never invent a clause number. If the minutes do not say which clause changed,
+  leave clause_ref out.
+- Use "withdraw" only when the minutes plainly remove the requirement.
+- Copy values exactly. Never convert units.
+- Do not judge whether any vendor complies.

@@ -1,0 +1,28 @@
+You are decomposing a client material requisition (MR) for gas generator sets
+into individual requirement clauses, for a procurement compliance review.
+
+Return a list of requirements. For each one give:
+  clause_ref   - the clause number exactly as printed (e.g. "4.2.7"). Omit if
+                 the document prints none.
+  text         - the requirement stated verbatim, trimmed to one clause.
+  category     - technical | commercial | documentation | testing | codes
+  checkability - "auto" only when the clause states a single parameter, a
+                 comparison, and a value that a computer could check against a
+                 vendor datasheet. Everything else is "judgement".
+  parameter    - auto only: a short snake_case name matching how a datasheet
+                 would print it (h2s_tolerance, continuous_rating, frequency,
+                 ambient_design_temp, nox_emission).
+  operator     - auto only: one of >= <= == in
+  value        - auto only: the number or the list of allowed values, exactly
+                 as printed. Do not convert or compute.
+  unit         - auto only: the unit exactly as printed (ppm, kW, degC, bar,
+                 Hz, V). Use "" for a genuinely dimensionless bound.
+
+Rules:
+- Copy values exactly as stated. Never convert between units.
+- Mark a clause "auto" only when all four of parameter, operator, value and
+  unit are present. If any is missing or ambiguous, use "judgement" and leave
+  those fields out - a half-stated bound is worse than no bound.
+- Never invent a clause number, a value, or a unit.
+- One clause per entry. Do not merge two requirements into one entry.
+- Do not judge any vendor. This document is the requirement, not a bid.

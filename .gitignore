@@ -216,3 +216,12 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+.superpowers/
+*.pyc
+cost_dataset.json
+
+# Confidential client tender/cost documents — never commit
+data/
+
+# Portal runtime data (uploaded docs, generated datasets) — may hold confidential files
+projects/

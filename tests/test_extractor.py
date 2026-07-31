@@ -1,0 +1,82 @@
+import openpyxl
+from tests.fixtures.make_mini_boq import make
+from cost_estimation.config.loader import load_config
+from cost_estimation.ingestion.extractor import ingest_workbook
+from shared.llm.mock_client import MockLLMClient
+
+
+def test_ingest_workbook_builds_workpackage(tmp_path):
+    path = make(str(tmp_path / "COSTING mini Electrical.xlsx"))
+    client = MockLLMClient(response={"header_row": 7, "columns": {
+        "code": 2, "description": 3, "uom": 5, "quantity": 6, "unit_price": 11, "total": 12}})
+    doc, packages = ingest_workbook(path, client, load_config())
+
+    assert doc.doc_type.value == "costing_workbook"
+    assert len(packages) == 1
+    wp = packages[0]
+    assert wp.discipline == "electrical"
+    assert len(wp.cost_items) == 2
+    # No summary rollup attached, and all item arithmetic reconciles ->
+    # reconciliation must leave a clean workbook's status at "ok".
+    assert doc.extraction_status == "ok"
+
+
+def test_ingest_workbook_attaches_summary_rollup(tmp_path):
+    """End-to-end: ingest_workbook must locate a 'Summary' sheet, parse it,
+    and attach the matching SummaryRollup onto the work package it built —
+    exercising the wiring in extractor.py itself, not just parse_summary/
+    attach_rollups in isolation."""
+    path = str(tmp_path / "COSTING mini with Summary.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sect. 3 D - Electrical"
+    ws["B7"] = "Item"; ws["C7"] = "Description"; ws["E7"] = "UoM"
+    ws["F7"] = "Total Quantity (Q)"; ws["K7"] = "Unit Price"; ws["L7"] = "TOTAL"
+    ws["B8"] = "E.05.01"; ws["C8"] = "LV cable"; ws["E8"] = "m"
+    ws["F8"] = 10; ws["K8"] = 5.0; ws["L8"] = 50.0
+
+    summary = wb.create_sheet("Summary")
+    summary["E2"] = "Total Manhours"; summary["F2"] = "Materials"; summary["G2"] = "Consumables"
+    summary["H2"] = "Installation"; summary["J2"] = "Total Value (USD)"
+    # Label matches the data sheet's title, so attach_rollups matches by
+    # normalized name (mirrors _mini_summary in tests/test_summary_parser.py).
+    summary["C3"] = "Sect. 3 D - Electrical"; summary["J3"] = 99999.0
+    wb.save(path)
+
+    client = MockLLMClient(response={"header_row": 7, "columns": {
+        "code": 2, "description": 3, "uom": 5, "quantity": 6, "unit_price": 11, "total": 12}})
+    doc, packages = ingest_workbook(path, client, load_config())
+
+    assert len(packages) == 1
+    wp = packages[0]
+    assert wp.summary_rollup is not None
+    assert wp.summary_rollup.total_value == 99999.0
+    # Item totals sum to 50.0, but the attached rollup says 99999.0 ->
+    # reconciliation must be wired into the pipeline and flag this.
+    assert doc.extraction_status == "discrepancies"
+
+
+def test_ingest_workbook_default_mock_client_does_not_crash(tmp_path):
+    """cost-est ingest with LLM_PROVIDER unset resolves to MockLLMClient(response={}),
+    whose empty response makes SheetLayout.model_validate({}) raise a ValidationError
+    inside map_sheet. That single bad sheet must not abort the whole workbook --
+    ingest_workbook must degrade gracefully instead of raising."""
+    path = make(str(tmp_path / "COSTING mini Electrical.xlsx"))
+    client = MockLLMClient(response={})
+    doc, packages = ingest_workbook(path, client, load_config())
+
+    assert doc.extraction_status == "failed"
+    assert packages == []
+
+
+def test_ingest_workbook_corrupt_file_returns_failed_status(tmp_path):
+    """A file that openpyxl can't open at all (corrupt/not really an xlsx) must
+    not raise out of ingest_workbook -- it should surface as a failed Document
+    with no work packages."""
+    path = tmp_path / "broken.xlsx"
+    path.write_bytes(b"not a real xlsx file")
+    client = MockLLMClient(response={"header_row": 7, "columns": {"code": 2}})
+    doc, packages = ingest_workbook(str(path), client, load_config())
+
+    assert doc.extraction_status == "failed"
+    assert packages == []

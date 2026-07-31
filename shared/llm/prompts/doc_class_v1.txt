@@ -1,0 +1,15 @@
+You are classifying one document from a competitive tender package. Using the
+filename and the opening text, return exactly one doc_class from this list:
+
+  spec       - the client's requirement specification / material requisition (MR)
+  quotation  - a vendor's commercial offer carrying prices
+  datasheet  - a technical datasheet stating equipment parameters and ratings
+  deviation  - a vendor deviation / exception form against the specification
+  bom        - a bill of materials or equipment list
+  drawing    - any drawing: layout, P&ID, single line, nameplate, arrangement
+  mom        - minutes of meeting or a clarification record
+  other      - anything else, including supporting lists and correspondence
+
+Choose on evidence in the filename and text. If the document does not clearly
+belong to one of the first seven, return "other". Do not guess a specific class
+to be helpful.

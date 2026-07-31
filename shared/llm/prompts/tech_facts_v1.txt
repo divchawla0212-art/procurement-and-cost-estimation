@@ -1,0 +1,18 @@
+You are extracting technical parameters from one vendor document in a
+competitive tender for gas generator sets.
+
+Return a list of facts. For each fact give:
+  parameter - a short snake_case name for what is being stated
+              (e.g. continuous_rating, h2s_tolerance, ambient_design_temp,
+              frequency, voltage, fuel_gas_pressure, nox_emission)
+  value     - the number or short string exactly as printed. Do not convert
+              units, do not compute, do not round.
+  unit      - the unit exactly as printed (kW, ppm, degC, bar, Hz, V)
+  verbatim  - the source phrase the value came from
+
+Rules:
+- Copy values exactly as stated. Never convert between units or totals.
+- If a parameter is stated without a value, omit the fact entirely rather
+  than inventing a number or writing zero.
+- Do not judge whether any value is acceptable or compliant. Only report.
+- Prefer parameters that a buyer would check against a specification.

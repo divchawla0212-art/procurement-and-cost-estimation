@@ -1,0 +1,23 @@
+column_roles:
+  code: ["item", "item no", "revised item", "item no."]
+  description: ["description", "item description"]
+  uom: ["uom", "unit"]
+  quantity: ["qty", "total quantity", "total quantity (q)"]
+  labour: ["unitary manpower", "unitary manpower (labour)", "unitary labour"]
+  equipment: ["unitary equipment"]
+  material: ["unitary material", "unitary material (supply)", "materials", "material"]
+  consumables: ["consumables"]
+  installation: ["installation"]
+  unit_price: ["unit price", "unit price (b+c+d)"]
+  total: ["total", "total erec+mat", "total value", "total value (usd)"]
+disciplines:
+  "3A": civil
+  "3B": steel
+  "3C": mechanical
+  "3D": electrical
+  "3E": instrumentation
+  "3F": insulation
+  "3G": painting
+areas: ["TF", "IA", "JPS", "JD", "IPS"]
+currency_default: "USD"
+manhour_rate_default: 70.0
