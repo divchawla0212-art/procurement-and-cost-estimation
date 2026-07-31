@@ -40,7 +40,7 @@ def render(root: str, slug: str) -> None:
     st.markdown(statement_to_html(statement), unsafe_allow_html=True)
     st.caption(
         "Blank means the quotation did not state it — never zero. "
-        "A `*` on FINAL VALUE means the column excludes something; hover it."
+        "A star on FINAL VALUE means the column excludes something; hover it."
     )
 
     c1, c2 = st.columns(2)

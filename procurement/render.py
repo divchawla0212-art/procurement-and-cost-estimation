@@ -22,27 +22,40 @@ _SUBS = ("Qty", "Unit Price", "Total Price")
 
 _CSS = """
 <style>
-.cs-wrap { overflow-x: auto; }
+.cs-wrap { overflow-x: auto; background: #fff; padding: 10px;
+           border-radius: 6px; }
 .cs { border-collapse: collapse; font-family: Calibri, Arial, sans-serif;
       font-size: 13px; width: max-content; min-width: 100%; }
-.cs th, .cs td { border: 1px solid #9e9e9e; padding: 3px 8px; white-space: nowrap; }
+/* `color` is not optional. Every background here is a light spreadsheet
+   tint, and the host page may be a dark theme whose inherited font colour
+   would be near-white — light text on pale yellow is invisible. This sheet
+   is a document, not app chrome, so it commits to its own light palette
+   rather than following the theme. */
+.cs th, .cs td { border: 1px solid #9e9e9e; padding: 3px 8px; white-space: nowrap;
+                 color: #1a1a1a; }
 .cs .desc { text-align: left; min-width: 260px; position: sticky; left: 0;
-            background: #e0e0e0; font-weight: 600; z-index: 2; }
+            background: #e0e0e0; font-weight: 600; z-index: 2; color: #1a1a1a; }
 .cs thead .desc { background: #d5d5d5; }
 .cs .vendor { color: #fff; font-weight: 700; text-align: center; letter-spacing: .3px; }
 .cs .rev { font-weight: 700; text-align: center; }
 .cs .sub { font-weight: 700; text-align: center; background: #fff9c4; }
 .cs .num { text-align: right; font-variant-numeric: tabular-nums; }
 .cs .mid { text-align: center; }
+/* max-width, not just white-space:normal. The table is `width: max-content`
+   so it grows to the longest line: without a cap, one vendor's five-line
+   payment terms stretch every column off-screen. */
 .cs .note { text-align: center; font-style: italic; color: #424242;
-            white-space: normal; min-width: 160px; }
+            white-space: normal; min-width: 160px; max-width: 340px; }
 .cs .final td, .cs .final th { font-weight: 700; font-size: 14px; }
 .cs .band td { font-weight: 700; }
 .cs .hot { color: #c62828; }
 .cs .cool { color: #1a237e; }
 .cs .missing { color: #9e9e9e; }
 .cs caption { caption-side: top; font-weight: 700; font-size: 18px;
-              padding: 6px 0 10px; letter-spacing: .5px; }
+              padding: 6px 0 10px; letter-spacing: .5px; color: #1a1a1a; }
+.cs-empty { background: #fff3e0; border: 1px solid #e6a23c; color: #6d4c00;
+            padding: 10px 12px; border-radius: 6px; margin-bottom: 10px;
+            font-family: Calibri, Arial, sans-serif; font-size: 13px; }
 </style>
 """
 
@@ -147,7 +160,10 @@ def _final_row(statement: Statement, row) -> str:
     A column with no total is not a candidate — an unknown price is not a
     cheap one, and that is the whole point of blanking it."""
     totals = {v: c.total for v, c in row.cells.items() if c.total is not None}
-    highest = max(totals, key=totals.get) if totals else None
+    # Only when there is something to compare against. A single-vendor
+    # project has no "most expensive" column, and colouring its one bid red
+    # invents a judgement out of a comparison that was never made.
+    highest = max(totals, key=totals.get) if len(totals) > 1 else None
     cells = []
     for i, vendor in enumerate(statement.vendors):
         _, light = _BANDS[i % len(_BANDS)]
@@ -172,13 +188,30 @@ def statement_to_html(statement: Statement) -> str:
     from a vendor document goes through `html.escape`."""
     if not statement.vendors:
         return "<p><em>No vendors in this project yet.</em></p>"
+
+    # A vendor whose quotation yielded no price at all produces no priced
+    # cells, so the sheet draws two attribute rows and looks broken. It is
+    # not broken — it is refusing to print a zero — but a reader cannot tell
+    # those apart from the table alone, so say it in words above the table.
+    priced = {v for row in statement.rows if row.kind == "priced"
+              for v, c in row.cells.items() if c.total is not None}
+    silent = [v for v in statement.vendors if v not in priced]
+    banner = ""
+    if silent:
+        names = ", ".join(_esc(v) for v in silent)
+        banner = (f'<div class="cs-empty"><strong>No prices extracted for '
+                  f'{names}.</strong> The quotation was read but no base price '
+                  f'was found, so every priced row is blank rather than zero. '
+                  f'Re-run ingestion, or open the vendor\'s quotation to check '
+                  f'it states a price in a form the extractor can read.</div>')
+
     body = []
     for row in statement.rows:
         if not row.cells and row.kind != "priced":
             continue                    # an empty text row is noise, not data
         body.append(_final_row(statement, row) if row.key == "final_value"
                     else _row(statement, row))
-    return (f'{_CSS}<div class="cs-wrap"><table class="cs">'
+    return (f'{_CSS}{banner}<div class="cs-wrap"><table class="cs">'
             f'<caption>COMPARATIVE STATEMENT — {_esc(statement.project)}</caption>'
             f'<thead>{_header(statement)}</thead>'
             f'<tbody>{"".join(body)}</tbody></table></div>')
