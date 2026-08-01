@@ -225,3 +225,8 @@ data/
 
 # Portal runtime data (uploaded docs, generated datasets) — may hold confidential files
 projects/
+
+# Claude Code's local worktree scratch area. Each entry is a checkout of a branch
+# this repo already has, so committing one adds nothing and stages it as a gitlink.
+# Not `.claude/` — launch.json under it is tracked on purpose (see CLAUDE.md).
+.claude/worktrees/
