@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from procurement import project as proj
 from procurement.matrix import GROUP_ORDER, build_matrix, rows_in_group
+from procurement.statement import build_statement
 
 ROOT = os.environ.get("PROCUREMENT_PROJECTS_ROOT", "projects")
 
@@ -75,3 +76,27 @@ def get_compliance_matrix(slug: str) -> dict:
         for group in GROUP_ORDER
     }
     return payload
+
+
+@app.get("/api/projects/{slug}/summary")
+def get_summary(slug: str) -> dict:
+    """Lightweight dashboard readout: counts and coverage, no matrix rows."""
+    project = _load_or_404(slug)
+    matrix = build_matrix(ROOT, slug)
+    group_counts = {group: len(rows_in_group(matrix, group)) for group in GROUP_ORDER}
+    return {
+        "slug": project.slug,
+        "name": project.name,
+        "vendors": list(project.vendors),
+        "target_currency": project.target_currency,
+        "generation": project.generation,
+        "requirement_count": len(matrix.rows),
+        "coverage": matrix.coverage.model_dump(),
+        "group_counts": group_counts,
+    }
+
+
+@app.get("/api/projects/{slug}/statement")
+def get_statement(slug: str) -> dict:
+    _load_or_404(slug)
+    return build_statement(ROOT, slug).model_dump()

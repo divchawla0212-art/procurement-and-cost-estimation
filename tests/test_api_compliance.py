@@ -87,6 +87,29 @@ def test_empty_project_returns_empty_matrix_not_error(tmp_path, monkeypatch):
     assert body["vendors"] == []
 
 
+def test_summary_reports_counts_and_coverage(tmp_path, monkeypatch):
+    _seed(str(tmp_path))
+    client = _client(tmp_path, monkeypatch)
+    response = client.get("/api/projects/p/summary")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["vendors"] == ["KERUI"]
+    assert body["requirement_count"] == 2
+    assert body["coverage"]["auto_cells"] == 1
+    assert set(body["group_counts"]) == {"not_matched", "needs_human", "matched"}
+
+
+def test_statement_endpoint_returns_vendors_and_rows(tmp_path, monkeypatch):
+    _seed(str(tmp_path))
+    client = _client(tmp_path, monkeypatch)
+    response = client.get("/api/projects/p/statement")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["vendors"] == ["KERUI"]
+    assert isinstance(body["rows"], list)
+    assert body["currency"]
+
+
 def test_health(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     assert client.get("/api/health").json() == {"ok": True}
