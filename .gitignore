@@ -230,3 +230,6 @@ projects/
 # this repo already has, so committing one adds nothing and stages it as a gitlink.
 # Not `.claude/` — launch.json under it is tracked on purpose (see CLAUDE.md).
 .claude/worktrees/
+
+# Isolated worktrees for feature work
+.worktrees/
