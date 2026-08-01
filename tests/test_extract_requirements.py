@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 from procurement.extract_requirements import (REQUIREMENTS_PROMPT_VERSION,
@@ -133,6 +135,36 @@ def test_a_provider_failure_returns_failed_with_a_reason_and_does_not_raise(tmp_
         "d1", _spec(tmp_path), StubClient({}, raises=True))
     assert (records, status) == ([], "failed")
     assert "provider unavailable" in notes
+
+
+def test_an_unreadable_docx_is_recorded_as_failed_never_extracted_from_mojibake(tmp_path):
+    """The whole point of the .docx branch. Before it, a Word file fell through
+    to a UTF-8 raw read of a ZIP container, and the resulting mojibake reached
+    the model as if it were clause text - status `ok`, garbage requirements.
+    An unreadable one must reach the store as `failed` with a stated reason."""
+    bad = tmp_path / "MR-4471.docx"
+    bad.write_bytes(b"not a real docx")
+    client = StubClient(_TWO_CLAUSES)
+
+    records, status, notes = extract_requirements("d1", str(bad), client)
+
+    assert (records, status) == ([], "failed")
+    assert "docx" in notes.lower()
+    assert client.calls == []  # the model was never asked to read garbage
+
+
+def test_a_word_requisition_reaches_the_model_as_text_including_table_clauses(tmp_path):
+    """Paragraph *and* table clauses must be in the context the extractor sends;
+    dropping tables would be a quieter version of the same bug."""
+    fixture = os.path.join(os.path.dirname(__file__), "fixtures", "rfq_clauses.docx")
+    client = StubClient(_TWO_CLAUSES)
+
+    _, status, notes = extract_requirements("d1", fixture, client)
+
+    assert (status, notes) == ("ok", None)
+    context = client.calls[0]["context_text"]
+    assert "H2S tolerance shall be at least 50 ppm" in context
+    assert "Rated output shall be at least 1500" in context
 
 
 def test_duplicate_clause_refs_in_one_document_do_not_collide_silently(tmp_path):

@@ -30,8 +30,8 @@ There are therefore **two** green baselines, and both are correct:
 
 | where | baseline |
 |---|---|
-| a developer workstation, `.env` and `data/` present | **640 passed, 3 skipped, 1 failed** |
-| CI, and any clean checkout | **638 passed, 6 skipped, 0 failed** |
+| a developer workstation, `.env` and `data/` present | **649 passed, 3 skipped, 1 failed** |
+| CI, and any clean checkout | **647 passed, 6 skipped, 0 failed** |
 
 Anything else is a real regression.
 
