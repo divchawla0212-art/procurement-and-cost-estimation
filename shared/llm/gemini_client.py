@@ -1,6 +1,8 @@
 import os, json
 from pydantic import BaseModel
 
+from shared.llm.anthropic_client import coerce_structured
+
 
 class GeminiClient:
     supports_vision = True
@@ -23,4 +25,7 @@ class GeminiClient:
             },
         )
         resp = model.generate_content(f"{prompt}\n\n{context_text}")
-        return json.loads(resp.text)
+        # same seam as the Claude adapters: an envelope around the structure,
+        # or a payload naming no field of the schema, must not validate into a
+        # record of defaults that reports success
+        return coerce_structured(json.loads(resp.text), output_schema)

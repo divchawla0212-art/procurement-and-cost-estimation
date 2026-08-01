@@ -1,0 +1,466 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>From a Folder of Bids to a Decision — Procurement Comparison Portal</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  body, h1, h2, h3, p, dl, dd, ul, ol { margin: 0; }
+  ul, ol { padding: 0; }
+  img, svg { max-width: 100%; display: block; }
+</style>
+</head>
+<body>
+<style>
+  :root {
+    --paper:     #EEF2F0;
+    --surface:   #FFFFFF;
+    --surface-2: #E3EBE7;
+    --ink:       #142420;
+    --ink-2:     #45564F;
+    --ink-3:     #74847D;
+    --rule:      #CFDAD5;
+    --rule-soft: #DEE7E3;
+
+    /* one hue, seven depths — the narrative runs pale/raw to deep/resolved */
+    --s1: hsl(174 40% 78%);
+    --s2: hsl(174 46% 66%);
+    --s3: hsl(174 52% 55%);
+    --s4: hsl(174 58% 46%);
+    --s5: hsl(174 64% 38%);
+    --s6: hsl(174 70% 31%);
+    --s7: hsl(174 78% 22%);
+    --s-ink: #0A5049;
+    --s-wash: #DCEFEA;
+
+    --shadow: 0 1px 2px rgba(20, 36, 32, .06), 0 8px 20px -12px rgba(20, 36, 32, .28);
+
+    --serif: Georgia, "Iowan Old Style", "Palatino Linotype", "URW Palladio", serif;
+    --sans:  "Segoe UI Variable Text", "Segoe UI", ui-sans-serif, system-ui, -apple-system, "Helvetica Neue", sans-serif;
+    --mono:  ui-monospace, "Cascadia Mono", "Cascadia Code", Consolas, "SF Mono", "Roboto Mono", monospace;
+
+    --measure: 62ch;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper:     #0D1513;
+      --surface:   #131E1B;
+      --surface-2: #182420;
+      --ink:       #E7EEEB;
+      --ink-2:     #AEC0BA;
+      --ink-3:     #7C8C86;
+      --rule:      #24342F;
+      --rule-soft: #1C2925;
+
+      --s1: hsl(174 14% 42%);
+      --s2: hsl(174 24% 46%);
+      --s3: hsl(174 34% 50%);
+      --s4: hsl(174 44% 54%);
+      --s5: hsl(174 55% 58%);
+      --s6: hsl(174 66% 61%);
+      --s7: hsl(174 80% 66%);
+      --s-ink: #8FDCD1;
+      --s-wash: #0F2C28;
+
+      --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 8px 20px -12px rgba(0, 0, 0, .8);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --paper:     #0D1513;
+    --surface:   #131E1B;
+    --surface-2: #182420;
+    --ink:       #E7EEEB;
+    --ink-2:     #AEC0BA;
+    --ink-3:     #7C8C86;
+    --rule:      #24342F;
+    --rule-soft: #1C2925;
+    --s1: hsl(174 14% 42%);
+    --s2: hsl(174 24% 46%);
+    --s3: hsl(174 34% 50%);
+    --s4: hsl(174 44% 54%);
+    --s5: hsl(174 55% 58%);
+    --s6: hsl(174 66% 61%);
+    --s7: hsl(174 80% 66%);
+    --s-ink: #8FDCD1;
+    --s-wash: #0F2C28;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 8px 20px -12px rgba(0, 0, 0, .8);
+  }
+
+  :root[data-theme="light"] {
+    --paper:     #EEF2F0;
+    --surface:   #FFFFFF;
+    --surface-2: #E3EBE7;
+    --ink:       #142420;
+    --ink-2:     #45564F;
+    --ink-3:     #74847D;
+    --rule:      #CFDAD5;
+    --rule-soft: #DEE7E3;
+    --s1: hsl(174 40% 78%);
+    --s2: hsl(174 46% 66%);
+    --s3: hsl(174 52% 55%);
+    --s4: hsl(174 58% 46%);
+    --s5: hsl(174 64% 38%);
+    --s6: hsl(174 70% 31%);
+    --s7: hsl(174 78% 22%);
+    --s-ink: #0A5049;
+    --s-wash: #DCEFEA;
+    --shadow: 0 1px 2px rgba(20, 36, 32, .06), 0 8px 20px -12px rgba(20, 36, 32, .28);
+  }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 54rem;
+    margin: 0 auto;
+    padding: clamp(1.5rem, 4vw, 3.5rem) clamp(1rem, 4vw, 2.5rem) 6rem;
+    display: flex;
+    flex-direction: column;
+    gap: 3rem;
+  }
+
+  /* ---------- header ---------- */
+
+  .head {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: .72rem;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--s-ink);
+    margin: 0;
+  }
+
+  h1 {
+    font-family: var(--serif);
+    font-size: clamp(1.9rem, 5vw, 2.75rem);
+    line-height: 1.12;
+    letter-spacing: -.01em;
+    font-weight: 700;
+    text-wrap: balance;
+    margin: 0;
+  }
+
+  .standfirst {
+    max-width: var(--measure);
+    color: var(--ink-2);
+    font-size: 1.08rem;
+    margin: 0;
+  }
+
+  /* ---------- the spine ---------- */
+
+  .spine {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .stage {
+    display: grid;
+    grid-template-columns: 2.75rem 1fr;
+    column-gap: 1.1rem;
+  }
+
+  .rail {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .marker {
+    width: 2.75rem;
+    height: 2.75rem;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: var(--m-wash, var(--s-wash));
+    border: 2px solid var(--m-c, var(--s4));
+    flex: none;
+    z-index: 1;
+  }
+
+  .marker svg { width: 1.25rem; height: 1.25rem; }
+  .glyph { fill: none; stroke: var(--m-c, var(--s4)); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+
+  .connector {
+    width: 3px;
+    flex: 1 1 auto;
+    min-height: 1.1rem;
+    background: linear-gradient(to bottom, var(--c-from), var(--c-to));
+  }
+
+  .stage:last-child .connector { display: none; }
+
+  .stage-body {
+    padding: 0 0 2.1rem;
+    display: flex;
+    flex-direction: column;
+    gap: .5rem;
+  }
+
+  .stage-tag {
+    font-family: var(--mono);
+    font-size: .64rem;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--m-c, var(--s4));
+  }
+
+  .stage h2 {
+    font-family: var(--serif);
+    font-size: 1.28rem;
+    font-weight: 700;
+    line-height: 1.25;
+    margin: 0;
+    text-wrap: balance;
+  }
+
+  .stage p {
+    max-width: var(--measure);
+    color: var(--ink-2);
+    font-size: .97rem;
+    margin: 0;
+  }
+
+  .stage .fact {
+    margin-top: .15rem;
+    padding-left: .7rem;
+    border-left: 2px solid var(--m-c, var(--s4));
+    font-size: .86rem;
+    color: var(--ink-3);
+    max-width: var(--measure);
+  }
+
+  .stage.emphasis .stage-body {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--m-c, var(--s6));
+    border-radius: 4px;
+    box-shadow: var(--shadow);
+    padding: 1.15rem 1.35rem 1.35rem;
+  }
+
+  /* ---------- outcomes panel ---------- */
+
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: 1.5rem 1.6rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    box-shadow: var(--shadow);
+  }
+
+  .panel h2 {
+    font-family: var(--serif);
+    font-size: 1.15rem;
+    font-weight: 700;
+    margin: 0;
+  }
+
+  .panel ol {
+    list-style: none;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: .9rem;
+  }
+
+  .panel li {
+    display: grid;
+    grid-template-columns: 1.6rem 1fr;
+    column-gap: .7rem;
+    font-size: .93rem;
+    color: var(--ink-2);
+    max-width: var(--measure);
+  }
+
+  .panel li .n {
+    font-family: var(--mono);
+    font-size: .78rem;
+    color: var(--s-ink);
+  }
+
+  .panel li strong { color: var(--ink); font-weight: 600; }
+
+  .kicker {
+    font-family: var(--mono);
+    font-size: .78rem;
+    color: var(--ink-3);
+    margin: 0;
+  }
+
+  @media (max-width: 30rem) {
+    .stage { grid-template-columns: 2.1rem 1fr; column-gap: .8rem; }
+    .marker { width: 2.1rem; height: 2.1rem; }
+    .marker svg { width: 1rem; height: 1rem; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+
+<div class="page">
+
+  <header class="head">
+    <p class="eyebrow">Procurement Comparison Portal</p>
+    <h1>From a folder of vendor files to a decision you can defend</h1>
+    <p class="standfirst">
+      Bids arrive messy, in whatever shape each vendor happens to send them. What comes out the
+      other end is a ranked, checked comparison — with every number traceable to the page it came
+      from. Here's what happens in between.
+    </p>
+  </header>
+
+  <section class="spine">
+
+    <div class="stage" style="--m-c: var(--s1)">
+      <div class="rail">
+        <div class="marker">
+          <svg viewBox="0 0 24 24"><path class="glyph" d="M6 3h9l5 5v13H6z"/><path class="glyph" d="M15 3v5h5"/></svg>
+        </div>
+        <div class="connector" style="--c-from: var(--s1); --c-to: var(--s2);"></div>
+      </div>
+      <div class="stage-body">
+        <p class="stage-tag">Intake</p>
+        <h2>Bids land exactly as vendors send them</h2>
+        <p>PDFs, scans, spreadsheets, Word files, folders within folders — none of it needs to be
+          retyped, reformatted, or filed by hand before anything can happen.</p>
+      </div>
+    </div>
+
+    <div class="stage" style="--m-c: var(--s2)">
+      <div class="rail">
+        <div class="marker">
+          <svg viewBox="0 0 24 24"><path class="glyph" d="M2.5 12s3.7-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.7 6.5-9.5 6.5-9.5-6.5-9.5-6.5z"/><circle class="glyph" cx="12" cy="12" r="2.6"/></svg>
+        </div>
+        <div class="connector" style="--c-from: var(--s2); --c-to: var(--s3);"></div>
+      </div>
+      <div class="stage-body">
+        <p class="stage-tag">Recognition</p>
+        <h2>Every file is understood the moment it lands</h2>
+        <p>A quotation, a technical datasheet, a deviation list, a set of meeting minutes — each is
+          recognized for what it is on sight, however a particular vendor happened to name the
+          file or bury it three folders deep.</p>
+        <p class="fact">Hundreds of pages, sorted in the time it takes to open one of them yourself.</p>
+      </div>
+    </div>
+
+    <div class="stage" style="--m-c: var(--s3)">
+      <div class="rail">
+        <div class="marker">
+          <svg viewBox="0 0 24 24"><path class="glyph" d="M12 3l8 4-8 4-8-4z"/><path class="glyph" d="M4 11l8 4 8-4"/><path class="glyph" d="M4 15l8 4 8-4"/></svg>
+        </div>
+        <div class="connector" style="--c-from: var(--s3); --c-to: var(--s4);"></div>
+      </div>
+      <div class="stage-body">
+        <p class="stage-tag">Lineage</p>
+        <h2>Only the latest word from each vendor counts</h2>
+        <p>A corrected file quietly retires the one it replaces, so a superseded number can never
+          drift back into the comparison next to the current one.</p>
+      </div>
+    </div>
+
+    <div class="stage" style="--m-c: var(--s4)">
+      <div class="rail">
+        <div class="marker">
+          <svg viewBox="0 0 24 24"><circle class="glyph" cx="10.5" cy="10.5" r="6.5"/><path class="glyph" d="M15.5 15.5L21 21"/></svg>
+        </div>
+        <div class="connector" style="--c-from: var(--s4); --c-to: var(--s5);"></div>
+      </div>
+      <div class="stage-body">
+        <p class="stage-tag">Reading</p>
+        <h2>The fine print gets read, line by line</h2>
+        <p>Prices, technical parameters, stated exceptions, contract clauses — pulled out to the
+          exact figure and the exact wording, from documents that would otherwise take a reviewer
+          days to work through vendor by vendor.</p>
+        <p class="fact">Nothing is summarized or paraphrased away — the number you see is the
+          number the vendor wrote.</p>
+      </div>
+    </div>
+
+    <div class="stage" style="--m-c: var(--s5)">
+      <div class="rail">
+        <div class="marker">
+          <svg viewBox="0 0 24 24"><rect class="glyph" x="4" y="4" width="16" height="16" rx="1.5"/><path class="glyph" d="M8 9h8M8 13h8M8 17h5"/></svg>
+        </div>
+        <div class="connector" style="--c-from: var(--s5); --c-to: var(--s6);"></div>
+      </div>
+      <div class="stage-body">
+        <p class="stage-tag">Filing</p>
+        <h2>Every fact is kept, and never lost track of</h2>
+        <p>Each figure is filed against its vendor and the exact document it came from — so nothing
+          downstream is ever taken on faith, and any number can be traced back in seconds.</p>
+      </div>
+    </div>
+
+    <div class="stage emphasis" style="--m-c: var(--s6)">
+      <div class="rail">
+        <div class="marker">
+          <svg viewBox="0 0 24 24"><path class="glyph" d="M12 3v18"/><path class="glyph" d="M5 7h14"/><path class="glyph" d="M5 7l-3 6a3 3 0 0 0 6 0z"/><path class="glyph" d="M19 7l-3 6a3 3 0 0 0 6 0z"/></svg>
+        </div>
+        <div class="connector" style="--c-from: var(--s6); --c-to: var(--s7);"></div>
+      </div>
+      <div class="stage-body">
+        <p class="stage-tag">Measurement</p>
+        <h2>Every vendor is held to the same yardstick</h2>
+        <p>Every stated requirement is checked against every vendor's stated facts, and every price
+          is put on the same footing — currency, tax, freight, discount all accounted for. What
+          you end up comparing is the real, landed cost, not the headline number two vendors happened
+          to print differently.</p>
+      </div>
+    </div>
+
+    <div class="stage" style="--m-c: var(--s7)">
+      <div class="rail">
+        <div class="marker">
+          <svg viewBox="0 0 24 24"><path class="glyph" d="M4 20V13M10 20V7M16 20v-9M4 20h18"/></svg>
+        </div>
+      </div>
+      <div class="stage-body">
+        <p class="stage-tag">Decision</p>
+        <h2>You get a ranked answer you can stand behind</h2>
+        <p>A comparison that names the cheapest compliant vendor, flags what's missing, and lets you
+          trace any figure back to the page it came from — or challenge one, and watch the whole
+          comparison recompute on the spot.</p>
+      </div>
+    </div>
+
+  </section>
+
+  <section class="panel">
+    <h2>What that means for you</h2>
+    <ol>
+      <li><span class="n">01</span><span><strong>Hours of cross-referencing collapse into minutes.</strong>
+        A tender that took a week of reading now takes as long as it takes vendors to upload.</span></li>
+      <li><span class="n">02</span><span><strong>Nothing gets missed on vendor eleven of twenty.</strong>
+        Every document gets the same careful read, whether it's the first bid or the last.</span></li>
+      <li><span class="n">03</span><span><strong>Every number traces back to its source.</strong>
+        When a losing bidder asks why, you can point to the exact page.</span></li>
+      <li><span class="n">04</span><span><strong>Run it again and get the same answer.</strong>
+        The comparison doesn't shift depending on who reviewed it or when.</span></li>
+    </ol>
+  </section>
+
+  <p class="kicker">Bring your own tender documents and we'll walk it through end to end.</p>
+
+</div>
+</body>
+</html>
