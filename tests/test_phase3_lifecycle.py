@@ -619,3 +619,24 @@ def test_row23_a_vendor_restating_in_another_family_becomes_unanswered(tmp_path)
     assert cell.verdict == "unanswered"
     assert "different quantities" in cell.rationale
     assert "unrecognised unit" not in cell.rationale
+
+
+def test_row25_a_vanished_fact_counts_as_silence_not_as_our_reach(tmp_path):
+    # INV-7, and the compliance screen's silent/refused split. The two look
+    # identical in `verdict` and mean opposite things: one is the vendor never
+    # answering, the other is us failing to read an answer we hold. Only a
+    # second run can tell them apart, because run 1 has nothing to lose.
+    from procurement.matrix import build_matrix
+
+    root = _project(tmp_path)
+    run_ingestion(root, "p", MatrixClient())
+    before = build_matrix(root, "p").coverage
+    assert before.by_verdict.get("pass") == 1
+    assert (before.unanswered_silent, before.unanswered_refused) == (0, 0)
+
+    os.remove(os.path.join(root, "p", "vendors", "KERUI", _DATASHEET))
+    run_ingestion(root, "p", MatrixClient())
+
+    after = build_matrix(root, "p").coverage
+    assert after.by_verdict.get("unanswered") == 1
+    assert (after.unanswered_silent, after.unanswered_refused) == (1, 0)

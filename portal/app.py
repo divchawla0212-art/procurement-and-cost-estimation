@@ -9,6 +9,7 @@ from procurement.pdf_llm import transcribe_pdf
 from procurement.quote_select import pick_quote
 from shared.llm.factory import get_client
 from portal.views import comparison as comparison_view
+from portal.views import compliance as compliance_view
 from portal.views import statement as statement_view
 
 load_dotenv()  # load a local .env if present (see .env.example)
@@ -141,20 +142,35 @@ if st.button("Run ingestion", type="primary", disabled=not project.vendors):
     st.success("Done.")
 
 # --- Results ---
+# Two screens, not the phase-4 shell split: the statement stays the landing
+# view (first tab) and compliance hangs beside it.
 st.markdown("### 5. Results")
+
 # Rendered before the statement: when this roster is present the pre-reviewed
 # comparison is the answer the reviewer came for, and it needs no ingestion run.
+# It sits above the tabs rather than inside one for both halves of that reason —
+# it stays the first thing seen whichever tab is selected, and it renders nothing
+# (`applies_to` returns early) for any other roster, so it costs those projects
+# no space. It is deliberately not filed under Compliance: that tab is derived
+# from requirements.json plus facts.json, and this is a hand-reviewed workbook.
 comparison_view.render(project.vendors)
-statement_view.render(ROOT, project.slug)
 
-dataset = load_dataset(ROOT, project.slug)
-if dataset:
-    st.markdown("#### Per-vendor extracted bids")
-    for bid in dataset["bids"]:
-        with st.expander(f"{bid['vendor']} — {bid['extraction_status']}"):
-            st.json(bid)
-    st.markdown("#### Normalization adjustments")
-    for n in dataset["normalized"]:
-        if n["adjustments"]:
-            st.write(f"**{n['vendor']}** → {n['normalized_total']} {n['normalized_currency']}")
-            st.table(n["adjustments"])
+_statement_tab, _compliance_tab = st.tabs(["Comparative Statement", "Compliance"])
+
+with _statement_tab:
+    statement_view.render(ROOT, project.slug)
+
+    dataset = load_dataset(ROOT, project.slug)
+    if dataset:
+        st.markdown("#### Per-vendor extracted bids")
+        for bid in dataset["bids"]:
+            with st.expander(f"{bid['vendor']} — {bid['extraction_status']}"):
+                st.json(bid)
+        st.markdown("#### Normalization adjustments")
+        for n in dataset["normalized"]:
+            if n["adjustments"]:
+                st.write(f"**{n['vendor']}** → {n['normalized_total']} {n['normalized_currency']}")
+                st.table(n["adjustments"])
+
+with _compliance_tab:
+    compliance_view.render(ROOT, project.slug)
