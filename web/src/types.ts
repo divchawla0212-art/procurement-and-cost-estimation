@@ -56,10 +56,17 @@ export interface ProjectDetail {
   group_counts: Record<GroupKey, number>
 }
 
+export interface ProviderOption {
+  id: string
+  needs_key: string | null
+  ready: boolean
+}
+
 export interface ProviderState {
   provider: string
   needs_key: string | null
   ready: boolean
+  catalog: ProviderOption[]
 }
 
 export interface VendorSetup {

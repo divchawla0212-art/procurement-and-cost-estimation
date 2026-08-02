@@ -94,8 +94,13 @@ export function saveFxRates(
   })
 }
 
-export function runIngestion(slug: string): Promise<ProjectSetup> {
-  return fetch(`/api/projects/${encodeURIComponent(slug)}/ingest`, {
-    method: 'POST',
-  }).then((res) => unwrap<ProjectSetup>(res))
+export function runIngestion(
+  slug: string,
+  provider?: string,
+): Promise<ProjectSetup> {
+  return sendJson<ProjectSetup>(
+    `/api/projects/${encodeURIComponent(slug)}/ingest`,
+    'POST',
+    provider ? { provider } : {},
+  )
 }

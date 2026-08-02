@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent, JSX, ReactNode, RefObject } from 'react'
-import type { ProjectSetup, ProviderState, VendorSetup } from '../types'
+import type { ProjectSetup, ProviderOption, VendorSetup } from '../types'
 import {
   createProject,
   fetchSetup,
@@ -538,19 +538,19 @@ function FxStep({
 
 /* ------------------------------------------------------- step 4: ingestion */
 
-function ProviderBanner({ provider }: { provider: ProviderState }): JSX.Element {
-  if (provider.ready) {
+function ProviderBanner({ option }: { option: ProviderOption }): JSX.Element {
+  if (option.ready) {
     return (
       <div className="banner banner--ok">
-        Extraction provider: {provider.provider} — ready.
+        Extraction provider: {option.id} — ready.
       </div>
     )
   }
   return (
     <div className="banner banner--warn">
-      Extraction provider "{provider.provider}" is not ready.
-      {provider.needs_key
-        ? ` Set ${provider.needs_key} in the API environment and restart it.`
+      Extraction provider "{option.id}" is not ready.
+      {option.needs_key
+        ? ` Set ${option.needs_key} in the API environment and restart it.`
         : ''}
     </div>
   )
@@ -569,15 +569,25 @@ function IngestStep({
 }): JSX.Element {
   const [running, setRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [provider, setProvider] = useState(setup.provider.provider)
+
+  const catalog = setup.provider.catalog
+  const selected =
+    catalog.find((entry) => entry.id === provider) ??
+    { id: provider, needs_key: setup.provider.needs_key, ready: setup.provider.ready }
+
+  const anthropic = catalog.find((entry) => entry.id === 'anthropic')
+  const scannedPdfsUnsupported =
+    selected.id !== 'anthropic' && anthropic !== undefined && !anthropic.ready
 
   const noVendors = setup.vendors.length === 0
-  const canRun = !noVendors && setup.provider.ready && !running
+  const canRun = !noVendors && selected.ready && !running
 
   async function run() {
     setRunning(true)
     setError(null)
     try {
-      await runIngestion(slug)
+      await runIngestion(slug, provider)
       onDone()
     } catch (err) {
       setError((err as Error).message)
@@ -587,7 +597,7 @@ function IngestStep({
 
   return (
     <>
-      <ProviderBanner provider={setup.provider} />
+      <ProviderBanner option={selected} />
       {running && (
         <div className="banner" style={{ marginTop: '0.6rem' }}>
           Extracting and comparing vendor bids…
@@ -603,6 +613,33 @@ function IngestStep({
           {error}
         </div>
       )}
+      <div className="form-row" style={{ marginTop: '0.6rem', maxWidth: 320 }}>
+        <label htmlFor="provider-select">Extraction provider</label>
+        <select
+          id="provider-select"
+          className="input"
+          value={provider}
+          disabled={running}
+          onChange={(e) => setProvider(e.target.value)}
+        >
+          {catalog.map((entry) => (
+            <option key={entry.id} value={entry.id} disabled={!entry.ready}>
+              {entry.ready
+                ? entry.id
+                : `${entry.id} — ${entry.needs_key ?? 'not configured'} not set`}
+            </option>
+          ))}
+        </select>
+        <p className="hint">
+          Applies to this run only. Reloading returns to the server default.
+        </p>
+        {scannedPdfsUnsupported && (
+          <p className="hint">
+            No ANTHROPIC_API_KEY is set, so scanned image-only PDFs will not be
+            transcribed on this run.
+          </p>
+        )}
+      </div>
       <div
         style={{
           display: 'flex',
