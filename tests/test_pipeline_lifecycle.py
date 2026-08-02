@@ -25,17 +25,32 @@ def _zip(entries):
     return buf.getvalue()
 
 
+# Padding appended to every synthetic fixture body in this file: real
+# quotations, datasheets and deviation forms are always well over
+# MIN_EXTRACTABLE_CHARS, and a fixture short enough to trip the pipeline's
+# no-readable-text guard would silently turn these lifecycle tests into tests
+# of the guard instead of the caching/pruning/failure logic they exercise.
+# Applied uniformly (including to documents this file expects to be skipped,
+# e.g. MOM/spec) because routing here is filename- or classifier-decided,
+# never content-length-decided, so padding never changes what a document
+# routes to.
+_PAD = (b" This synthetic fixture body is padded with filler prose so its "
+       b"character count clears the pipeline's minimum-extractable-text "
+       b"guard, letting the extraction logic under test run rather than "
+       b"the guard itself.")
+
+
 def _project(tmp_path, entries):
     root = str(tmp_path)
     create_project(root, "P", target_currency="USD")
     z = tmp_path / "v.zip"
-    z.write_bytes(_zip(entries))
+    z.write_bytes(_zip({name: body + _PAD for name, body in entries.items()}))
     unpack_vendor_zip(root, "p", str(z))
     return root
 
 
 def _write(tmp_path, vendor, name, body):
-    (tmp_path / "p" / "vendors" / vendor / name).write_bytes(body)
+    (tmp_path / "p" / "vendors" / vendor / name).write_bytes(body + _PAD)
 
 
 def _docs(root, slug="p"):
@@ -410,8 +425,8 @@ def test_a_failed_quotation_extraction_keeps_the_previous_prices(tmp_path):
     facts.commercial["base_price"] = 424242.0
     snapshots.save_facts(root, "p", facts)
 
-    (tmp_path / "p" / "vendors" / "KERUI" / "Quotation.txt").write_text(
-        "base price 2000", encoding="utf-8")
+    (tmp_path / "p" / "vendors" / "KERUI" / "Quotation.txt").write_bytes(
+        b"base price 2000" + _PAD)
     run_ingestion(root, "p", RfqClient(fail_on=("bid",)))
 
     facts = snapshots.load_facts(root, "p", "KERUI")

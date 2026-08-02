@@ -94,14 +94,13 @@ def _pypdf(path: str) -> str:
 
 
 # Below this many characters of readable text, a document is not extracted.
-# The five KERUI scanned drawings in the live corpus yield 1-42 chars, so
-# anything in that range must fail the guard; a real, if terse, document such
-# as "11 Attachment-4 Applicable Codes and Standards Pending.pdf" (168 chars)
-# must not. Set low (rather than the fuller 100+ a live PDF corpus would
-# suggest) because the test suite's synthetic .txt fixtures are themselves
-# short — e.g. "H2S 50 ppm" (10 chars) — and a real extraction must still
-# clear the bar. Illustrative, not load-bearing.
-MIN_EXTRACTABLE_CHARS = 5
+# Chosen against the live corpus: the five KERUI drawings yield 1-42 chars,
+# and "11 Attachment-4 Applicable Codes and Standards Pending.pdf" yields 168
+# and is a real, if short, document. Illustrative, not load-bearing — but the
+# 1-42 range must fail the guard and 168 must not, so test fixtures standing
+# in for extractable documents carry realistic (>=100 char) bodies rather
+# than pulling this threshold down to fit short synthetic text.
+MIN_EXTRACTABLE_CHARS = 100
 
 
 def read_pdf_text_with_source(path: str, llm_fallback=None,

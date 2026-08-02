@@ -109,7 +109,14 @@ def test_ingest_without_vendors_is_rejected(tmp_path, monkeypatch):
 
 def _project_with_vendor(client) -> None:
     client.post("/api/projects", json={"name": "P"})
-    payload = _make_zip({"ACME/quote.txt": b"unit price 10 USD"})
+    # Padded past MIN_EXTRACTABLE_CHARS: a body this short would otherwise be
+    # caught by the pipeline's no-readable-text guard and never reach the
+    # extractor these tests are actually exercising.
+    body = (b"unit price 10 USD. This synthetic fixture body is padded with "
+           b"filler prose so its character count clears the pipeline's "
+           b"minimum-extractable-text guard, letting the extraction logic "
+           b"under test run rather than the guard itself.")
+    payload = _make_zip({"ACME/quote.txt": body})
     client.post(
         "/api/projects/p/vendors",
         files={"file": ("bids.zip", payload, "application/zip")},

@@ -16,7 +16,7 @@ from procurement.project import load_project, save_project
 from procurement.store import events, snapshots
 from procurement.store.models import Override
 
-from tests.test_pipeline_vocabulary import VocabClient, _project
+from tests.test_pipeline_vocabulary import VocabClient, _project, _PAD
 
 _MR = "ADN-AEC-ME-SPC-026 MR Gas Genset.txt"
 _MOM = "00 MOM 20241111 ASTRA.txt"
@@ -67,13 +67,17 @@ class MatrixClient(VocabClient):
 
 
 def _write_rfq(tmp_path, name, body="4.2.7 H2S at least 50 ppm"):
-    (tmp_path / "p" / "requirements" / name).write_text(body, encoding="utf-8")
+    # Padded: every document this helper writes is meant to reach an
+    # extractor, and a body shorter than MIN_EXTRACTABLE_CHARS would instead
+    # exercise the no-readable-text guard, not the extraction logic these
+    # tests are about.
+    (tmp_path / "p" / "requirements" / name).write_text(body + _PAD, encoding="utf-8")
 
 
 def _write_vendor(tmp_path, vendor, name, body):
     vdir = tmp_path / "p" / "vendors" / vendor
     vdir.mkdir(parents=True, exist_ok=True)
-    (vdir / name).write_text(body, encoding="utf-8")
+    (vdir / name).write_text(body + _PAD, encoding="utf-8")
 
 
 def _set_vendors(root, vendors):
@@ -122,7 +126,7 @@ def test_every_verdict_is_at_or_after_the_run_that_produced_it(tmp_path):
     root = _project(tmp_path)
     run_ingestion(root, "p", VocabClient())
     (tmp_path / "p" / "vendors" / "KERUI" / _DATASHEET).write_text(
-        "H2S up to 40 ppm", encoding="utf-8")
+        "H2S up to 40 ppm" + _PAD, encoding="utf-8")
     run_ingestion(root, "p", VocabClient())
     last_start = _last_run_started(root)
     assert all(r.evaluated_at >= last_start
@@ -438,7 +442,7 @@ def test_row16_an_unconvertible_restatement_is_unanswered_with_its_reason(tmp_pa
     run_ingestion(root, "p", client)
 
     (tmp_path / "p" / "vendors" / "KERUI" / _DATASHEET).write_text(
-        "trace gas up to 70 mg/Nm3", encoding="utf-8")
+        "trace gas up to 70 mg/Nm3" + _PAD, encoding="utf-8")
     second = MatrixClient()
     second.requirement_parameter = "trace_gas_limit"
     second.fact_unit = "mg/Nm3"
@@ -458,7 +462,7 @@ def test_row17_changed_facts_are_reflected_in_verdicts_recomputed_this_run(tmp_p
                 if r.fact_id).verdict == "pass"
 
     (tmp_path / "p" / "vendors" / "KERUI" / _DATASHEET).write_text(
-        "H2S up to 40 ppm", encoding="utf-8")
+        "H2S up to 40 ppm" + _PAD, encoding="utf-8")
     second = MatrixClient()
     second.fact_value = 40
     run_ingestion(root, "p", second)
@@ -494,7 +498,7 @@ def test_row19_an_amendment_matching_no_clause_is_stored_unapplied(tmp_path):
     run_ingestion(root, "p", MatrixClient())
 
     (tmp_path / "p" / "requirements" / _MOM).write_text(
-        "Clause 99.9 revised", encoding="utf-8")
+        "Clause 99.9 revised" + _PAD, encoding="utf-8")
     second = MatrixClient()
     second.amendment_clause = "99.9"
     run_ingestion(root, "p", second)
@@ -558,7 +562,7 @@ def test_row21_a_unit_this_build_can_now_read_stops_being_unanswered(tmp_path):
     # both documents are edited, so run 2 re-extracts both sides
     _write_rfq(tmp_path, _MR, "4.2.7 warranty at least 50 months")
     (tmp_path / "p" / "vendors" / "KERUI" / _DATASHEET).write_text(
-        "warranty 70 years", encoding="utf-8")
+        "warranty 70 years" + _PAD, encoding="utf-8")
     second = MatrixClient()
     second.requirement_parameter = "warranty_period"
     second.requirement_unit, second.fact_unit = "months", "years"
@@ -610,7 +614,7 @@ def test_row23_a_vendor_restating_in_another_family_becomes_unanswered(tmp_path)
 
     # editing the datasheet forces run 2 to re-extract the vendor's answer
     (tmp_path / "p" / "vendors" / "KERUI" / _DATASHEET).write_text(
-        "H2S up to 70 bar", encoding="utf-8")
+        "H2S up to 70 bar" + _PAD, encoding="utf-8")
     second = MatrixClient()
     second.requirement_unit, second.fact_unit = "barg", "bar"
     run_ingestion(root, "p", second)

@@ -9,7 +9,7 @@ from procurement.store import snapshots
 from procurement.store.models import ComplianceResult
 
 from tests.test_pipeline_rfq import RfqClient
-from tests.test_pipeline_vocabulary import _project
+from tests.test_pipeline_vocabulary import _project, _PAD
 
 _QUOTE = "Quotation.txt"
 
@@ -64,7 +64,7 @@ def test_a_note_survives_a_forced_reextraction(tmp_path):
     _note(root, "KERUI", "FULLY COMPLIED")
 
     (tmp_path / "p" / "vendors" / "KERUI" / _QUOTE).write_text(
-        "base price 2000", encoding="utf-8")
+        "base price 2000" + _PAD, encoding="utf-8")
     second = RfqClient()
     run_ingestion(root, "p", second)
 
@@ -95,7 +95,7 @@ def test_a_failed_requotation_keeps_the_note_and_the_link(tmp_path):
     before = snapshots.load_facts(root, "p", "KERUI").quotation_doc_id
 
     (tmp_path / "p" / "vendors" / "KERUI" / _QUOTE).write_text(
-        "base price 2000", encoding="utf-8")
+        "base price 2000" + _PAD, encoding="utf-8")
     run_ingestion(root, "p", RfqClient(fail_on=("bid",)))
 
     facts = snapshots.load_facts(root, "p", "KERUI")

@@ -15,15 +15,29 @@ def _zip(entries):
     return buf.getvalue()
 
 
+# Padding appended to every synthetic fixture body that stands in for a real,
+# extractable document: real quotations, datasheets and deviation forms are
+# always well over MIN_EXTRACTABLE_CHARS, and a fixture short enough to trip
+# the pipeline's no-readable-text guard would silently turn these into tests
+# of the guard instead of the extraction logic they mean to exercise. Never
+# applied to a drawing/other fixture — those are skipped by classification
+# before the guard ever runs, and to any fixture that deliberately tests the
+# guard itself.
+_PAD = (b" This synthetic fixture body is padded with filler prose so its "
+       b"character count clears the pipeline's minimum-extractable-text "
+       b"guard, letting the extraction logic under test run rather than "
+       b"the guard itself.")
+
+
 def _project(tmp_path):
     root = str(tmp_path)
     create_project(root, "P", target_currency="USD")
     z = tmp_path / "v.zip"
     z.write_bytes(_zip({
-        "KERUI/Quotation of Gas Generator.txt": b"base price 1000",
-        "KERUI/01 DataSheet Gas Generator.txt": b"Continuous rating 550 kW",
-        "KERUI/02 Detailed Vendor Standard Datasheet.txt": b"H2S tolerance 50 ppm",
-        "KERUI/03 Attachment-2 Vendor Deviation Form.txt": b"Clause 4.2.7 deviation",
+        "KERUI/Quotation of Gas Generator.txt": b"base price 1000" + _PAD,
+        "KERUI/01 DataSheet Gas Generator.txt": b"Continuous rating 550 kW" + _PAD,
+        "KERUI/02 Detailed Vendor Standard Datasheet.txt": b"H2S tolerance 50 ppm" + _PAD,
+        "KERUI/03 Attachment-2 Vendor Deviation Form.txt": b"Clause 4.2.7 deviation" + _PAD,
         "KERUI/15 LAYOUT - KGW550GF-T.txt": b"drawing, not extractable",
         "KERUI/08 Two Years Operation Spares.txt": b"spares list",
     }))
@@ -127,7 +141,7 @@ def test_touching_one_datasheet_reextracts_only_that_document(tmp_path):
     root = _project(tmp_path)
     run_ingestion(root, "p", RoutingClient())
     (tmp_path / "p" / "vendors" / "KERUI"
-     / "01 DataSheet Gas Generator.txt").write_bytes(b"Continuous rating 600 kW")
+     / "01 DataSheet Gas Generator.txt").write_bytes(b"Continuous rating 600 kW" + _PAD)
     second = RoutingClient()
     run_ingestion(root, "p", second)
     assert len(second.calls) == 1
@@ -142,7 +156,7 @@ def test_facts_from_untouched_datasheets_survive_a_partial_reextraction(tmp_path
     survivor = next(f for f in before.technical if f["doc_id"] != touched_doc)
 
     (tmp_path / "p" / "vendors" / "KERUI"
-     / "01 DataSheet Gas Generator.txt").write_bytes(b"Continuous rating 600 kW")
+     / "01 DataSheet Gas Generator.txt").write_bytes(b"Continuous rating 600 kW" + _PAD)
     run_ingestion(root, "p", RoutingClient())
 
     after = snapshots.load_facts(root, "p", "KERUI")
@@ -158,8 +172,8 @@ def test_superseded_document_is_not_extracted(tmp_path):
     create_project(root, "P", target_currency="USD")
     z = tmp_path / "v.zip"
     z.write_bytes(_zip({
-        "ADPOWER/Quotation ADP-935.txt": b"base price 1000",
-        "ADPOWER/Quotation ADP-935(Rev1).txt": b"base price 1100",
+        "ADPOWER/Quotation ADP-935.txt": b"base price 1000" + _PAD,
+        "ADPOWER/Quotation ADP-935(Rev1).txt": b"base price 1100" + _PAD,
     }))
     unpack_vendor_zip(root, "p", str(z))
     run_ingestion(root, "p", RoutingClient())
@@ -181,7 +195,7 @@ def test_failed_datasheet_reextraction_preserves_prior_facts(tmp_path):
     before_fact = next(f for f in before.technical if f["doc_id"] == touched_doc)
 
     (tmp_path / "p" / "vendors" / "KERUI"
-     / "01 DataSheet Gas Generator.txt").write_bytes(b"Continuous rating 600 kW")
+     / "01 DataSheet Gas Generator.txt").write_bytes(b"Continuous rating 600 kW" + _PAD)
     run_ingestion(root, "p", FailingOnSchema("facts"))
 
     after = snapshots.load_facts(root, "p", "KERUI")
@@ -234,18 +248,29 @@ def test_a_document_with_no_readable_text_is_failed_with_a_reason(tmp_path):
     create_project(root, "P", target_currency="USD")
     z = tmp_path / "v.zip"
     z.write_bytes(_zip({
-        "KERUI/Quotation of Gas Generator.txt": b"base price 1000",
+        "KERUI/Quotation of Gas Generator.txt": b"base price 1000" + _PAD,
         "KERUI/01 DataSheet Gas Generator.txt": b"x",     # 1 char: unreadable
+        # 21 chars: squarely inside the 1-42 range the live KERUI scanned
+        # drawings actually yield (see loaders.MIN_EXTRACTABLE_CHARS's
+        # comment) — the 1-char extreme above would not by itself catch a
+        # threshold set too low to guard this middle of the range.
+        "KERUI/02 Detailed Vendor Standard Datasheet.txt": b"drawing, no real text",
     }))
     unpack_vendor_zip(root, "p", str(z))
     client = RoutingClient()
     run_ingestion(root, "p", client)
 
-    doc = next(d for d in snapshots.load_documents(root, "p")
-               if d.path.endswith("01 DataSheet Gas Generator.txt"))
+    docs = {d.path.rsplit("/", 1)[-1]: d for d in snapshots.load_documents(root, "p")}
+    doc = docs["01 DataSheet Gas Generator.txt"]
     assert doc.extraction_status == "failed"
     assert "no readable text" in doc.notes
     assert doc.text_source is not None
+
+    scanned = docs["02 Detailed Vendor Standard Datasheet.txt"]
+    assert scanned.extraction_status == "failed"
+    assert "no readable text" in scanned.notes
+    assert scanned.text_source is not None
+
     # the guard fires before the model is asked, so no facts prompt was sent
     assert not any("facts" in c.get("prompt", "") for c in client.calls)
 
@@ -256,3 +281,37 @@ def test_every_extracted_document_records_its_text_source(tmp_path):
     for doc in snapshots.load_documents(root, "p"):
         if doc.vendor and doc.extraction_status in ("ok", "failed"):
             assert doc.text_source, f"{doc.path} has no text_source"
+
+
+def test_a_document_that_raises_on_read_is_failed_not_crashed(tmp_path):
+    """The other half of the guard: `read_text_with_source` doesn't only
+    return short text for an unreadable document, it can raise outright (a
+    legacy binary .doc is the one reader in loaders.py that always does). The
+    vendor loop's `except Exception` around that read must catch it, mark the
+    document failed with the reason, and let the run continue rather than
+    propagating — nothing in the suite exercised this branch before."""
+    root = str(tmp_path)
+    create_project(root, "P", target_currency="USD")
+    z = tmp_path / "v.zip"
+    z.write_bytes(_zip({
+        "KERUI/Quotation of Gas Generator.txt": b"base price 1000" + _PAD,
+        # filename rule alone decides "datasheet" (classify_by_rules never
+        # reads content), so this reaches the vendor loop's text read, where
+        # read_text_with_source raises ValueError on legacy binary .doc.
+        "KERUI/01 DataSheet Gas Generator.doc": b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 64,
+    }))
+    unpack_vendor_zip(root, "p", str(z))
+    client = RoutingClient()
+    run_ingestion(root, "p", client)
+
+    docs = {d.path.rsplit("/", 1)[-1]: d for d in snapshots.load_documents(root, "p")}
+    doc = docs["01 DataSheet Gas Generator.doc"]
+    assert doc.extraction_status == "failed"
+    assert doc.notes and "unreadable document" in doc.notes
+    assert doc.text_source == "unreadable:0chars"
+    # the guard fires before the model is asked, so no facts prompt was sent
+    assert not any("facts" in c.get("prompt", "") for c in client.calls)
+    # the run itself must not have aborted: the quotation beside it still
+    # reached the extractor and succeeded
+    quote = docs["Quotation of Gas Generator.txt"]
+    assert quote.extraction_status == "ok"
