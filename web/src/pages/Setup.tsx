@@ -571,7 +571,11 @@ function IngestStep({
   const [error, setError] = useState<string | null>(null)
   const [provider, setProvider] = useState(setup.provider.provider)
 
-  const catalog = setup.provider.catalog
+  // A cached bundle talking to an older API during a rolling deploy would get
+  // no `catalog` at all; falling back to [] keeps step 4 rendering instead of
+  // white-screening on `.find`.
+  const catalog = setup.provider.catalog ?? []
+  const inCatalog = catalog.some((entry) => entry.id === provider)
   const selected =
     catalog.find((entry) => entry.id === provider) ??
     { id: provider, needs_key: setup.provider.needs_key, ready: setup.provider.ready }
@@ -622,6 +626,14 @@ function IngestStep({
           disabled={running}
           onChange={(e) => setProvider(e.target.value)}
         >
+          {/* A selection outside the catalog — an off-catalog LLM_PROVIDER —
+              matches no option, so the browser would render the control blank
+              and it would read as broken. Show what it is actually set to. */}
+          {!inCatalog && (
+            <option value={provider} disabled>
+              {provider} — not a known provider
+            </option>
+          )}
           {catalog.map((entry) => (
             <option key={entry.id} value={entry.id} disabled={!entry.ready}>
               {entry.ready
