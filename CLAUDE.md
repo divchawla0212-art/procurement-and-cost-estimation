@@ -30,8 +30,8 @@ There are therefore **two** green baselines, and both are correct:
 
 | where | baseline |
 |---|---|
-| a developer workstation, `.env` and `data/` present | **649 passed, 3 skipped, 1 failed** |
-| CI, and any clean checkout | **647 passed, 6 skipped, 0 failed** |
+| a developer workstation, `.env` and `data/` present | **749 passed, 3 skipped, 1 failed** |
+| CI, and any clean checkout | **747 passed, 6 skipped, 0 failed** |
 
 Anything else is a real regression.
 
@@ -39,6 +39,11 @@ CI being green is not luck. With no `.env` the key stays deleted, the advisory
 warning fires, and the test passes. The three extra skips are not credential
 failures: they are the tests guarded on the untracked `data/` sample directory,
 which a workstation has and a fresh checkout does not.
+
+So the CI row is the workstation row with that one failure turned into a pass
+and those three passes turned into skips — `747 = 749 + 1 - 3`, `6 = 3 + 3`,
+`0` failures. When the counts move, measure the workstation row and derive the
+CI row from it; editing the two rows independently is how they drift apart.
 
 CI runs that same command on every pull request into `main`, via
 [`.github/workflows/tests.yml`](.github/workflows/tests.yml) — Ubuntu, Python
