@@ -106,6 +106,60 @@ def test_ingest_without_vendors_is_rejected(tmp_path, monkeypatch):
     assert res.status_code == 422
 
 
+def _project_with_vendor(client) -> None:
+    client.post("/api/projects", json={"name": "P"})
+    payload = _make_zip({"ACME/quote.txt": b"unit price 10 USD"})
+    client.post(
+        "/api/projects/p/vendors",
+        files={"file": ("bids.zip", payload, "application/zip")},
+    )
+
+
+def test_ingest_accepts_an_explicit_provider(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _project_with_vendor(client)
+    res = client.post("/api/projects/p/ingest", json={"provider": "mock"})
+    assert res.status_code == 200
+
+
+def test_ingest_rejects_an_unknown_provider(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _project_with_vendor(client)
+    before = client.get("/api/projects/p/setup").json()
+
+    res = client.post("/api/projects/p/ingest", json={"provider": "banana"})
+
+    assert res.status_code == 400
+    detail = res.json()["detail"]
+    assert "banana" in detail
+    assert "mock" in detail  # names the valid set
+    after = client.get("/api/projects/p/setup").json()
+    assert after["generation"] == before["generation"]
+    assert after["has_results"] == before["has_results"]
+
+
+def test_ingest_rejects_a_provider_with_no_key(tmp_path, monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    client = _client(tmp_path, monkeypatch)
+    _project_with_vendor(client)
+    before = client.get("/api/projects/p/setup").json()
+
+    res = client.post("/api/projects/p/ingest", json={"provider": "gemini"})
+
+    assert res.status_code == 400
+    assert "GEMINI_API_KEY" in res.json()["detail"]
+    after = client.get("/api/projects/p/setup").json()
+    assert after["generation"] == before["generation"]
+    assert after["has_results"] == before["has_results"]
+
+
+def test_ingest_without_a_provider_uses_the_default(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _project_with_vendor(client)
+    assert client.post("/api/projects/p/ingest").status_code == 200
+    assert client.post("/api/projects/p/ingest", json={}).status_code == 200
+
+
 def test_setup_reports_provider_state(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     client.post("/api/projects", json={"name": "P"})

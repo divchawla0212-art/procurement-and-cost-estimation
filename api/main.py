@@ -261,24 +261,50 @@ def set_fx_rates(slug: str, payload: dict = Body(...)) -> dict:
 
 
 @app.post("/api/projects/{slug}/ingest")
-def ingest(slug: str) -> dict:
+def ingest(slug: str, payload: dict | None = Body(default=None)) -> dict:
     project = _load_or_404(slug)
     if not project.vendors:
         raise HTTPException(
             status_code=422,
             detail="Add at least one vendor before running ingestion.",
         )
+
+    # Validate before any work starts. A provider that was never runnable is a
+    # configuration error (400), not an extraction failure (502) — and a 400
+    # must leave the store untouched.
+    requested = (payload or {}).get("provider")
+    provider = str(requested).strip().lower() if requested else None
+    if provider is not None:
+        if provider not in PROVIDER_KEYS:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Unknown provider '{provider}'. "
+                    f"Choose one of: {', '.join(PROVIDER_KEYS)}."
+                ),
+            )
+        if not _provider_ready(provider):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Provider '{provider}' is not configured. "
+                    f"Set {PROVIDER_KEYS[provider]} in the API environment "
+                    f"and restart it."
+                ),
+            )
+
     from shared.llm.factory import get_client
 
     # The scanned-PDF transcription fallback uses Anthropic; enable it only when
-    # an Anthropic key is present, mirroring the Streamlit portal.
+    # an Anthropic key is present, mirroring the Streamlit portal. This is
+    # deliberately independent of the selected provider — see §5.1 of the spec.
     pdf_fallback = None
     if os.getenv("ANTHROPIC_API_KEY"):
         from procurement.pdf_llm import transcribe_pdf
 
         pdf_fallback = transcribe_pdf
     try:
-        run_ingestion(ROOT, slug, get_client(), pdf_fallback=pdf_fallback)
+        run_ingestion(ROOT, slug, get_client(provider), pdf_fallback=pdf_fallback)
     except Exception as exc:  # surface extraction failures to the UI verbatim
         raise HTTPException(status_code=502, detail=f"Ingestion failed: {exc}") from exc
     return _setup_state(proj.load_project(ROOT, slug))
