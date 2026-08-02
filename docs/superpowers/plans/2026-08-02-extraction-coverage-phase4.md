@@ -326,7 +326,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 **Interfaces:**
 - Consumes: `MIN_EXTRACTABLE_CHARS` and the `text=` parameters from Task 1
-- Produces: `_VENDOR_ROUTE: dict[str, str]`; `_vendor_route(doc: DocumentRecord, inferred_quotes: set[str]) -> str | None`
+- Produces: `VENDOR_ROUTE: dict[str, str]` (public — Task 8 imports it); `_vendor_route(doc: DocumentRecord, inferred_quotes: set[str]) -> str | None`
 - **Store invariant owned (INV-B):** `VendorFacts.technical` contains exactly the facts of the vendor's currently-live, currently-routable documents — no more, no fewer.
 
 ADPOWER's marked-up copy of the client MR is their compliance response and is skipped as `spec`. KERUI's codes-and-standards list, synchronization attachment, equipment list and single-line diagrams are skipped as `other` or `drawing`. Together that is 21 of `gas-11`'s 33 documents. The fix is a routing table, not a classifier change: **`doc_class` must keep reporting what the classifier decided**, exactly as `_rfq_route` and the `inferred_quotes` fallback already establish. `documents.json` is the audit record of classification; routing is a separate decision layered on top.
