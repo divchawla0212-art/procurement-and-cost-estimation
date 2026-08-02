@@ -163,6 +163,13 @@ and `PROCUREMENT_PROJECTS_ROOT` (where projects are written — defaults to `pro
 
 Want to click around before you have a key? Set `LLM_PROVIDER=mock` instead.
 
+`LLM_PROVIDER` sets the default. You can also override it per run: step 4 of the
+React app's Setup wizard has an **Extraction provider** dropdown, and whatever you
+pick there applies to that one ingestion run only — reload the page and it goes
+back to the default above. Providers you have not configured are listed but
+disabled, each showing the variable it still needs. Keys are never entered in the
+browser; they only ever come from this `.env`.
+
 ---
 
 ## 7. Run the Streamlit portal (upload + ingestion)
