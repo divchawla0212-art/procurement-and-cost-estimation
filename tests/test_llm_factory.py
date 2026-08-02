@@ -3,6 +3,7 @@ from shared.llm.factory import get_client
 from shared.llm.mock_client import MockLLMClient
 from shared.llm.anthropic_client import AnthropicClient
 from shared.llm.bedrock_client import BedrockClient
+from shared.llm.openai_client import OpenAIClient
 
 
 def test_default_is_mock(monkeypatch):
@@ -40,3 +41,25 @@ def test_unknown_provider_raises(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "nope")
     with pytest.raises(ValueError):
         get_client()
+
+
+def test_explicit_provider_wins_over_env(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    assert isinstance(get_client("openai"), OpenAIClient)
+
+
+def test_none_reads_the_env(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    assert isinstance(get_client(), MockLLMClient)
+    assert isinstance(get_client(None), MockLLMClient)
+
+
+def test_provider_argument_is_case_insensitive(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
+    assert isinstance(get_client("MOCK"), MockLLMClient)
+
+
+def test_unknown_provider_argument_raises(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    with pytest.raises(ValueError, match="banana"):
+        get_client("banana")
