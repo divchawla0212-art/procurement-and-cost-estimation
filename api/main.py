@@ -272,26 +272,33 @@ def ingest(slug: str, payload: dict | None = Body(default=None)) -> dict:
     # Validate before any work starts. A provider that was never runnable is a
     # configuration error (400), not an extraction failure (502) — and a 400
     # must leave the store untouched.
+    #
+    # What is validated is the *effective* provider, not just a named one. An
+    # omitted `provider` resolves through LLM_PROVIDER exactly as `get_client`
+    # would, and that resolution is checked the same way: an unvalidated server
+    # default wrote a whole store of failed extractions while reporting
+    # `has_results: true`, and an unknown one surfaced as a 502 from inside the
+    # try below.
     requested = (payload or {}).get("provider")
     provider = str(requested).strip().lower() if requested else None
-    if provider is not None:
-        if provider not in PROVIDER_KEYS:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Unknown provider '{provider}'. "
-                    f"Choose one of: {', '.join(PROVIDER_KEYS)}."
-                ),
-            )
-        if not _provider_ready(provider):
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Provider '{provider}' is not configured. "
-                    f"Set {PROVIDER_KEYS[provider]} in the API environment "
-                    f"and restart it."
-                ),
-            )
+    effective = provider or os.getenv("LLM_PROVIDER", "mock").lower()
+    if effective not in PROVIDER_KEYS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unknown provider '{effective}'. "
+                f"Choose one of: {', '.join(PROVIDER_KEYS)}."
+            ),
+        )
+    if not _provider_ready(effective):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Provider '{effective}' is not configured. "
+                f"Set {PROVIDER_KEYS[effective]} in the API environment "
+                f"and restart it."
+            ),
+        )
 
     from shared.llm.factory import get_client
 

@@ -155,10 +155,59 @@ def test_ingest_rejects_a_provider_with_no_key(tmp_path, monkeypatch):
 
 
 def test_ingest_without_a_provider_uses_the_default(tmp_path, monkeypatch):
+    """Regression guard: a healthy server default still runs, and still writes."""
     client = _client(tmp_path, monkeypatch)
     _project_with_vendor(client)
     assert client.post("/api/projects/p/ingest").status_code == 200
     assert client.post("/api/projects/p/ingest", json={}).status_code == 200
+    after = client.get("/api/projects/p/setup").json()
+    assert after["has_results"] is True
+    assert after["generation"] > 0
+
+
+def test_ingest_rejects_an_unknown_default_provider(tmp_path, monkeypatch):
+    """An omitted `provider` is validated too — the default is not exempt.
+
+    Before this was fixed the request fell through to `get_client(None)` inside
+    the `try`, so an unrecognised `LLM_PROVIDER` surfaced as a 502 "Ingestion
+    failed" — a configuration error dressed up as a model failure.
+    """
+    client = _client(tmp_path, monkeypatch)
+    _project_with_vendor(client)
+    before = client.get("/api/projects/p/setup").json()
+    monkeypatch.setenv("LLM_PROVIDER", "banana")
+
+    res = client.post("/api/projects/p/ingest")
+
+    assert res.status_code == 400  # never the 502 of a failed run
+    detail = res.json()["detail"]
+    assert "banana" in detail
+    assert "mock" in detail  # names the valid set
+    after = client.get("/api/projects/p/setup").json()
+    assert after["generation"] == before["generation"]
+    assert after["has_results"] is False
+
+
+def test_ingest_rejects_an_unready_default_provider(tmp_path, monkeypatch):
+    """An omitted `provider` with an unconfigured default is a 400, not a run.
+
+    Before this was fixed the run went ahead against a keyless client, wrote a
+    full store in which every extraction had failed, and reported
+    `has_results: true` with `generation` bumped 0 → 1.
+    """
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    client = _client(tmp_path, monkeypatch)
+    _project_with_vendor(client)
+    before = client.get("/api/projects/p/setup").json()
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+
+    res = client.post("/api/projects/p/ingest")
+
+    assert res.status_code == 400
+    assert "GEMINI_API_KEY" in res.json()["detail"]
+    after = client.get("/api/projects/p/setup").json()
+    assert after["generation"] == before["generation"]
+    assert after["has_results"] is False
 
 
 def test_setup_reports_provider_state(tmp_path, monkeypatch):
@@ -277,13 +326,15 @@ def test_rejected_run_does_not_disturb_a_previous_good_run(tmp_path, monkeypatch
     assert client.post("/api/projects/p/ingest", json={"provider": "mock"}).status_code == 200
     after_good = client.get("/api/projects/p/setup").json()
     assert after_good["has_results"] is True
+    assert after_good["generation"] > 0  # run 1 really did write
 
     res = client.post("/api/projects/p/ingest", json={"provider": "banana"})
     assert res.status_code == 400  # a config error, never the 502 of a failed run
 
     after_bad = client.get("/api/projects/p/setup").json()
     assert after_bad["generation"] == after_good["generation"]
-    assert after_bad["has_results"] == after_good["has_results"] is True
+    assert after_bad["has_results"] == after_good["has_results"]
+    assert after_bad["has_results"] is True
 
 
 def test_a_rejection_does_not_poison_the_next_run(tmp_path, monkeypatch):
@@ -316,9 +367,11 @@ def test_the_second_run_uses_the_second_choice(tmp_path, monkeypatch):
 def test_empty_provider_string_uses_the_default(tmp_path, monkeypatch):
     """Row 5: an empty field is unspecified, not invalid.
 
-    The dropdown's "server default" option submits an empty string, so `""`
-    must resolve to `None` — letting the factory read `LLM_PROVIDER` — rather
-    than being validated as the provider literally named `""`.
+    The dropdown offers only the five catalog ids, so this is not a UI contract
+    — it is API robustness for non-browser clients, which do send `""` for an
+    unset field. `""` must resolve to `None`, letting the factory read
+    `LLM_PROVIDER`, rather than being validated as a provider literally named
+    `""`.
     """
     client = _client(tmp_path, monkeypatch)
     _project_with_vendor(client)

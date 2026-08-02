@@ -124,10 +124,21 @@ Accepts an optional `provider` in the body.
 
 | Case | Response |
 |---|---|
-| absent | server default runs (unchanged behaviour) |
+| absent | the server default is resolved and validated by the two rules below, exactly as a named provider is; if it passes, it runs |
 | known and ready | that provider runs |
 | not one of the five | **400**, naming the valid set |
 | known but key absent | **400**, naming the missing variable |
+
+What is validated is therefore the **effective** provider — `provider or
+LLM_PROVIDER`, resolved the way `get_client` resolves it — not only an
+explicitly named one. This row changed after implementation: validating only the
+named provider meant an unconfigured default ran anyway, wrote a whole store in
+which every extraction had failed, bumped `generation` 0 → 1 and reported
+`has_results: true`, while an unrecognised default surfaced as a 502 from inside
+the `try`. A configuration error must be caught before any work starts, whether
+it came from the request body or from `.env`. The request still passes the
+possibly-`None` `provider` to `get_client`, so the env-resolution path for a
+healthy default is unchanged.
 
 Both rejections are **400, not 502**. The existing 502 at `api/main.py:260`
 means "extraction failed"; a provider that was never runnable is a
