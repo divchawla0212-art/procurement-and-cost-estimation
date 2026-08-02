@@ -92,40 +92,46 @@ def _prune_orphan_facts(root: str, slug: str, run_id: str, vendors: list[str],
     Vendors are walked from the project rather than from `documents`, because a
     vendor whose only datasheet was deleted produces no document at all.
     """
-    live_by_vendor: dict[str, set[str]] = {}
-    live_quotations_by_vendor: dict[str, set[str]] = {}
+    # Keyed by route, not merely by vendor: each collection is produced by one
+    # extractor, so "still live" has to mean "still routed to the extractor
+    # that produces this collection". A doc_id-only set is class-agnostic - a
+    # datasheet the model later reads as a quotation, or one the no-quotation
+    # fallback infers as one, stays in it under its new route - and its
+    # technical facts would then sit in the store forever, refreshed by
+    # nothing, still quoting a `verbatim` the document no longer contains.
+    # commercial already had this narrower set; technical and deviations were
+    # the same gap, one field over.
+    live_by_route: dict[tuple[str, str], set[str]] = {}
     for doc in documents:
         # "failed" counts as live: the document is still present and still
         # routed to an extractor, so a transient provider outage must not
         # delete the facts an earlier successful run stored for it.
-        if doc.vendor and doc.extraction_status in ("ok", "failed"):
-            live_by_vendor.setdefault(doc.vendor, set()).add(doc.doc_id)
-            # A quotation candidate is either classified as one or, for a
-            # vendor with no recognised quotation, inferred as one (routing
-            # leaves doc_class untouched, so that case cannot be read back off
-            # the document alone). `live` alone is class-agnostic - a document
-            # reclassified from quotation to datasheet stays in it under its
-            # new class - so commercial needs this narrower, class-aware set.
-            if doc.doc_class == "quotation" or doc.doc_id in inferred_quotes:
-                live_quotations_by_vendor.setdefault(doc.vendor, set()).add(doc.doc_id)
+        if not (doc.vendor and doc.extraction_status in ("ok", "failed")):
+            continue
+        # A quotation candidate is either classified as one or, for a vendor
+        # with no recognised quotation, inferred as one; routing leaves
+        # doc_class untouched, so that case cannot be read back off the
+        # document alone and _vendor_route is the one place that knows.
+        route = _vendor_route(doc, inferred_quotes)
+        if route is not None:
+            live_by_route.setdefault((doc.vendor, route), set()).add(doc.doc_id)
 
     for vendor in vendors:
         facts = snapshots.load_facts(root, slug, vendor)
         if facts is None:
             continue
-        live = live_by_vendor.get(vendor, set())
-        live_quotations = live_quotations_by_vendor.get(vendor, set())
-        technical = [f for f in facts.technical if f.get("doc_id") in live]
-        deviations = [d for d in facts.deviations if d.get("doc_id") in live]
+        live_technical = live_by_route.get((vendor, "datasheet"), set())
+        live_deviations = live_by_route.get((vendor, "deviation"), set())
+        live_quotations = live_by_route.get((vendor, "quotation"), set())
+        technical = [f for f in facts.technical if f.get("doc_id") in live_technical]
+        deviations = [d for d in facts.deviations if d.get("doc_id") in live_deviations]
         # commercial has no per-record doc_id, so it is pruned via the stored
-        # link, checked against the live *quotation* set above rather than the
-        # class-agnostic `live`: a vendor whose quotation was deleted, or whose
-        # document is still present but no longer classifies (or infers) as a
-        # quotation, kept its prices forever otherwise - the technical half's
-        # C1, one field over. The None guard matters: facts written before
-        # quotation_doc_id existed have no link, and reading that absence as
-        # "dead" would delete every pre-existing vendor's prices on the first
-        # run after upgrade.
+        # link: a vendor whose quotation was deleted, or whose document is
+        # still present but no longer classifies (or infers) as a quotation,
+        # kept its prices forever otherwise. The None guard matters: facts
+        # written before quotation_doc_id existed have no link, and reading
+        # that absence as "dead" would delete every pre-existing vendor's
+        # prices on the first run after upgrade.
         commercial_dead = (facts.quotation_doc_id is not None
                            and facts.quotation_doc_id not in live_quotations)
         if (len(technical) == len(facts.technical)
@@ -133,8 +139,10 @@ def _prune_orphan_facts(root: str, slug: str, run_id: str, vendors: list[str],
                 and not commercial_dead):
             continue
         dropped = sorted(
-            {f.get("doc_id") for f in facts.technical if f.get("doc_id") not in live}
-            | {d.get("doc_id") for d in facts.deviations if d.get("doc_id") not in live})
+            {f.get("doc_id") for f in facts.technical
+             if f.get("doc_id") not in live_technical}
+            | {d.get("doc_id") for d in facts.deviations
+               if d.get("doc_id") not in live_deviations})
         detail = {"doc_ids": dropped,
                   "technical_dropped": len(facts.technical) - len(technical),
                   "deviations_dropped": len(facts.deviations) - len(deviations)}
