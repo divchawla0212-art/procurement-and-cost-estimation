@@ -33,6 +33,7 @@ export interface MatrixRow {
 
 export interface Coverage {
   auto_cells: number
+  stated_cells: number
   by_verdict: Record<string, number>
   unanswered_silent: number
   unanswered_refused: number

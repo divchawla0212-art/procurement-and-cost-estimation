@@ -54,15 +54,28 @@ def vocabulary_sha(params: list[str]) -> str:
     return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:12]
 
 
+def _tokens(value) -> set[str]:
+    return {t for t in _NOISE.split(str(value).lower()) if t}
+
+
 def _stated_matches(required, stated) -> bool:
     """True when every token of the required value appears in the stated one.
 
     Subset, not equality: a datasheet prints "Class F / Class B rise" for a
     clause requiring "Class F", and equality would fail every real vendor.
     """
-    req_tokens = {t for t in _NOISE.split(str(required).lower()) if t}
-    got_tokens = {t for t in _NOISE.split(str(stated).lower()) if t}
+    req_tokens = _tokens(required)
+    got_tokens = _tokens(stated)
     return bool(req_tokens) and req_tokens <= got_tokens
+
+
+def _states_something(value) -> bool:
+    """False for `None` and for a value that tokenizes to nothing (blank or
+    whitespace-only). A fact naming the parameter with no real value is not
+    evidence: it must not satisfy a presence requirement, and it must not be
+    handed to `_stated_matches` where `str(None)` tokenizes to `{"none"}` and
+    would manufacture a `review` verdict out of blank evidence."""
+    return value is not None and bool(_tokens(value))
 
 
 def evaluate(requirement, facts: list[dict], deviations: list[dict],
@@ -88,7 +101,8 @@ def evaluate(requirement, facts: list[dict], deviations: list[dict],
 
     if requirement.checkability == "stated":
         want = _norm(requirement.parameter)
-        fact = next((f for f in facts if _norm(f.get("parameter")) == want), None)
+        fact = next((f for f in facts if _norm(f.get("parameter")) == want
+                    and _states_something(f.get("value"))), None)
         if fact is None:
             # the same rule `auto` follows: not having read the answer is not
             # the vendor having answered wrongly

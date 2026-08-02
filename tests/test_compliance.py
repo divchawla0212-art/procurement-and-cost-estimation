@@ -281,3 +281,25 @@ def test_a_declared_deviation_still_beats_a_stated_pass():
     r = evaluate(_stated(), [_stated_fact("generator_insulation_class", "Class F")],
                  dev, "MKON", "now")
     assert r.verdict == "deviation"
+
+
+def test_a_null_valued_fact_is_unanswered_for_a_presence_requirement():
+    # a fact naming the parameter with no value must not satisfy "must be
+    # stated" - that is missing data coerced into a pass
+    r = evaluate(_stated(parameter="anchor_bolt", value=None),
+                 [_stated_fact("anchor_bolt", None)], [], "KERUI", "now")
+    assert r.verdict == "unanswered" and r.fact_id is None
+    assert "anchor_bolt" in r.rationale
+
+
+def test_a_null_valued_fact_is_unanswered_for_a_stated_value_requirement():
+    r = evaluate(_stated(), [_stated_fact("generator_insulation_class", None)],
+                 [], "KERUI", "now")
+    assert r.verdict == "unanswered" and r.fact_id is None
+
+
+def test_a_blank_valued_fact_is_unanswered_not_a_token_match():
+    # "   " tokenizes to nothing; it is not evidence, whatever the string diff says
+    r = evaluate(_stated(), [_stated_fact("generator_insulation_class", "   ")],
+                 [], "KERUI", "now")
+    assert r.verdict == "unanswered" and r.fact_id is None

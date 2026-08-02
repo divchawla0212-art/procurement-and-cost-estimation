@@ -16,7 +16,7 @@ export function VerdictTag({ verdict }: { verdict: string }) {
 
 /**
  * The segmented gauge that is this product's visual signature. Segments are
- * proportioned over machine-checkable (`auto`) cells only — the same basis the
+ * proportioned over checked cells (`auto` + `stated`) — the same basis the
  * backend Coverage model uses — so the bar never mixes judgement clauses in.
  */
 export function CoverageInstrument({
@@ -26,11 +26,11 @@ export function CoverageInstrument({
   coverage: Coverage
   compact?: boolean
 }) {
-  const total = coverage.auto_cells
+  const total = coverage.auto_cells + coverage.stated_cells
   if (!total) {
     return (
       <p className="muted mono" style={{ fontSize: '0.8rem', margin: 0 }}>
-        No machine-checkable cells yet.
+        No checked cells yet.
       </p>
     )
   }

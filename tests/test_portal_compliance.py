@@ -43,6 +43,38 @@ def _seed(root):
     snapshots.save_compliance(root, "p", cells)
 
 
+def _seed_mixed(root):
+    """One auto pass, one stated pass - the scenario the coverage percentages
+    must handle without exceeding 100%, since `by_verdict` tallies both
+    tiers together while `auto_cells` alone does not."""
+    create_project(root, "P")
+    project = load_project(root, "p")
+    project.vendors = ["KERUI"]
+    save_project(root, project)
+    requirements = [
+        RequirementRecord(req_id=req_id_for("d1", "1.1"), clause_ref="1.1",
+                          text="noise limit 85 dBA", checkability="auto",
+                          parameter="noise_limit", operator="<=", value=85.0,
+                          unit="dBA", source_doc_id="d1"),
+        RequirementRecord(req_id=req_id_for("d1", "2.6"), clause_ref="2.6",
+                          text="Generator Insulation Temperature: Class F",
+                          checkability="stated",
+                          parameter="generator_insulation_class",
+                          value="Class F", source_doc_id="d1"),
+    ]
+    cells = [
+        ComplianceResult(req_id=req_id_for("d1", "1.1"), vendor="KERUI",
+                         verdict="pass", fact_id="f-1", doc_id="d9",
+                         rationale="82 dBA <= 85 dBA", evaluated_at=NOW),
+        ComplianceResult(req_id=req_id_for("d1", "2.6"), vendor="KERUI",
+                         verdict="pass", fact_id="f-2", doc_id="d9",
+                         rationale="vendor states generator_insulation_class = "
+                                   "'Class F / Class B rise'", evaluated_at=NOW),
+    ]
+    snapshots.save_requirements(root, "p", RequirementSet(requirements=requirements))
+    snapshots.save_compliance(root, "p", cells)
+
+
 def _open_project(tmp_path, monkeypatch):
     monkeypatch.setenv("PROCUREMENT_PROJECTS_ROOT", str(tmp_path))
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
@@ -81,3 +113,16 @@ def test_a_project_with_no_matrix_says_so_instead_of_breaking(tmp_path, monkeypa
     at = _open_project(tmp_path, monkeypatch)
     assert not at.exception
     assert any("Run ingestion" in i.value for i in at.info)
+
+
+def test_a_stated_pass_does_not_push_coverage_past_100_percent(tmp_path, monkeypatch):
+    # by_verdict tallies auto and stated together; the denominator must too,
+    # or a stated pass on top of an auto pass renders "Pass — 2 (200%)"
+    _seed_mixed(str(tmp_path))
+    at = _open_project(tmp_path, monkeypatch)
+    assert not at.exception
+
+    checked = next(m for m in at.metric if m.label == "Checked cells")
+    assert checked.value == "2"
+    passed = next(m for m in at.metric if m.label == "Pass")
+    assert passed.value == "2  (100%)"

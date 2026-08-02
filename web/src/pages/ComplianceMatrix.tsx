@@ -144,12 +144,19 @@ export function ComplianceMatrix(props: ComplianceMatrixProps): JSX.Element {
   const predicate = (row: MatrixRow) => rowMatches(row, query, verdicts, vendor)
   const filteredRows = rows.filter(predicate)
 
-  const auto = coverage.auto_cells
+  const checked = coverage.auto_cells + coverage.stated_cells
   const passCount = coverage.by_verdict['pass'] ?? 0
   const failCount = coverage.by_verdict['fail'] ?? 0
   const unansweredCount = coverage.by_verdict['unanswered'] ?? 0
+  // `unanswered_silent`/`unanswered_refused` only tally `auto` cells; a
+  // `stated` cell is `unanswered` for exactly the "silent" reason (no vendor
+  // document named the parameter), so the remainder is that stated-tier count.
+  const statedUnanswered =
+    unansweredCount - coverage.unanswered_silent - coverage.unanswered_refused
   const hasUnansweredNote =
-    coverage.unanswered_silent > 0 || coverage.unanswered_refused > 0
+    coverage.unanswered_silent > 0 ||
+    coverage.unanswered_refused > 0 ||
+    statedUnanswered > 0
 
   return (
     <>
@@ -162,15 +169,15 @@ export function ComplianceMatrix(props: ComplianceMatrixProps): JSX.Element {
       <Card title="Coverage">
         <CoverageInstrument coverage={coverage} />
 
-        {auto > 0 && (
+        {checked > 0 && (
           <div className="metrics" style={{ marginTop: '1rem' }}>
-            <Metric k="Machine-checkable cells" v={auto} />
-            <Metric k="Pass" v={passCount} sub={pct(passCount, auto)} />
-            <Metric k="Fail" v={failCount} sub={pct(failCount, auto)} />
+            <Metric k="Checked cells" v={checked} />
+            <Metric k="Pass" v={passCount} sub={pct(passCount, checked)} />
+            <Metric k="Fail" v={failCount} sub={pct(failCount, checked)} />
             <Metric
               k="Unanswered"
               v={unansweredCount}
-              sub={pct(unansweredCount, auto)}
+              sub={pct(unansweredCount, checked)}
             />
           </div>
         )}
@@ -185,6 +192,13 @@ export function ComplianceMatrix(props: ComplianceMatrixProps): JSX.Element {
             coverage gap — and <b>{coverage.unanswered_refused}</b> because the
             fact was found but the comparison could not be made, which measures
             our reach, not the vendor's answer.
+            {statedUnanswered > 0 && (
+              <>
+                {' '}
+                Another <b>{statedUnanswered}</b> are on a stated requirement
+                where no vendor document named the parameter at all.
+              </>
+            )}
           </p>
         )}
       </Card>
