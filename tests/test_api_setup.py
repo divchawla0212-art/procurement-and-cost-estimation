@@ -112,3 +112,34 @@ def test_setup_reports_provider_state(tmp_path, monkeypatch):
     provider = client.get("/api/projects/p/setup").json()["provider"]
     assert provider["provider"] == "mock"
     assert provider["ready"] is True
+
+
+def test_setup_reports_provider_catalog(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-a-real-key")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    client = _client(tmp_path, monkeypatch)
+    client.post("/api/projects", json={"name": "P"})
+    provider = client.get("/api/projects/p/setup").json()["provider"]
+
+    assert [entry["id"] for entry in provider["catalog"]] == [
+        "anthropic", "openai", "gemini", "bedrock", "mock",
+    ]
+    by_id = {entry["id"]: entry for entry in provider["catalog"]}
+    assert by_id["openai"] == {
+        "id": "openai", "needs_key": "OPENAI_API_KEY", "ready": True,
+    }
+    assert by_id["gemini"] == {
+        "id": "gemini", "needs_key": "GEMINI_API_KEY", "ready": False,
+    }
+    assert by_id["bedrock"] == {"id": "bedrock", "needs_key": None, "ready": True}
+    assert by_id["mock"] == {"id": "mock", "needs_key": None, "ready": True}
+
+
+def test_catalog_does_not_change_the_default_keys(tmp_path, monkeypatch):
+    """The three legacy keys still describe the server default, not a selection."""
+    client = _client(tmp_path, monkeypatch)
+    client.post("/api/projects", json={"name": "P"})
+    provider = client.get("/api/projects/p/setup").json()["provider"]
+    assert provider["provider"] == "mock"
+    assert provider["needs_key"] is None
+    assert provider["ready"] is True

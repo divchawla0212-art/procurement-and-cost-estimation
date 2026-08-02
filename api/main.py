@@ -32,6 +32,23 @@ ROOT = os.environ.get("PROCUREMENT_PROJECTS_ROOT", "projects")
 
 REQUIREMENTS_EXTS = {".pdf", ".docx", ".xlsx"}
 
+# Provider → the env var holding its API key. None means no key is needed:
+# bedrock authenticates via AWS IAM, and mock calls nothing. Insertion order is
+# the order the UI lists them in, so it must stay stable.
+PROVIDER_KEYS: dict[str, str | None] = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+    "bedrock": None,
+    "mock": None,
+}
+
+
+def _provider_ready(provider: str) -> bool:
+    needed = PROVIDER_KEYS.get(provider)
+    return needed is None or bool(os.getenv(needed))
+
+
 app = FastAPI(title="Procurement Review API", version="0.2.0")
 app.add_middleware(
     CORSMiddleware,
@@ -122,17 +139,20 @@ def get_statement(slug: str) -> dict:
 
 
 def _provider_state() -> dict:
-    """What the server will use to run extraction, and whether it can."""
+    """The server's default provider, plus what every provider would need.
+
+    The first three keys describe the default, not any selection — the front end
+    and tests both depend on that meaning being unchanged.
+    """
     provider = os.getenv("LLM_PROVIDER", "mock").lower()
-    needed = {
-        "anthropic": "ANTHROPIC_API_KEY",
-        "openai": "OPENAI_API_KEY",
-        "gemini": "GEMINI_API_KEY",
-    }.get(provider)
     return {
         "provider": provider,
-        "needs_key": needed,
-        "ready": provider in ("mock", "bedrock") or bool(needed and os.getenv(needed)),
+        "needs_key": PROVIDER_KEYS.get(provider),
+        "ready": _provider_ready(provider),
+        "catalog": [
+            {"id": name, "needs_key": key, "ready": _provider_ready(name)}
+            for name, key in PROVIDER_KEYS.items()
+        ],
     }
 
 
