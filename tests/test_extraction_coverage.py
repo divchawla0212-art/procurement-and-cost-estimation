@@ -465,12 +465,10 @@ def test_row11_a_response_omitting_facts_is_ok_with_no_facts(tmp_path):
     assert doc.extraction_status == "ok"        # never `failed`
     assert doc.extracted_at and doc.prompt_version == TECH_PROMPT_VERSION
     assert _facts(root).technical == kept       # its own facts are gone, no others
-    # The brief's third clause for this row - "`notes` records the empty
-    # result" - is not what the code does, and cannot be without contradicting
-    # tests/test_extract_tech.py::test_a_response_omitting_the_facts_key_is_ok_with_no_facts,
-    # which pins `notes is None` for exactly this response, with a rationale.
-    # Pinned here as it actually behaves, and raised in the task report rather
-    # than quietly dropped.
+    # `notes` stays None on an `ok` extraction, per the amended row 11 - the
+    # same convention tests/test_extract_tech.py::
+    # test_a_response_omitting_the_facts_key_is_ok_with_no_facts pins on the
+    # extractor, and phase 3's row 9 pins on the RFQ side.
     assert doc.notes is None
 
     third = CoverageClient()
@@ -501,6 +499,42 @@ def test_row13_a_document_that_stops_routing_loses_its_facts(tmp_path, monkeypat
     technical = _facts(root).technical
     assert all(f["doc_id"] != spares.doc_id for f in technical)
     assert technical, "only the unroutable document's facts should have gone"
+
+
+def test_row9_a_document_inferred_as_the_quotation_gives_up_its_technical_facts(tmp_path):
+    # INV-B, with no monkeypatching anywhere: the naturally-reachable form of
+    # the defect row 9 found. `_EXTRACTABLE` still names three routes, so the
+    # no-quotation fallback pool holds every document Task 2 widened routing
+    # to - `other` among them. A vendor whose quotation is withdrawn therefore
+    # has one of its datasheet-routed documents promoted to the quotation
+    # extractor, and the facts that document stored on run 1 are refreshed by
+    # nothing from then on. pipeline.py's own comment on the fallback pool -
+    # "stealing a datasheet to guess a price would lose its technical facts" -
+    # is this path, stated and until now unasserted.
+    root = _project(tmp_path)
+    _write_vendor(tmp_path, "KERUI", _SPARES, "two years of operating spares")
+    run_ingestion(root, "p", CoverageClient())
+    spares, datasheet = _doc(root, _SPARES), _doc(root, _DATASHEET)
+    kept = [f for f in _facts(root).technical if f["doc_id"] == datasheet.doc_id]
+    assert spares.doc_id in {f["doc_id"] for f in _facts(root).technical}
+    assert kept and _facts(root).quotation_doc_id == _doc(root, _QUOTATION).doc_id
+
+    os.remove(os.path.join(root, "p", "vendors", "KERUI", _QUOTATION))
+    run_ingestion(root, "p", CoverageClient())
+
+    promoted = _doc(root, _SPARES)
+    assert promoted.doc_class == "other"        # routing never rewrites the class
+    assert promoted.extraction_status == "ok"
+    assert promoted.prompt_version == "bid_extract_v1", "not read as the quotation"
+    assert "vendor.quotation_inferred" in [e.action for e in events.read_events(root, "p")]
+
+    facts = _facts(root)
+    assert facts.quotation_doc_id == promoted.doc_id
+    assert facts.commercial["base_price"] == 1000.0
+    # the promoted document's facts are pruned: no extractor maintains them any
+    # more, and its stored `verbatim` quotes text nothing re-reads
+    assert all(f["doc_id"] != promoted.doc_id for f in facts.technical)
+    assert facts.technical == kept              # and only that document's went
 
 
 # --- INV-A: an unreadable document is `failed`, and `failed` counts as live
