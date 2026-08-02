@@ -247,9 +247,10 @@ def test_an_amendment_cannot_leave_a_stated_requirement_without_a_parameter():
     req = RequirementRecord(req_id="r-1", clause_ref="2.6", text="Class F",
                             source_doc_id="d", checkability="stated",
                             parameter="generator_insulation_class", value="Class F")
+    # parameter="" (not None) passes the `is not None` copy guard in
+    # apply_amendments and actually clears the field - unlike value=None below,
+    # which the guard skips and leaves untouched.
     amend = Amendment(amendment_id="a-1", clause_ref="2.6", text="withdrawn value",
-                      value=None, source_doc_id="m", action="modify")
+                      parameter="", value=None, source_doc_id="m", action="modify")
     out, _ = apply_amendments([req], [amend])
-    assert out[0].checkability in ("stated", "judgement")
-    if out[0].checkability == "stated":
-        assert out[0].parameter
+    assert out[0].checkability == "judgement"

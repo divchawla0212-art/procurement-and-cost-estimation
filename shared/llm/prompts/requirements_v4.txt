@@ -19,22 +19,32 @@ Return a list of requirements. For each one give:
                              IEC 60034-1".
                  "judgement" everything else - anything needing a human to weigh
                              wording, scope, or adequacy.
-  parameter    - auto only: a short snake_case name matching how a datasheet
-                 would print it (h2s_tolerance, continuous_rating, frequency,
-                 ambient_design_temp, nox_emission).
-  operator     - auto only: one of >= <= == in between
-  value        - auto only, exactly as printed - do not convert or compute:
-                   >= <= ==   a single number
-                   in         the list of permitted values
-                   between    exactly two numbers, the lower and upper bound
+  parameter    - auto and stated: a short snake_case name matching how a
+                 datasheet would print it (h2s_tolerance, continuous_rating,
+                 frequency, ambient_design_temp, nox_emission,
+                 generator_insulation_class).
+  operator     - auto only: one of >= <= == in between. A "stated" clause
+                 never has an operator - omit this field for "stated".
+  value        - auto and stated, exactly as printed - do not convert or
+                 compute:
+                   auto, >= <= ==   a single number
+                   auto, in         the list of permitted values
+                   auto, between    exactly two numbers, the lower and upper
+                                    bound
+                   stated           the non-numeric value required, or omit
+                                    this field entirely for a clause that only
+                                    requires the parameter to be present
   unit         - auto only: the unit exactly as printed (ppm, kW, degC, bar,
-                 Hz, V). Use "" for a genuinely dimensionless bound.
+                 Hz, V). Use "" for a genuinely dimensionless bound. A
+                 "stated" clause never has a unit - omit this field for
+                 "stated".
 
 Rules:
 - Copy values exactly as stated. Never convert between units.
 - Mark a clause "auto" only when all four of parameter, operator, value and
-  unit are present. If any is missing or ambiguous, use "judgement" and leave
-  those fields out - a half-stated bound is worse than no bound.
+  unit are present. If any is missing or ambiguous and the clause is not
+  "stated" (see the "stated" rules below), use "judgement" and leave those
+  fields out - a half-stated bound is worse than no bound.
 - "between" is for a stated range: "Temperature 5-58 deg C", "gas pressure
   2.76 to 4.14 barg", "ambient 5 degC minimum to 58 degC maximum".
   "in" is for a set of permitted values: "50 or 60 Hz", "415V / 690V".
