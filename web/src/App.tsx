@@ -5,22 +5,26 @@ import { useAsync } from './useAsync'
 import { Dashboard } from './pages/Dashboard'
 import { ComplianceMatrix } from './pages/ComplianceMatrix'
 import { ComparativeStatement } from './pages/ComparativeStatement'
+import { Setup } from './pages/Setup'
 
-type View = 'dashboard' | 'matrix' | 'statement'
+type View = 'dashboard' | 'setup' | 'matrix' | 'statement'
 
 const NAV: { view: View; index: string; label: string; needsProject: boolean }[] = [
   { view: 'dashboard', index: '00', label: 'Dashboard', needsProject: false },
-  { view: 'matrix', index: '01', label: 'Compliance matrix', needsProject: true },
-  { view: 'statement', index: '02', label: 'Comparative statement', needsProject: true },
+  { view: 'setup', index: '01', label: 'Set up & ingest', needsProject: false },
+  { view: 'matrix', index: '02', label: 'Compliance matrix', needsProject: true },
+  { view: 'statement', index: '03', label: 'Comparative statement', needsProject: true },
 ]
 
 export default function App() {
+  const [tick, setTick] = useState(0)
   const { data: projects, error, loading } = useAsync<ProjectSummary[]>(
     fetchProjects,
-    [],
+    [tick],
   )
   const [view, setView] = useState<View>('dashboard')
   const [slug, setSlug] = useState<string | null>(null)
+  const [creating, setCreating] = useState(false)
 
   useEffect(() => {
     if (projects && projects.length && slug === null) {
@@ -29,10 +33,22 @@ export default function App() {
   }, [projects, slug])
 
   const active = projects?.find((p) => p.slug === slug) ?? null
+  const reload = () => setTick((t) => t + 1)
 
   function open(nextSlug: string) {
     setSlug(nextSlug)
     setView('matrix')
+  }
+
+  function startNew() {
+    setCreating(true)
+    setView('setup')
+  }
+
+  function onCreated(nextSlug: string) {
+    setSlug(nextSlug)
+    setCreating(false)
+    reload()
   }
 
   return (
@@ -92,7 +108,8 @@ export default function App() {
         </div>
 
         <div className="rail-foot">
-          Read-only review. Upload &amp; ingestion run in the Streamlit portal.
+          Set up a project, ingest vendor bids, then review the results — all
+          here.
         </div>
       </aside>
 
@@ -131,6 +148,16 @@ export default function App() {
                 projects={projects}
                 loading={loading}
                 error={error}
+                onOpen={open}
+                onNew={startNew}
+              />
+            )}
+            {view === 'setup' && (
+              <Setup
+                slug={creating ? null : active?.slug ?? null}
+                onCreated={onCreated}
+                onNew={startNew}
+                reload={reload}
                 onOpen={open}
               />
             )}

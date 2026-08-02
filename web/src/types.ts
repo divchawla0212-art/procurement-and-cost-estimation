@@ -56,6 +56,31 @@ export interface ProjectDetail {
   group_counts: Record<GroupKey, number>
 }
 
+export interface ProviderState {
+  provider: string
+  needs_key: string | null
+  ready: boolean
+}
+
+export interface VendorSetup {
+  name: string
+  file_count: number
+  quote: string | null
+}
+
+export interface ProjectSetup {
+  slug: string
+  name: string
+  target_currency: string
+  requirements_file: string | null
+  vendors: VendorSetup[]
+  fx_rates: Record<string, number>
+  status: string
+  generation: number
+  has_results: boolean
+  provider: ProviderState
+}
+
 export interface StatementCell {
   qty: number | null
   unit_price: number | null
