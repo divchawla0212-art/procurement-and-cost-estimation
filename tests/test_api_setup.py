@@ -143,3 +143,14 @@ def test_catalog_does_not_change_the_default_keys(tmp_path, monkeypatch):
     assert provider["provider"] == "mock"
     assert provider["needs_key"] is None
     assert provider["ready"] is True
+
+
+def test_unrecognized_default_provider_is_not_ready(tmp_path, monkeypatch):
+    """An out-of-catalog LLM_PROVIDER must report ready=False, not True."""
+    client = _client(tmp_path, monkeypatch)
+    monkeypatch.setenv("LLM_PROVIDER", "banana")
+    client.post("/api/projects", json={"name": "P"})
+    provider = client.get("/api/projects/p/setup").json()["provider"]
+    assert provider["provider"] == "banana"
+    assert provider["needs_key"] is None
+    assert provider["ready"] is False

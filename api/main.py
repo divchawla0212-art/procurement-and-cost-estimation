@@ -45,7 +45,9 @@ PROVIDER_KEYS: dict[str, str | None] = {
 
 
 def _provider_ready(provider: str) -> bool:
-    needed = PROVIDER_KEYS.get(provider)
+    if provider not in PROVIDER_KEYS:
+        return False
+    needed = PROVIDER_KEYS[provider]
     return needed is None or bool(os.getenv(needed))
 
 
