@@ -248,11 +248,13 @@ PROVIDER_KEYS: dict[str, str | None] = {
 
 
 def _provider_ready(provider: str) -> bool:
-    needed = PROVIDER_KEYS.get(provider)
+    if provider not in PROVIDER_KEYS:
+        return False
+    needed = PROVIDER_KEYS[provider]
     return needed is None or bool(os.getenv(needed))
 ```
 
-`_provider_ready` returns `True` for a provider absent from `PROVIDER_KEYS` — `.get` yields `None`. That is fine here because Task 3 rejects unknown providers by membership before ever asking about readiness. Do not reuse this helper as a validity check.
+**The membership check is load-bearing.** Without it, `.get` yields `None` for an unrecognized provider and `needed is None` reads that as "needs no key", reporting an unknown `LLM_PROVIDER` as **ready** — where the code this replaces reported `False`. Task 3's validation does **not** cover this case: it guards the provider *named in a request*, whereas `_provider_state()` reports the *server default*, which no request ever names. An unknown default would otherwise show a green banner and an enabled Run button, then fail as a 502 out of `get_client(None)` — the exact 400-vs-502 confusion §4.3 exists to prevent. Task 4's catalog fallback keys off this same value.
 
 Then rewrite `_provider_state()`:
 
