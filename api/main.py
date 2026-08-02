@@ -20,6 +20,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from procurement import project as proj
 from procurement.matrix import GROUP_ORDER, build_matrix, rows_in_group
@@ -259,3 +260,13 @@ def ingest(slug: str) -> dict:
     except Exception as exc:  # surface extraction failures to the UI verbatim
         raise HTTPException(status_code=502, detail=f"Ingestion failed: {exc}") from exc
     return _setup_state(proj.load_project(ROOT, slug))
+
+
+# ------------------------------------------------------------- static front end
+# In a container the compiled React bundle is served from this same app, so the
+# UI and the API share one origin and CORS never applies. Mounted last, after
+# every /api route, and only when a build is present — a source checkout without
+# `npm run build` keeps serving the API alone.
+_WEB_DIST = os.environ.get("WEB_DIST", os.path.join(os.path.dirname(__file__), "..", "web", "dist"))
+if os.path.isdir(_WEB_DIST):
+    app.mount("/", StaticFiles(directory=_WEB_DIST, html=True), name="web")

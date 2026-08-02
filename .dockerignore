@@ -1,0 +1,37 @@
+# Secrets — never bake these into an image layer. Compose injects .env at runtime.
+.env
+.env.*
+!.env.example
+
+# Version control / tooling
+.git
+.github
+.gitignore
+.claude
+.superpowers
+.pytest_cache
+.worktrees
+
+# Local Python environments and build residue
+.venv
+venv
+*.egg-info
+__pycache__
+**/__pycache__
+*.py[cod]
+
+# Node: reinstalled from the lockfile inside the build stage
+web/node_modules
+web/dist
+
+# Runtime data — lives in a volume, not in the image
+projects/
+data/
+processed-data/
+
+# Docs and notebooks add nothing to the runtime
+docs
+*.ipynb
+Dockerfile
+docker-compose.yml
+.dockerignore
