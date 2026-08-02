@@ -50,14 +50,19 @@ def _norm_clause(ref: str | None) -> str:
     return _CLAUSE_NOISE.sub("", (ref or "").lower().replace("clause", ""))
 
 
-def extract_amendments(doc_id: str, path: str, client, pdf_fallback=None
+def extract_amendments(doc_id: str, path: str, client, pdf_fallback=None,
+                       text: str | None = None
                        ) -> tuple[list[Amendment], str, str | None]:
     """Return (amendments, status, notes). Never raises: one unreadable MOM
     must not abort a run. `notes` carries the reason on failure, None on
     success - without it a permanently failing document is retried every run
-    with no record of why."""
+    with no record of why.
+
+    `text`, when given, is used as-is — the pipeline has already read the
+    document once and passes it down so this does not read it a second time."""
     try:
-        text = read_text(path, llm_fallback=pdf_fallback)
+        if text is None:
+            text = read_text(path, llm_fallback=pdf_fallback)
         prompt = _PROMPT.read_text(encoding="utf-8")
         raw = client.classify_structure(prompt, _AmendmentList, text)
         # An omitted optional array is an empty extraction, not a failed one.

@@ -227,3 +227,32 @@ def test_prompt_versions_are_per_class():
     assert PROMPT_VERSION_BY_CLASS["quotation"] == "bid_extract_v1"
     assert PROMPT_VERSION_BY_CLASS["datasheet"] == "tech_facts_v1"
     assert PROMPT_VERSION_BY_CLASS["deviation"] == "deviation_v1"
+
+
+def test_a_document_with_no_readable_text_is_failed_with_a_reason(tmp_path):
+    root = str(tmp_path)
+    create_project(root, "P", target_currency="USD")
+    z = tmp_path / "v.zip"
+    z.write_bytes(_zip({
+        "KERUI/Quotation of Gas Generator.txt": b"base price 1000",
+        "KERUI/01 DataSheet Gas Generator.txt": b"x",     # 1 char: unreadable
+    }))
+    unpack_vendor_zip(root, "p", str(z))
+    client = RoutingClient()
+    run_ingestion(root, "p", client)
+
+    doc = next(d for d in snapshots.load_documents(root, "p")
+               if d.path.endswith("01 DataSheet Gas Generator.txt"))
+    assert doc.extraction_status == "failed"
+    assert "no readable text" in doc.notes
+    assert doc.text_source is not None
+    # the guard fires before the model is asked, so no facts prompt was sent
+    assert not any("facts" in c.get("prompt", "") for c in client.calls)
+
+
+def test_every_extracted_document_records_its_text_source(tmp_path):
+    root = _project(tmp_path)
+    run_ingestion(root, "p", RoutingClient())
+    for doc in snapshots.load_documents(root, "p"):
+        if doc.vendor and doc.extraction_status in ("ok", "failed"):
+            assert doc.text_source, f"{doc.path} has no text_source"

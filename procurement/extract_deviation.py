@@ -29,14 +29,19 @@ class _DeviationList(BaseModel):
     deviations: list[_Deviation] = []
 
 
-def extract_deviations(doc_id: str, path: str, client, pdf_fallback=None
+def extract_deviations(doc_id: str, path: str, client, pdf_fallback=None,
+                       text: str | None = None
                        ) -> tuple[list[DeviationRecord], str, str | None]:
     """Return (deviations, status, notes). Status is "ok" or "failed"; a failure
     never raises. `notes` carries the reason on failure and is None on success —
     without it a permanently failing document is retried on every run with no
-    record of why it fails."""
+    record of why it fails.
+
+    `text`, when given, is used as-is — the pipeline has already read the
+    document once and passes it down so this does not read it a second time."""
     try:
-        text = read_text(path, llm_fallback=pdf_fallback)
+        if text is None:
+            text = read_text(path, llm_fallback=pdf_fallback)
         prompt = _PROMPT.read_text(encoding="utf-8")
         raw = client.classify_structure(prompt, _DeviationList, text)
         # Same reasoning as extract_tech_facts: an omitted optional array is an

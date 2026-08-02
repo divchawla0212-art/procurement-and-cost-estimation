@@ -2,7 +2,7 @@ import os
 import openpyxl
 import pytest
 from procurement.loaders import (read_xlsx_text, read_text, read_pdf_text,
-                                 read_docx_text)
+                                 read_docx_text, read_text_with_source)
 
 FIXTURE_DOCX = os.path.join(os.path.dirname(__file__), "fixtures", "rfq_clauses.docx")
 
@@ -105,6 +105,30 @@ def test_read_text_rejects_legacy_doc(tmp_path):
     message = str(exc.value).lower()
     assert ".doc" in message
     assert "docx" in message or "pdf" in message  # says what to convert to
+
+
+def test_read_text_with_source_names_the_reader(tmp_path):
+    p = tmp_path / "sheet.xlsx"
+    import openpyxl
+    wb = openpyxl.Workbook()
+    wb.active["A1"] = "Continuous rating 525 kW"
+    wb.save(p)
+    text, source = read_text_with_source(str(p))
+    assert "525" in text and source == "xlsx"
+
+
+def test_read_text_still_returns_only_text(tmp_path):
+    p = tmp_path / "note.txt"
+    p.write_text("plain body", encoding="utf-8")
+    # read_text must delegate, so the two paths cannot drift
+    assert read_text(str(p)) == read_text_with_source(str(p))[0] == "plain body"
+
+
+def test_a_pdf_with_no_text_layer_reports_its_reader_not_a_crash(tmp_path):
+    p = tmp_path / "drawing.pdf"
+    p.write_bytes(b"%PDF-1.4\n%%EOF\n")     # structurally a PDF, no text
+    text, source = read_text_with_source(str(p))
+    assert text.strip() == "" and source in ("pdftotext", "pypdf")
 
 
 REAL_PDF = "data/procurement-data/ADPOWER/ADP-13158-2024-935.pdf"

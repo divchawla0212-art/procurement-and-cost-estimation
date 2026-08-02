@@ -23,7 +23,8 @@ from procurement.extract_mom import (apply_amendments, extract_amendments,
                                      MOM_PROMPT_VERSION)
 from procurement import compliance
 from procurement.compliance import vocabulary, vocabulary_sha
-from procurement.loaders import read_text
+from procurement.loaders import (MIN_EXTRACTABLE_CHARS, read_text,
+                                 read_text_with_source)
 
 PROMPT_VERSION = "bid_extract_v1"        # kept: the quotation prompt version
 PROMPT_VERSION_BY_CLASS = {
@@ -284,9 +285,36 @@ def _run_rfq_pass(root: str, slug: str, client,
             continue
 
         full = os.path.join(pdir, doc.path)
+        try:
+            text, text_source = read_text_with_source(
+                full, llm_fallback=pdf_fallback)
+        except Exception as exc:
+            text, text_source = "", "unreadable"
+            doc.extraction_status = "failed"
+            doc.notes = f"unreadable document: {exc}"
+        doc.text_source = f"{text_source}:{len(text)}chars"
+
+        if (doc.extraction_status != "failed"
+                and len(text.strip()) < MIN_EXTRACTABLE_CHARS):
+            # `failed`, never `skipped`: the live-set check below (and
+            # _prune_orphan_facts' vendor-side counterpart) treats skipped as
+            # dead and would delete requirements/amendments a good earlier run
+            # stored, the first time `pdftotext` is missing from the PATH.
+            doc.extraction_status = "failed"
+            doc.notes = (f"no readable text layer "
+                         f"({len(text.strip())} chars via {text_source}); "
+                         "scanned or drawing-only document")
+        if doc.extraction_status == "failed":
+            failed += 1
+            events.append_event(root, slug, Event(
+                at=_now(), run_id=run_id, actor="pipeline",
+                action="document.unreadable", target=doc.doc_id,
+                detail={"text_source": doc.text_source}))
+            continue
+
         if route == "spec":
             fresh, status, notes = extract_requirements(
-                doc.doc_id, full, client, pdf_fallback=pdf_fallback)
+                doc.doc_id, full, client, pdf_fallback=pdf_fallback, text=text)
             if status == "ok":
                 # replace only this document's requirements; other specs survive
                 requirements = [r for r in requirements
@@ -294,7 +322,7 @@ def _run_rfq_pass(root: str, slug: str, client,
             # on failure the previously-stored records for this document stay
         else:
             fresh, status, notes = extract_amendments(
-                doc.doc_id, full, client, pdf_fallback=pdf_fallback)
+                doc.doc_id, full, client, pdf_fallback=pdf_fallback, text=text)
             if status == "ok":
                 amendments = [a for a in amendments
                               if a.source_doc_id != doc.doc_id] + fresh
@@ -502,12 +530,40 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
                 continue
 
             full = os.path.join(pdir, doc.path)
+            try:
+                text, text_source = read_text_with_source(
+                    full, llm_fallback=pdf_fallback)
+            except Exception as exc:
+                text, text_source = "", "unreadable"
+                doc.extraction_status = "failed"
+                doc.notes = f"unreadable document: {exc}"
+            doc.text_source = f"{text_source}:{len(text)}chars"
+
+            if (doc.extraction_status != "failed"
+                    and len(text.strip()) < MIN_EXTRACTABLE_CHARS):
+                # `failed`, never `skipped`: _prune_orphan_facts treats skipped
+                # as dead and would delete the facts a good earlier run stored,
+                # the first time `pdftotext` is missing from the PATH.
+                doc.extraction_status = "failed"
+                doc.notes = (f"no readable text layer "
+                             f"({len(text.strip())} chars via {text_source}); "
+                             "scanned or drawing-only document")
+            if doc.extraction_status == "failed":
+                documents.append(doc)
+                failed += 1
+                events.append_event(root, slug, Event(
+                    at=_now(), run_id=run_id, actor="pipeline",
+                    action="document.unreadable", target=doc.doc_id,
+                    detail={"text_source": doc.text_source}))
+                continue
+
             prior_facts = snapshots.load_facts(root, slug, doc.vendor)
             base = prior_facts or VendorFacts(vendor=doc.vendor)
             status = "ok"
 
             if route == "quotation":
-                bid = extract_bid(doc.vendor, [full], client, pdf_fallback=pdf_fallback)
+                bid = extract_bid(doc.vendor, [full], client,
+                                  pdf_fallback=pdf_fallback, text=text)
                 status = bid.extraction_status
                 doc.notes = bid.notes
                 # the same guard the other two branches carry: phase 2 keeps
@@ -524,7 +580,7 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
             elif route == "datasheet":
                 facts, status, notes = extract_tech_facts(
                     doc.doc_id, full, client, pdf_fallback=pdf_fallback,
-                    parameters=parameters)
+                    parameters=parameters, text=text)
                 doc.vocabulary_sha = vocab_sha
                 doc.notes = notes
                 if status == "ok":
@@ -540,7 +596,8 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
                 quotation_doc_id = base.quotation_doc_id
             else:   # deviation
                 items, status, notes = extract_deviations(doc.doc_id, full, client,
-                                                          pdf_fallback=pdf_fallback)
+                                                          pdf_fallback=pdf_fallback,
+                                                          text=text)
                 doc.notes = notes
                 if status == "ok":
                     deviations = [d for d in base.deviations if d.get("doc_id") != doc.doc_id]

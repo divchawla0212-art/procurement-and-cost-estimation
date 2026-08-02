@@ -29,14 +29,20 @@ class _TechFactList(BaseModel):
 
 
 def extract_tech_facts(doc_id: str, path: str, client, pdf_fallback=None,
-                       parameters: list[str] | None = None
+                       parameters: list[str] | None = None,
+                       text: str | None = None
                        ) -> tuple[list[FactRecord], str, str | None]:
     """Return (facts, status, notes). Status is "ok" or "failed"; a failure never
     raises, so one unreadable datasheet cannot abort a run. `notes` carries the
     reason on failure and is None on success — without it a permanently failing
-    document is retried on every run with no record of why it fails."""
+    document is retried on every run with no record of why it fails.
+
+    `text`, when given, is used as-is — the pipeline has already read the
+    document once and passes it down so this does not read (and, for a scanned
+    PDF, LLM-transcribe) it a second time."""
     try:
-        text = read_text(path, llm_fallback=pdf_fallback)
+        if text is None:                       # the pipeline reads once and
+            text = read_text(path, llm_fallback=pdf_fallback)   # passes it down
         prompt = _PROMPT.read_text(encoding="utf-8")
         if parameters:
             text += ("\n\nThe buyer will check these parameters. Report them "

@@ -58,14 +58,19 @@ class _RequirementList(BaseModel):
     requirements: list[_Requirement] = []
 
 
-def extract_requirements(doc_id: str, path: str, client, pdf_fallback=None
+def extract_requirements(doc_id: str, path: str, client, pdf_fallback=None,
+                         text: str | None = None
                          ) -> tuple[list[RequirementRecord], str, str | None]:
     """Return (records, status, notes). Never raises: one unreadable MR must
     not abort a run. `notes` carries the reason on failure, None on success -
     without it a permanently failing document is retried every run with no
-    record of why."""
+    record of why.
+
+    `text`, when given, is used as-is — the pipeline has already read the
+    document once and passes it down so this does not read it a second time."""
     try:
-        text = read_text(path, llm_fallback=pdf_fallback)
+        if text is None:
+            text = read_text(path, llm_fallback=pdf_fallback)
         prompt = _PROMPT.read_text(encoding="utf-8")
         raw = client.classify_structure(prompt, _RequirementList, text)
         # An omitted optional array is an empty extraction, not a failed one.
