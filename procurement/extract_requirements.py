@@ -7,6 +7,8 @@ any part of its bound is stored as `judgement` - never as an `auto` with a
 null bound, which compliance.py would compare against and blame a vendor for.
 """
 import logging
+import os
+import re
 from pathlib import Path
 from pydantic import BaseModel
 
@@ -18,6 +20,14 @@ _log = logging.getLogger(__name__)
 REQUIREMENTS_PROMPT_VERSION = "requirements_v3"
 _PROMPT = (Path(__file__).parents[1] / "shared" / "llm" / "prompts"
            / "requirements_v3.txt")
+
+# The output JSON echoes every clause verbatim, so it is larger than the input.
+# The live 25,176-char MR overflowed the 8192-token ceiling in one call and
+# came back empty. Budget is over INPUT chars; tune with the env var if a
+# corpus needs it.
+REQUIREMENTS_CHUNK_CHARS = int(os.getenv("REQUIREMENTS_CHUNK_CHARS") or 8000)
+
+_NOISE = re.compile(r"[^a-z0-9]+")
 
 # `in` is a set of permitted values ("50 or 60 Hz"); `between` is a stated
 # range ("5-58 deg C"). They are decided by the model and never inferred from
@@ -58,6 +68,28 @@ class _RequirementList(BaseModel):
     requirements: list[_Requirement] = []
 
 
+def _chunks(text: str, budget: int) -> list[str]:
+    """Split on line boundaries, in order, losslessly.
+
+    Never mid-line: read_xlsx_text emits one spreadsheet row per line, and a
+    value torn from its unit invites the model to pair the wrong number with
+    the wrong unit. No overlap: overlap duplicates clauses.
+    """
+    out: list[str] = []
+    current: list[str] = []
+    size = 0
+    for line in text.splitlines():
+        cost = len(line) + 1
+        if current and size + cost > budget:
+            out.append("\n".join(current))
+            current, size = [], 0
+        current.append(line)
+        size += cost
+    if current:
+        out.append("\n".join(current))
+    return out or [""]
+
+
 def extract_requirements(doc_id: str, path: str, client, pdf_fallback=None,
                          text: str | None = None
                          ) -> tuple[list[RequirementRecord], str, str | None]:
@@ -72,15 +104,22 @@ def extract_requirements(doc_id: str, path: str, client, pdf_fallback=None,
         if text is None:
             text = read_text(path, llm_fallback=pdf_fallback)
         prompt = _PROMPT.read_text(encoding="utf-8")
-        raw = client.classify_structure(prompt, _RequirementList, text)
-        # An omitted optional array is an empty extraction, not a failed one.
-        raw_items = list(raw.get("requirements") or [])
+        raw_items: list = []
+        for chunk in _chunks(text, REQUIREMENTS_CHUNK_CHARS):
+            raw = client.classify_structure(prompt, _RequirementList, chunk)
+            # An omitted optional array is an empty chunk, not a failed one.
+            raw_items.extend(raw.get("requirements") or [])
     except Exception as exc:
+        # All-or-nothing. A partial merge is stored as a complete success, and
+        # the pipeline then replaces this document's requirements with it -
+        # deleting the clauses the failed chunks carried, with nothing recording
+        # why the matrix shrank.
         _log.warning("requirement extraction failed for %s: %s", path, exc)
         return [], "failed", f"extraction error: {exc}"
 
     out: list[RequirementRecord] = []
     seen: set[str] = set()
+    seen_bodies: set[tuple[str, str]] = set()
     for position, raw_item in enumerate(raw_items, 1):
         try:
             item = _Requirement.model_validate(raw_item)
@@ -92,6 +131,16 @@ def extract_requirements(doc_id: str, path: str, client, pdf_fallback=None,
             continue        # a clause with no text cannot be reviewed or checked
 
         clause = (item.clause_ref or "").strip() or f"#{position}"
+
+        # A header row repeated at the top of two chunks yields the same clause
+        # twice. Dropping the exact repeat is right; the position-suffix branch
+        # below stays, because two genuinely different clauses printed under one
+        # ref must both survive.
+        body_key = (clause, _NOISE.sub("", body.lower()))
+        if body_key in seen_bodies:
+            continue
+        seen_bodies.add(body_key)
+
         req_id = req_id_for(doc_id, clause)
         if req_id in seen:
             # Two clauses printed under one ref: keep both, distinguished by

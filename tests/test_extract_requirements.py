@@ -3,10 +3,11 @@ import os
 import pytest
 
 from procurement.extract_requirements import (REQUIREMENTS_PROMPT_VERSION,
-                                              extract_requirements)
+                                              extract_requirements, _chunks)
 from procurement.store.models import RequirementSet, req_id_for
 from procurement.store import snapshots
 from procurement.project import create_project
+from shared.llm.mock_client import MockLLMClient
 
 
 class StubClient:
@@ -252,3 +253,65 @@ def test_stored_auto_requirements_all_carry_four_bounds(tmp_path):
     for r in snapshots.load_requirements(root, "p").requirements:
         if r.checkability == "auto":
             assert r.parameter and r.operator and r.value is not None and r.unit is not None
+
+
+def test_chunks_never_split_a_line(tmp_path):
+    text = "\n".join(f"Table 1 | A{i}=4.{i} | B{i}=param | C{i}={i} | D{i}=kW"
+                     for i in range(1, 40))
+    parts = _chunks(text, budget=200)
+    assert len(parts) > 1
+    assert "\n".join(parts) == text          # lossless and in order
+    for part in parts:
+        for line in part.splitlines():
+            assert line in text.splitlines()
+
+
+def test_chunking_is_deterministic():
+    text = "\n".join(f"line {i}" for i in range(200))
+    assert _chunks(text, 500) == _chunks(text, 500)
+
+
+def test_every_chunk_is_asked_and_the_results_merge(tmp_path):
+    src = tmp_path / "mr.txt"
+    # 700 lines guarantees 3 chunks under the default 8000-char budget (the
+    # 400-line fixture used elsewhere in this file only forces 2).
+    src.write_text("\n".join(f"clause {i} body text here" for i in range(700)),
+                   encoding="utf-8")
+    client = MockLLMClient([
+        {"requirements": [{"clause_ref": "1.1", "text": "first"}]},
+        {"requirements": [{"clause_ref": "2.2", "text": "second"}]},
+        {"requirements": [{"clause_ref": "3.3", "text": "third"}]},
+    ])
+    records, status, notes = extract_requirements("d1", str(src), client)
+    assert status == "ok" and notes is None
+    assert [r.clause_ref for r in records] == ["1.1", "2.2", "3.3"]
+    assert len(client.calls) == 3
+
+
+def test_one_failing_chunk_fails_the_whole_extraction(tmp_path):
+    src = tmp_path / "mr.txt"
+    src.write_text("\n".join(f"clause {i} body text here" for i in range(400)),
+                   encoding="utf-8")
+
+    class SecondChunkFails(MockLLMClient):
+        def classify_structure(self, prompt, output_schema, context_text, images=None):
+            super().classify_structure(prompt, output_schema, context_text, images)
+            if len(self.calls) == 2:
+                raise RuntimeError("provider unavailable")
+            return {"requirements": [{"clause_ref": "1.1", "text": "first"}]}
+
+    records, status, notes = extract_requirements(
+        "d1", str(src), SecondChunkFails({}))
+    # a partial merge would delete the clauses the missing chunks carry
+    assert (records, status) == ([], "failed")
+    assert "provider unavailable" in notes
+
+
+def test_a_clause_repeated_across_chunks_is_stored_once(tmp_path):
+    src = tmp_path / "mr.txt"
+    src.write_text("\n".join(f"clause {i} body" for i in range(400)), encoding="utf-8")
+    same = {"requirements": [{"clause_ref": "4.2.7", "text": "H2S up to 700 ppm"}]}
+    client = MockLLMClient([same, same, same])
+    records, status, _ = extract_requirements("d1", str(src), client)
+    assert status == "ok"
+    assert len(records) == 1
