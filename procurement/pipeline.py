@@ -34,6 +34,30 @@ PROMPT_VERSION_BY_CLASS = {
 }
 _EXTRACTABLE = tuple(PROMPT_VERSION_BY_CLASS)
 
+# Vendor-side routing. A vendor's copy of the client spec is their marked-up
+# compliance response; the BOM, attachments and drawings state parameters too.
+# All of them feed the technical extractor. doc_class is left untouched —
+# documents.json must keep reporting what the classifier decided, not what
+# routing did with it (the rule _rfq_route and inferred_quotes already follow).
+#
+# Values are ROUTES (keys of PROMPT_VERSION_BY_CLASS), not doc classes.
+# _EXTRACTABLE deliberately keeps its current three-route membership: the
+# inferred-quotation fallback pool filters on `doc_class not in _EXTRACTABLE`
+# and must keep meaning "no extractor claims this document by its class".
+# Public, unlike the tables above it: Task 8's coverage.py reports the route
+# beside the class, and re-deriving the mapping there would be a second place
+# for it to drift.
+VENDOR_ROUTE = {
+    "quotation": "quotation",
+    "datasheet": "datasheet",
+    "deviation": "deviation",
+    "spec": "datasheet",
+    "bom": "datasheet",
+    "other": "datasheet",
+    "drawing": "datasheet",
+    "mom": "datasheet",
+}
+
 # The RFQ side routes by its own table: the same doc_class means something
 # different on the client's side of the tender. A `datasheet` here is the
 # client's blank datasheet — a statement of what is required, not of what a
@@ -207,6 +231,14 @@ def _classify_pass(root: str, slug: str, docs: list[DocumentRecord],
             at=_now(), run_id=run_id, actor="pipeline",
             action="document.classified", target=doc.doc_id,
             detail={"doc_class": doc.doc_class, "by": doc.classified_by}))
+
+
+def _vendor_route(doc: DocumentRecord, inferred_quotes: set[str]) -> str | None:
+    """The extractor a vendor document feeds, or None when nothing reads it.
+    None is now reachable only for `unclassified`."""
+    if doc.doc_id in inferred_quotes:
+        return "quotation"
+    return VENDOR_ROUTE.get(doc.doc_class)
 
 
 def _rfq_route(doc: DocumentRecord) -> str:
@@ -471,13 +503,13 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
             # extracted as one whatever the classifier called it. doc_class
             # itself is left alone: documents.json must keep reporting what the
             # classifier actually decided, not what routing did with it.
-            route = "quotation" if doc.doc_id in inferred_quotes else doc.doc_class
+            route = _vendor_route(doc, inferred_quotes)
             expected_version = PROMPT_VERSION_BY_CLASS.get(route)
 
             skip_reason = None
             if doc.superseded_by is not None:
                 skip_reason = f"superseded by {doc.superseded_by}"
-            elif route not in _EXTRACTABLE:
+            elif route is None:
                 skip_reason = f"{doc.doc_class} documents are not extracted"
             elif (route == "quotation"
                   and quote_rel_by_vendor.get(doc.vendor) != doc.path):

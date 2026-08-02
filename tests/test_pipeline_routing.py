@@ -120,13 +120,24 @@ def test_datasheets_and_deviations_produce_stored_facts(tmp_path):
     assert facts.deviations[0]["disposition"] == "deviate"
 
 
-def test_drawings_and_other_are_skipped_not_extracted(tmp_path):
+def test_short_drawing_and_other_fixtures_fail_the_text_guard_not_the_route(tmp_path):
+    # Formerly "skipped, not extracted": drawing and other now route to the
+    # technical extractor (VENDOR_ROUTE), so these two no longer stop at the
+    # routing gate. They still don't produce facts here, but for an unrelated
+    # reason - their fixture bodies are the two short, unpadded strings in
+    # _project, which trip the MIN_EXTRACTABLE_CHARS guard exactly as any
+    # other too-short document would, and land on "failed" (the guard's
+    # status), never "skipped" (the routing gate's).
     root = _project(tmp_path)
     run_ingestion(root, "p", RoutingClient())
     by_name = {d.path.rsplit("/", 1)[-1]: d for d in snapshots.load_documents(root, "p")}
-    assert by_name["15 LAYOUT - KGW550GF-T.txt"].extraction_status == "skipped"
-    assert by_name["08 Two Years Operation Spares.txt"].extraction_status == "skipped"
-    assert "drawing" in by_name["15 LAYOUT - KGW550GF-T.txt"].notes
+    assert by_name["15 LAYOUT - KGW550GF-T.txt"].extraction_status == "failed"
+    assert by_name["08 Two Years Operation Spares.txt"].extraction_status == "failed"
+    assert "no readable text" in by_name["15 LAYOUT - KGW550GF-T.txt"].notes
+    assert "no readable text" in by_name["08 Two Years Operation Spares.txt"].notes
+    # neither document's doc_class is rewritten by routing
+    assert by_name["15 LAYOUT - KGW550GF-T.txt"].doc_class == "drawing"
+    assert by_name["08 Two Years Operation Spares.txt"].doc_class == "other"
 
 
 def test_rerun_with_no_changes_makes_zero_llm_calls(tmp_path):
@@ -281,6 +292,56 @@ def test_every_extracted_document_records_its_text_source(tmp_path):
     for doc in snapshots.load_documents(root, "p"):
         if doc.vendor and doc.extraction_status in ("ok", "failed"):
             assert doc.text_source, f"{doc.path} has no text_source"
+
+
+def _wide_project(tmp_path):
+    root = str(tmp_path)
+    create_project(root, "P", target_currency="USD")
+    z = tmp_path / "v.zip"
+    z.write_bytes(_zip({
+        "ADPOWER/ADP-13158-2024-935.txt": b"quotation, base price 1110836 AED" + _PAD,
+        # ADPOWER's marked-up copy of the client MR: their compliance response
+        "ADPOWER/ADN-AEC-ME-SPC-026 MR Gas Genset copy.txt":
+            b"Continuous rating 525 kW offered. Insulation Class F." + _PAD,
+        "ADPOWER/BOM.txt": b"Bill of material: engine MAN, alternator Stamford" + _PAD,
+        "ADPOWER/09 Attachment-1 International Codes and Standards.txt":
+            b"IEC 60034-1 complied. ISO 8528 complied." + _PAD,
+    }))
+    unpack_vendor_zip(root, "p", str(z))
+    return root
+
+
+def test_a_vendors_marked_up_spec_contributes_technical_facts(tmp_path):
+    root = _wide_project(tmp_path)
+    run_ingestion(root, "p", RoutingClient())
+    facts = snapshots.load_facts(root, "p", "ADPOWER")
+    doc_ids = {f["doc_id"] for f in facts.technical}
+    spec = next(d for d in snapshots.load_documents(root, "p")
+                if d.path.endswith("MR Gas Genset copy.txt"))
+    assert spec.doc_class == "spec"          # classification is NOT rewritten
+    assert spec.extraction_status == "ok"
+    assert spec.doc_id in doc_ids
+
+
+def test_bom_and_other_documents_contribute_technical_facts(tmp_path):
+    root = _wide_project(tmp_path)
+    run_ingestion(root, "p", RoutingClient())
+    docs = {d.path.rsplit("/", 1)[-1]: d for d in snapshots.load_documents(root, "p")}
+    assert docs["BOM.txt"].extraction_status == "ok"
+    assert docs["09 Attachment-1 International Codes and Standards.txt"].extraction_status == "ok"
+    facts = snapshots.load_facts(root, "p", "ADPOWER")
+    assert {docs["BOM.txt"].doc_id,
+            docs["09 Attachment-1 International Codes and Standards.txt"].doc_id
+            } <= {f["doc_id"] for f in facts.technical}
+
+
+def test_the_quotation_is_still_the_only_source_of_commercial_terms(tmp_path):
+    root = _wide_project(tmp_path)
+    run_ingestion(root, "p", RoutingClient())
+    facts = snapshots.load_facts(root, "p", "ADPOWER")
+    quote = next(d for d in snapshots.load_documents(root, "p")
+                 if d.path.endswith("ADP-13158-2024-935.txt"))
+    assert facts.quotation_doc_id == quote.doc_id
 
 
 def test_a_document_that_raises_on_read_is_failed_not_crashed(tmp_path):

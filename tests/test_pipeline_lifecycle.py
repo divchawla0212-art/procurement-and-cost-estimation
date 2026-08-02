@@ -341,7 +341,11 @@ def test_a_successful_extraction_leaves_no_stale_failure_note(tmp_path):
 # Behaviours previously verified only by code inspection
 # --------------------------------------------------------------------------
 
-def test_spec_and_mom_documents_are_skipped_not_extracted(tmp_path):
+def test_vendor_spec_and_mom_documents_now_feed_the_technical_extractor(tmp_path):
+    # Formerly "skipped, not extracted": VENDOR_ROUTE now sends both a
+    # vendor's marked-up copy of the client spec and a vendor-side MOM to the
+    # datasheet (technical) extractor - doc_class keeps reporting what the
+    # classifier decided, but routing no longer stops here.
     root = _project(tmp_path, {
         "KERUI/Quotation.txt": b"base price 1000",
         "KERUI/05 MOM 20241111.txt": b"minutes of the kickoff meeting",
@@ -352,10 +356,14 @@ def test_spec_and_mom_documents_are_skipped_not_extracted(tmp_path):
 
     docs = _docs(root)
     for name, expected in (("05 MOM 20241111.txt", "mom"), ("SPC-1234 Scope.txt", "spec")):
-        assert docs[name].doc_class == expected
-        assert docs[name].extraction_status == "skipped"
-        assert "not extracted" in docs[name].notes
-    assert client.calls == ["quotation"], "neither may cost an extraction call"
+        assert docs[name].doc_class == expected, \
+            "routing must not rewrite what the classifier decided"
+        assert docs[name].extraction_status == "ok"
+    facts = snapshots.load_facts(root, "p", "KERUI")
+    doc_ids = {f["doc_id"] for f in facts.technical}
+    assert docs["05 MOM 20241111.txt"].doc_id in doc_ids
+    assert docs["SPC-1234 Scope.txt"].doc_id in doc_ids
+    assert client.calls.count("facts") == 2, "both now cost an extraction call"
 
 
 def test_a_prompt_version_bump_reextracts_only_that_document_class(tmp_path, monkeypatch):

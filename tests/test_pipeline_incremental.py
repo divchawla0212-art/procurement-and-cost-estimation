@@ -33,6 +33,11 @@ def _project(tmp_path):
     z = tmp_path / "v.zip"
     z.write_bytes(_zip({
         "KERUI/Quotation.txt": b"base price 1000" + _PAD,
+        # Deliberately left unpadded: BOM now routes to the technical
+        # extractor (VENDOR_ROUTE), so this file no longer stops at the
+        # routing gate - it is short enough to fail the no-readable-text
+        # guard instead, before any LLM call is made. See
+        # test_first_run_extracts_one_document_per_vendor below.
         "KERUI/BOM.txt": b"bill of materials",
         "MKON/Quotation.txt": b"base price 900" + _PAD,
     }))
@@ -60,7 +65,11 @@ def test_first_run_extracts_one_document_per_vendor(tmp_path):
     assert len(client.calls) == 2                 # the quote only, not the BOM
     docs = {d.path: d for d in snapshots.load_documents(root, "p")}
     assert sum(1 for d in docs.values() if d.extraction_status == "ok") == 2
-    assert sum(1 for d in docs.values() if d.extraction_status == "skipped") == 1
+    # BOM.txt is now routed (VENDOR_ROUTE sends "bom" to the technical
+    # extractor), so it no longer stops at the routing gate as "skipped" -
+    # its unpadded, sub-guard-length body fails the no-readable-text check
+    # instead, before any LLM call, so the call count above is unaffected.
+    assert sum(1 for d in docs.values() if d.extraction_status == "failed") == 1
 
 
 def test_rerun_with_no_changes_makes_zero_llm_calls(tmp_path):
@@ -102,7 +111,10 @@ def test_run_appends_events(tmp_path):
     actions = [e.action for e in events.read_events(root, "p")]
     assert actions[0] == "run.started" and actions[-1] == "run.finished"
     assert "document.extracted" in actions
-    assert "document.skipped" in actions
+    # BOM.txt is now routed rather than gate-skipped (see _project's comment),
+    # so it records "document.unreadable" - the guard's event - not
+    # "document.skipped", which nothing in this fixture triggers any more.
+    assert "document.unreadable" in actions
 
 
 def test_status_reports_failures_instead_of_always_done(tmp_path):
@@ -155,7 +167,18 @@ def test_status_is_failed_when_nothing_extracted_and_nothing_failed(tmp_path):
 
 
 def test_status_is_done_on_a_clean_run(tmp_path):
-    root = _project(tmp_path)
+    # Not _project: that fixture's BOM.txt is deliberately unreadable (see its
+    # comment) to exercise the no-readable-text guard elsewhere in this file,
+    # which would make this run "done_with_failures" and defeat the point of
+    # this test. A genuinely clean run needs a fixture with nothing to fail.
+    root = str(tmp_path)
+    create_project(root, "P", target_currency="USD")
+    z = tmp_path / "v.zip"
+    z.write_bytes(_zip({
+        "KERUI/Quotation.txt": b"base price 1000" + _PAD,
+        "MKON/Quotation.txt": b"base price 900" + _PAD,
+    }))
+    unpack_vendor_zip(root, "p", str(z))
     run_ingestion(root, "p", _client())
     assert load_project(root, "p").status == "done"
 
