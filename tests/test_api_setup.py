@@ -1,6 +1,7 @@
 """Key-free API tests for the project-setup + ingestion routes."""
 
 import io
+import os
 import zipfile
 
 from fastapi.testclient import TestClient
@@ -208,3 +209,120 @@ def test_unrecognized_default_provider_is_not_ready(tmp_path, monkeypatch):
     assert provider["provider"] == "banana"
     assert provider["needs_key"] is None
     assert provider["ready"] is False
+
+
+# ------------------------------------- two-run matrix: provider isolation
+#
+# A provider choice must govern exactly one request and leak nowhere. These
+# five tests are the mutation matrix for that invariant: each drives two
+# ingestion runs (or one run plus one rejection) and asserts that nothing run 1
+# chose survives into run 2, and that a rejected run changes nothing at all.
+
+
+def _record_provider_requests(monkeypatch) -> list[str | None]:
+    """Record the provider argument every run hands to the client factory.
+
+    Two providers cannot both be *constructed* in a key-free test — only `mock`
+    builds without credentials — so the recorder always returns a real mock
+    client and the assertions are about what each run **requested**.
+
+    `ingest` does `from shared.llm.factory import get_client` inside the
+    function body, so the name is resolved on the factory module at call time.
+    That module attribute is therefore the patch target that takes effect;
+    there is no module-level `api.main.get_client` to patch. Each test that
+    uses this helper asserts on the recorded list, so a patch that failed to
+    take effect shows up as an empty list rather than as a silent pass.
+    """
+    import shared.llm.factory as factory
+
+    real_get_client = factory.get_client
+    requested: list[str | None] = []
+
+    def recording_get_client(provider: str | None = None):
+        requested.append(provider)
+        return real_get_client("mock")
+
+    monkeypatch.setattr(factory, "get_client", recording_get_client)
+    return requested
+
+
+def test_provider_choice_does_not_leak_into_the_environment(tmp_path, monkeypatch):
+    """Row 1: run 1 explicit `mock`, run 2 omits `provider`.
+
+    The rejected design mutated `os.environ` from the request handler, which
+    would have redirected every other user's run. With `LLM_PROVIDER` unset,
+    *any* write of the requested name into the environment is visible.
+    """
+    client = _client(tmp_path, monkeypatch)
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    _project_with_vendor(client)
+    before = os.environ.get("LLM_PROVIDER")
+    assert before is None  # guard: the check below is only meaningful unset
+
+    assert client.post("/api/projects/p/ingest", json={"provider": "mock"}).status_code == 200
+    assert os.environ.get("LLM_PROVIDER") == before
+
+    assert client.post("/api/projects/p/ingest").status_code == 200
+    assert os.environ.get("LLM_PROVIDER") == before
+
+
+def test_rejected_run_does_not_disturb_a_previous_good_run(tmp_path, monkeypatch):
+    """Row 2: run 1 explicit `mock`, run 2 a rejected unknown.
+
+    A configuration error is a 400 and must leave the store exactly as run 1
+    left it — same `generation`, same `has_results`.
+    """
+    client = _client(tmp_path, monkeypatch)
+    _project_with_vendor(client)
+    assert client.post("/api/projects/p/ingest", json={"provider": "mock"}).status_code == 200
+    after_good = client.get("/api/projects/p/setup").json()
+    assert after_good["has_results"] is True
+
+    res = client.post("/api/projects/p/ingest", json={"provider": "banana"})
+    assert res.status_code == 400  # a config error, never the 502 of a failed run
+
+    after_bad = client.get("/api/projects/p/setup").json()
+    assert after_bad["generation"] == after_good["generation"]
+    assert after_bad["has_results"] == after_good["has_results"] is True
+
+
+def test_a_rejection_does_not_poison_the_next_run(tmp_path, monkeypatch):
+    """Row 3: run 1 a rejected unready provider, run 2 valid.
+
+    Rejection is request-scoped: it leaves no state that could stop the next
+    run from succeeding.
+    """
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    client = _client(tmp_path, monkeypatch)
+    _project_with_vendor(client)
+
+    assert client.post("/api/projects/p/ingest", json={"provider": "gemini"}).status_code == 400
+    assert client.post("/api/projects/p/ingest", json={"provider": "mock"}).status_code == 200
+    assert client.get("/api/projects/p/setup").json()["has_results"] is True
+
+
+def test_the_second_run_uses_the_second_choice(tmp_path, monkeypatch):
+    """Row 4: two different valid providers across two runs; the second governs."""
+    client = _client(tmp_path, monkeypatch)
+    _project_with_vendor(client)
+    requested = _record_provider_requests(monkeypatch)
+
+    assert client.post("/api/projects/p/ingest", json={"provider": "mock"}).status_code == 200
+    assert client.post("/api/projects/p/ingest", json={"provider": "bedrock"}).status_code == 200
+
+    assert requested == ["mock", "bedrock"]
+
+
+def test_empty_provider_string_uses_the_default(tmp_path, monkeypatch):
+    """Row 5: an empty field is unspecified, not invalid.
+
+    The dropdown's "server default" option submits an empty string, so `""`
+    must resolve to `None` — letting the factory read `LLM_PROVIDER` — rather
+    than being validated as the provider literally named `""`.
+    """
+    client = _client(tmp_path, monkeypatch)
+    _project_with_vendor(client)
+    requested = _record_provider_requests(monkeypatch)
+
+    assert client.post("/api/projects/p/ingest", json={"provider": ""}).status_code == 200
+    assert requested == [None]
