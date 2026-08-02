@@ -379,3 +379,49 @@ def test_empty_provider_string_uses_the_default(tmp_path, monkeypatch):
 
     assert client.post("/api/projects/p/ingest", json={"provider": ""}).status_code == 200
     assert requested == [None]
+
+
+def test_api_loads_the_dotenv_file_itself(monkeypatch):
+    """The API must read `.env` on its own, not depend on how it was launched.
+
+    `portal/app.py` calls `load_dotenv()` at import; `api/main.py` did not, so
+    every provider needing a key reported `ready: false` in `/setup` — the
+    dropdown showed "ANTHROPIC_API_KEY not set" beside a key that was sitting
+    in `.env`. The only thing that had been loading it was a `--env-file` flag
+    in the launcher, which `uvicorn api.main:app`, Docker and any other entry
+    point do not pass.
+    """
+    import importlib
+
+    import dotenv
+
+    calls: list[tuple] = []
+    monkeypatch.setattr(dotenv, "load_dotenv", lambda *a, **k: calls.append((a, k)))
+    import api.main
+
+    try:
+        importlib.reload(api.main)
+        assert calls, "api/main.py must call load_dotenv() at import"
+    finally:
+        monkeypatch.undo()
+        importlib.reload(api.main)
+
+
+def test_a_real_environment_variable_beats_the_dotenv_file(monkeypatch):
+    """`.env` is a fallback for local dev, never an override.
+
+    Docker Compose and CI inject provider keys as real environment variables.
+    Loading `.env` with `override=True` would silently swap a deployment's key
+    for whatever a stray file on the image holds.
+    """
+    import importlib
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sentinel-not-a-real-key")
+    import api.main
+
+    try:
+        importlib.reload(api.main)
+        assert os.environ["ANTHROPIC_API_KEY"] == "sentinel-not-a-real-key"
+    finally:
+        monkeypatch.undo()
+        importlib.reload(api.main)

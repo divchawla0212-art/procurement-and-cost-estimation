@@ -206,6 +206,43 @@ def test_the_whole_structure_returned_as_a_string_on_a_scalar_field_is_recovered
     assert out == payload
 
 
+def test_a_stringified_envelope_under_an_unknown_key_is_unwrapped(monkeypatch):
+    """The shape that lost a whole vendor: an envelope that is also a string.
+
+    Live, one quotation came back as `{"parameter": {...}}` — handled — and on
+    another call as a *stringified* object under `parameter_name`. Neither
+    repair could reach it: `unwrap_envelope` needs the inner value to be a
+    dict, and `recover_stringified_envelope` only inspects keys the schema
+    declares. So it fell through to `require_known_field`, raised, and the
+    vendor's column went blank with a full extraction inside the string.
+
+    Same structural test as the plain envelope, one step later: a lone key the
+    schema does not declare, holding an object that names fields it does.
+    """
+    payload = {"facts": _ENTRIES, "label": "x"}
+    _patch(monkeypatch, _Message(
+        [_Block("tool_use", input={"parameter_name": json.dumps(payload)})],
+        "tool_use"))
+    out = AnthropicClient(api_key="dummy").classify_structure("p", _Listy, "ctx")
+    assert out == payload
+
+
+def test_a_lone_unknown_key_holding_unrelated_json_still_raises(monkeypatch):
+    """The unwrap must not turn any stray string into an answer.
+
+    A string that parses but names nothing the schema declares is not the
+    structure — it is the model answering a different question, and storing it
+    would mean storing defaults as the vendor's terms.
+    """
+    _patch(monkeypatch, _Message(
+        [_Block("tool_use",
+                input={"parameter_name": json.dumps({"unit": "kW", "qty": 2})})],
+        "tool_use"))
+    with pytest.raises(RuntimeError) as exc:
+        AnthropicClient(api_key="dummy").classify_structure("p", _Listy, "ctx")
+    assert "no field" in str(exc.value).lower()
+
+
 def test_a_payload_naming_no_field_of_the_schema_raises(monkeypatch):
     """Defence behind the unwrap: never let a blank validate as a real answer.
 
@@ -220,6 +257,71 @@ def test_a_payload_naming_no_field_of_the_schema_raises(monkeypatch):
     with pytest.raises(RuntimeError) as exc:
         AnthropicClient(api_key="dummy").classify_structure("p", _Listy, "ctx")
     assert "no field" in str(exc.value).lower()
+
+
+class _Priced(BaseModel):
+    """The scalar/str mix of a real quotation schema, minus the noise."""
+    base_price: float = 0.0
+    vat_rate: float = 0.0
+    currency: str = ""
+    delivery_terms: str | None = None
+
+
+def test_a_number_boxed_in_a_value_object_is_unboxed(monkeypatch):
+    """Fourth live shape, on the same quotations as the envelope and the string.
+
+    `base_price` arrives as `{"value": 1110836}` — the number is right there,
+    boxed. Pydantic rejects the box on a float field, so a fully-read quotation
+    failed whole and the vendor's column went blank. Unboxing reads the number
+    the model actually returned; it invents nothing.
+    """
+    _patch(monkeypatch, _Message(
+        [_Block("tool_use", input={"base_price": {"value": 1110836}, "currency": "AED"})],
+        "tool_use"))
+    out = AnthropicClient(api_key="dummy").classify_structure("p", _Priced, "ctx")
+    assert out == {"base_price": 1110836, "currency": "AED"}
+
+
+def test_a_boxed_number_arriving_as_a_string_is_unboxed(monkeypatch):
+    """The exact shape from the store: the box itself is stringified.
+
+    `1 validation error for BidExtraction / base_price / Input should be a
+    valid number, unable to parse string as a number
+    [input_value='{"value": 1110836}', input_type=str]`.
+    """
+    _patch(monkeypatch, _Message(
+        [_Block("tool_use",
+                input={"base_price": json.dumps({"value": 1110836}), "vat_rate": 0.05})],
+        "tool_use"))
+    out = AnthropicClient(api_key="dummy").classify_structure("p", _Priced, "ctx")
+    assert out == {"base_price": 1110836, "vat_rate": 0.05}
+
+
+def test_a_box_carrying_more_than_the_value_is_left_alone(monkeypatch):
+    """`{"value": 1110836, "currency": "AED"}` is not a box — it is an answer.
+
+    Unboxing it would silently discard the currency and price the bid in the
+    wrong money. Anything but a lone `value` key falls through to pydantic,
+    which fails loudly, which is the correct outcome.
+    """
+    boxed = {"value": 1110836, "currency": "AED"}
+    _patch(monkeypatch, _Message(
+        [_Block("tool_use", input={"base_price": boxed})], "tool_use"))
+    out = AnthropicClient(api_key="dummy").classify_structure("p", _Priced, "ctx")
+    assert out == {"base_price": boxed}
+
+
+def test_a_text_field_is_never_unboxed(monkeypatch):
+    """A vendor can print `{"value": ...}`; on a text field that is their text.
+
+    Unboxing is limited to fields the schema cannot hold a string in, so a
+    printed literal is never mistaken for a wrapper and rewritten.
+    """
+    literal = json.dumps({"value": "ex-works"})
+    _patch(monkeypatch, _Message(
+        [_Block("tool_use", input={"delivery_terms": literal})], "tool_use"))
+    out = AnthropicClient(api_key="dummy").classify_structure("p", _Priced, "ctx")
+    assert out == {"delivery_terms": literal}
 
 
 @pytest.mark.skipif(not os.getenv("ANTHROPIC_API_KEY"), reason="no ANTHROPIC_API_KEY")

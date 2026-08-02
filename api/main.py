@@ -22,11 +22,20 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+import dotenv
+
 from procurement import project as proj
 from procurement.matrix import GROUP_ORDER, build_matrix, rows_in_group
 from procurement.pipeline import load_dataset, run_ingestion
 from procurement.quote_select import pick_quote
 from procurement.statement import build_statement
+
+# Load a local `.env` exactly as `portal/app.py` does, so both front ends see
+# the same providers. `load_dotenv()` resolves the file by walking up from this
+# module, not from the working directory, so it works under `uvicorn`, Docker
+# and pytest alike — and it never overrides a real environment variable, which
+# is what a deployment injects.
+dotenv.load_dotenv()
 
 ROOT = os.environ.get("PROCUREMENT_PROJECTS_ROOT", "projects")
 
