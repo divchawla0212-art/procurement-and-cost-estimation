@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make the compliance matrix reflect what the vendors actually wrote, by routing every readable vendor document to an extractor, making requirement extraction complete and reproducible, and adding a `stated` checkability tier so text-valued clauses are machine-checked instead of dumped on a human.
+**Goal:** Make the compliance matrix reflect what the vendors actually wrote — by routing every readable vendor document to an extractor, making requirement extraction complete and reproducible, and adding a `stated` checkability tier so text-valued clauses are machine-checked instead of dumped on a human — and make the result legible, with a per-vendor extraction status showing which of each vendor's files were read and what each one contributed.
 
 **Architecture:** Four changes, all inside the existing pass structure. (1) The pipeline reads each document's text **once**, records which reader produced it in the already-declared-but-never-populated `DocumentRecord.text_source`, and records a document it cannot read as `failed` rather than feeding an extractor an empty string. (2) A vendor-side routing table replaces the three-class `_EXTRACTABLE` gate, so a vendor's marked-up spec, BOM, attachments and drawings reach the technical extractor — `doc_class` is left untouched, exactly as `_rfq_route` and `inferred_quotes` already do. (3) Requirement extraction splits the MR into deterministic line-aligned chunks and merges all-or-nothing, so the requirement set stops being bounded by the output-token ceiling. (4) A third `checkability` tier, `stated`, carries a parameter and an expected text value; `compliance.evaluate` matches it against the vendor's fact by normalised token subset and never returns `fail` on a text mismatch.
 
@@ -82,8 +82,13 @@ Every invariant is owned by exactly one task and defended by at least one row of
 | `procurement/store/models.py`, `procurement/matrix.py` | **Modify.** Comment and coverage-tally updates for the third tier. |
 | `portal/views/compliance.py`, `web/src/constants.ts`, `web/src/pages/ComplianceMatrix.tsx` | **Modify.** Display the `stated` tier's bound rather than falling through to raw clause text. |
 | `shared/llm/mock_client.py` | **Modify.** `MockLLMClient` accepts a list of responses so a chunked call sequence is testable. Backwards compatible. |
+| `procurement/coverage.py` | **Create.** Per-vendor extraction status: which files were read, by which extractor, and what each contributed. A read-only derivation over snapshots, like `matrix.py` — no new stored collection. |
+| `api/main.py` | **Modify.** `GET /api/projects/{slug}/extraction-status`, plus an `extraction` roll-up key on `/summary` so the Dashboard needs no second round trip. |
+| `web/src/pages/ExtractionStatus.tsx` | **Create.** The detail screen: one panel per vendor, one row per file. |
+| `web/src/types.ts`, `api.ts`, `App.tsx`, `pages/Dashboard.tsx`, `theme.css` | **Modify.** Types, fetcher, a fourth nav entry, and the per-vendor roll-up on each project card. |
 | `tests/test_extraction_coverage.py` | **Create.** The Task 6 two-run mutation matrix. |
 | `tests/test_real_corpus_coverage.py` | **Create.** The Task 7 coverage floor, skipped when `data/` is absent. |
+| `tests/test_extraction_status.py`, `tests/test_api_extraction_status.py` | **Create.** Task 8's derivation and route. |
 
 ---
 
@@ -411,7 +416,10 @@ Expected: FAIL — `spec.extraction_status == "skipped"`, and the spec/BOM doc_i
 # _EXTRACTABLE deliberately keeps its current three-route membership: the
 # inferred-quotation fallback pool filters on `doc_class not in _EXTRACTABLE`
 # and must keep meaning "no extractor claims this document by its class".
-_VENDOR_ROUTE = {
+# Public, unlike the tables above it: Task 8's coverage.py reports the route
+# beside the class, and re-deriving the mapping there would be a second place
+# for it to drift.
+VENDOR_ROUTE = {
     "quotation": "quotation",
     "datasheet": "datasheet",
     "deviation": "deviation",
@@ -428,7 +436,7 @@ def _vendor_route(doc: DocumentRecord, inferred_quotes: set[str]) -> str | None:
     None is now reachable only for `unclassified`."""
     if doc.doc_id in inferred_quotes:
         return "quotation"
-    return _VENDOR_ROUTE.get(doc.doc_class)
+    return VENDOR_ROUTE.get(doc.doc_class)
 ```
 
 In the vendor loop, replace `:446`:
@@ -1294,15 +1302,15 @@ def test_a_text_layer_disappearing_does_not_delete_the_facts(tmp_path):
     assert snapshots.load_facts(root, "p", "KERUI").technical == before
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [ ] **Step 2: Run the tests**
 
 ```bash
 python -m pytest tests/test_extraction_coverage.py -v
 ```
 
-Expected: every row fails before its owning task lands. If a row passes on a codebase where its defect is present, the row is not testing what it claims — rewrite it before continuing.
+Expected: **all rows pass.** This task runs after Tasks 1-5, so every defect these rows describe is already fixed — a red row here is a real defect in the owning task, not a red-green step. That is why this task's falsification step is Step 4 (reinstate each defect and confirm the row goes red) rather than the usual write-it-red-first cycle: there is nothing left to write red against.
 
-- [ ] **Step 3: No implementation** — this task writes tests only. If a row genuinely fails against completed Tasks 1-5, that is a defect in the owning task. Fix it there, in its own commit, and re-run.
+- [ ] **Step 3: No implementation** — this task writes tests only. If a row fails against completed Tasks 1-5, that is a defect in the owning task. Fix it there, in its own commit, and re-run.
 
 - [ ] **Step 4: Verify the matrix is real, not decorative**
 
@@ -1449,9 +1457,562 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ---
 
+### Task 8: Per-vendor extraction status — derivation and API
+
+**Files:**
+- Create: `procurement/coverage.py`
+- Modify: `api/main.py` (new route, and `_project_summary` roll-up)
+- Test: `tests/test_extraction_status.py`, `tests/test_api_extraction_status.py`
+
+**Interfaces:**
+- Consumes: `snapshots.load_documents`, `snapshots.load_facts`, `snapshots.load_compliance`, `load_project`, and `VENDOR_ROUTE` from Task 2
+- Produces: `DocumentStatus`, `VendorExtraction`, `ExtractionStatus` (pydantic models); `build_extraction_status(root: str, slug: str) -> ExtractionStatus`; `GET /api/projects/{slug}/extraction-status`
+- **Store invariant owned:** none. `coverage.py` is a read-only derivation over the snapshots, recomputed wholesale on every call exactly as `matrix.py` and `compliance.evaluate_project` are, so a status can never outlive the document it describes. It **defends** INV-A by surfacing `text_source` and INV-B by reporting each document's fact count.
+
+Everything this needs is already stored. `documents.json` carries `vendor`, `doc_class`, `extraction_status`, `notes` and — after Task 1 — `text_source`. `facts.json` carries each fact's `doc_id`. `compliance.json` carries the per-vendor verdicts. No new extraction, no new stored collection, no LLM call.
+
+**Reporting `route` beside `doc_class` is the point of the panel.** Before Task 2 they were the same string, so the distinction was invisible. After it, "classified `spec`, read as a datasheet, contributed 12 facts" is the line that makes ADPOWER's situation legible at a glance instead of after a store audit — and "classified `drawing`, read as a datasheet, 0 facts, `pypdf:42chars`, *no readable text layer*" explains a genuinely empty document without anyone opening the PDF.
+
+Two rules the derivation inherits from its neighbours:
+
+**Vendors come from the project, not from the facts directory.** `evaluate_project` and `build_matrix` both do this, for the same reason: a vendor whose extraction produced nothing must still appear, because a missing entry reads as "did not bid". A vendor with zero documents gets an entry with an empty document list.
+
+**`unanswered` counts only the checked tiers.** It is the extraction-coverage metric `compliance.py`'s docstring already claims to produce. Counting `review` cells in it would drown the signal — 255 of 300 cells in `gas-11` are `review`, and none of them says anything about whether we read the vendor's files.
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+# tests/test_extraction_status.py
+from procurement.coverage import build_extraction_status
+from procurement.project import create_project, load_project, save_project
+from procurement.store import snapshots
+from procurement.store.models import (ComplianceResult, DocumentRecord,
+                                      RequirementRecord, RequirementSet,
+                                      VendorFacts)
+
+NOW = "2026-08-02T00:00:00+00:00"
+
+
+def _store(tmp_path):
+    root = str(tmp_path)
+    create_project(root, "P")
+    project = load_project(root, "p")
+    project.vendors = ["ADPOWER", "SILENT"]
+    save_project(root, project)
+
+    snapshots.save_documents(root, "p", [
+        DocumentRecord(doc_id="d1", path="vendors/ADPOWER/quote.pdf",
+                       vendor="ADPOWER", doc_class="quotation",
+                       content_sha256="a", extraction_status="ok",
+                       text_source="pdftotext:11682chars"),
+        DocumentRecord(doc_id="d2", path="vendors/ADPOWER/MR copy.pdf",
+                       vendor="ADPOWER", doc_class="spec",
+                       content_sha256="b", extraction_status="ok",
+                       text_source="pdftotext:60696chars"),
+        DocumentRecord(doc_id="d3", path="vendors/ADPOWER/layout.pdf",
+                       vendor="ADPOWER", doc_class="drawing",
+                       content_sha256="c", extraction_status="failed",
+                       notes="no readable text layer (42 chars via pypdf)",
+                       text_source="pypdf:42chars"),
+        DocumentRecord(doc_id="d4", path="vendors/ADPOWER/old-quote.pdf",
+                       vendor="ADPOWER", doc_class="quotation",
+                       content_sha256="d", extraction_status="skipped",
+                       superseded_by="d1", notes="superseded by d1"),
+    ])
+    snapshots.save_facts(root, "p", VendorFacts(
+        vendor="ADPOWER",
+        commercial={"vendor": "ADPOWER", "base_price": 1110836.0},
+        quotation_doc_id="d1",
+        technical=[{"fact_id": "f-1", "parameter": "continuous_rating",
+                    "value": 525.0, "unit": "kW", "doc_id": "d2"},
+                   {"fact_id": "f-2", "parameter": "rated_voltage",
+                    "value": 415.0, "unit": "V", "doc_id": "d2"}]))
+    snapshots.save_requirements(root, "p", RequirementSet(requirements=[
+        RequirementRecord(req_id="r-1", clause_ref="1.1", text="t",
+                          source_doc_id="s", checkability="auto",
+                          parameter="frequency", operator="==", value=50.0,
+                          unit="Hz")]))
+    snapshots.save_compliance(root, "p", [
+        ComplianceResult(req_id="r-1", vendor="ADPOWER", verdict="unanswered",
+                         evaluated_at=NOW),
+        ComplianceResult(req_id="r-1", vendor="SILENT", verdict="unanswered",
+                         evaluated_at=NOW)])
+    return root
+
+
+def test_each_document_reports_its_route_beside_its_class(tmp_path):
+    status = build_extraction_status(_store(tmp_path), "p")
+    docs = {d.filename: d for d in status.vendors[0].documents}
+    # the whole point of the panel: classification and routing now differ
+    assert (docs["MR copy.pdf"].doc_class, docs["MR copy.pdf"].route) == (
+        "spec", "datasheet")
+    assert (docs["quote.pdf"].doc_class, docs["quote.pdf"].route) == (
+        "quotation", "quotation")
+
+
+def test_each_document_reports_the_facts_it_contributed(tmp_path):
+    status = build_extraction_status(_store(tmp_path), "p")
+    docs = {d.filename: d for d in status.vendors[0].documents}
+    assert docs["MR copy.pdf"].fact_count == 2
+    assert docs["quote.pdf"].fact_count == 0        # commercial, not technical
+    assert docs["quote.pdf"].is_quotation is True
+
+
+def test_an_unreadable_document_carries_its_reason_and_reader(tmp_path):
+    status = build_extraction_status(_store(tmp_path), "p")
+    doc = next(d for d in status.vendors[0].documents if d.filename == "layout.pdf")
+    assert doc.status == "failed"
+    assert "no readable text layer" in doc.notes
+    assert doc.text_source == "pypdf:42chars"
+
+
+def test_vendor_totals_count_each_status(tmp_path):
+    status = build_extraction_status(_store(tmp_path), "p")
+    adpower = status.vendors[0]
+    assert (adpower.extracted, adpower.failed, adpower.skipped) == (2, 1, 1)
+    assert adpower.fact_count == 2
+    assert adpower.has_commercial is True
+    assert adpower.unanswered == 1
+
+
+def test_a_vendor_with_no_documents_still_appears(tmp_path):
+    status = build_extraction_status(_store(tmp_path), "p")
+    silent = next(v for v in status.vendors if v.vendor == "SILENT")
+    # a missing entry reads as "did not bid" — the rule build_matrix follows
+    assert silent.documents == []
+    assert (silent.extracted, silent.fact_count) == (0, 0)
+    assert silent.has_commercial is False
+```
+
+```python
+# tests/test_api_extraction_status.py
+def test_extraction_status_route_returns_every_vendor(client, project_slug):
+    body = client.get(f"/api/projects/{project_slug}/extraction-status").json()
+    assert [v["vendor"] for v in body["vendors"]] == ["ADPOWER", "SILENT"]
+    assert body["totals"]["failed"] >= 1
+
+
+def test_extraction_status_404s_on_an_unknown_project(client):
+    assert client.get("/api/projects/nope/extraction-status").status_code == 404
+
+
+def test_project_summary_carries_the_extraction_rollup(client, project_slug):
+    body = client.get(f"/api/projects/{project_slug}/summary").json()
+    rollup = {v["vendor"]: v for v in body["extraction"]}
+    # the Dashboard card needs the counts without fetching the full document list
+    assert rollup["ADPOWER"]["extracted"] == 2
+    assert rollup["ADPOWER"]["failed"] == 1
+    assert "documents" not in rollup["ADPOWER"]
+```
+
+Follow the fixture idiom already in `tests/test_api_compliance.py` for `client` and `project_slug`.
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+```bash
+python -m pytest tests/test_extraction_status.py tests/test_api_extraction_status.py -v
+```
+
+Expected: `ModuleNotFoundError: No module named 'procurement.coverage'`, and 404 on the new route.
+
+- [ ] **Step 3: Write the implementation**
+
+`procurement/coverage.py`:
+
+```python
+"""(documents, facts, compliance) -> one extraction status per vendor.
+
+Answers "which of this vendor's files did we actually read, and what did each
+one give us". A read-only derivation over the snapshots, like matrix.py:
+recomputed wholesale on every call, so a status can never outlive the document
+it describes, and no new stored collection is introduced.
+"""
+import os
+from pydantic import BaseModel
+
+from procurement.pipeline import VENDOR_ROUTE
+from procurement.project import load_project
+from procurement.store import snapshots
+
+# The verdicts that mean "we did not read the answer". `review` is excluded on
+# purpose: 255 of gas-11's 300 cells are `review` and none of them says
+# anything about extraction coverage.
+_UNANSWERED = ("unanswered",)
+
+
+class DocumentStatus(BaseModel):
+    doc_id: str
+    filename: str
+    path: str
+    doc_class: str              # what the classifier decided
+    route: str | None           # which extractor read it; differs from the class
+    status: str                 # ok | failed | skipped | pending
+    notes: str | None = None
+    text_source: str | None = None
+    fact_count: int = 0
+    is_quotation: bool = False
+    superseded_by: str | None = None
+
+
+class VendorExtraction(BaseModel):
+    vendor: str
+    documents: list[DocumentStatus] = []
+    extracted: int = 0
+    failed: int = 0
+    skipped: int = 0
+    fact_count: int = 0
+    has_commercial: bool = False
+    unanswered: int = 0
+
+
+class ExtractionStatus(BaseModel):
+    vendors: list[VendorExtraction] = []
+    totals: dict[str, int] = {}
+
+
+def build_extraction_status(root: str, slug: str) -> ExtractionStatus:
+    documents = snapshots.load_documents(root, slug)
+    compliance = snapshots.load_compliance(root, slug)
+    # Vendors from the project, not from the facts directory: a vendor whose
+    # extraction produced nothing must still appear, because a missing entry
+    # reads as "did not bid" — the rule build_matrix and evaluate_project share.
+    vendors = load_project(root, slug).vendors
+
+    unanswered_by_vendor: dict[str, int] = {}
+    for cell in compliance:
+        if cell.verdict in _UNANSWERED:
+            unanswered_by_vendor[cell.vendor] = (
+                unanswered_by_vendor.get(cell.vendor, 0) + 1)
+
+    out: list[VendorExtraction] = []
+    for vendor in vendors:
+        facts = snapshots.load_facts(root, slug, vendor)
+        facts_by_doc: dict[str, int] = {}
+        for fact in (facts.technical if facts else []):
+            doc_id = fact.get("doc_id")
+            facts_by_doc[doc_id] = facts_by_doc.get(doc_id, 0) + 1
+        quotation_doc_id = facts.quotation_doc_id if facts else None
+
+        entry = VendorExtraction(
+            vendor=vendor,
+            has_commercial=bool(facts and facts.commercial),
+            unanswered=unanswered_by_vendor.get(vendor, 0))
+
+        for doc in sorted((d for d in documents if d.vendor == vendor),
+                          key=lambda d: d.path):
+            entry.documents.append(DocumentStatus(
+                doc_id=doc.doc_id,
+                filename=doc.path.rsplit("/", 1)[-1],
+                path=doc.path,
+                doc_class=doc.doc_class,
+                # re-derived, never re-invented: VENDOR_ROUTE is the pipeline's
+                # own table. An inferred quotation is reported by its stored
+                # link rather than by re-running the fallback heuristic.
+                route=("quotation" if doc.doc_id == quotation_doc_id
+                       else VENDOR_ROUTE.get(doc.doc_class)),
+                status=doc.extraction_status,
+                notes=doc.notes,
+                text_source=doc.text_source,
+                fact_count=facts_by_doc.get(doc.doc_id, 0),
+                is_quotation=doc.doc_id == quotation_doc_id,
+                superseded_by=doc.superseded_by))
+            if doc.extraction_status == "ok":
+                entry.extracted += 1
+            elif doc.extraction_status == "failed":
+                entry.failed += 1
+            elif doc.extraction_status == "skipped":
+                entry.skipped += 1
+
+        entry.fact_count = sum(d.fact_count for d in entry.documents)
+        out.append(entry)
+
+    totals = {
+        "vendors": len(out),
+        "documents": sum(len(v.documents) for v in out),
+        "extracted": sum(v.extracted for v in out),
+        "failed": sum(v.failed for v in out),
+        "skipped": sum(v.skipped for v in out),
+        "facts": sum(v.fact_count for v in out),
+        "unanswered": sum(v.unanswered for v in out),
+    }
+    return ExtractionStatus(vendors=out, totals=totals)
+
+
+def rollup(status: ExtractionStatus) -> list[dict]:
+    """The per-vendor counts without the document list, for the Dashboard card."""
+    return [v.model_dump(exclude={"documents"}) for v in status.vendors]
+```
+
+`api/main.py` — the route, beside `get_compliance_matrix`:
+
+```python
+@app.get("/api/projects/{slug}/extraction-status")
+def get_extraction_status(slug: str) -> dict:
+    _load_or_404(slug)
+    return build_extraction_status(ROOT, slug).model_dump()
+```
+
+and in `get_summary`, one line so the Dashboard card does not need a second round trip:
+
+```python
+        "extraction": rollup(build_extraction_status(ROOT, slug)),
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+```bash
+python -m pytest tests/test_extraction_status.py tests/test_api_extraction_status.py tests/test_api_compliance.py tests/test_api_setup.py -v
+```
+
+Then the full suite: `python -m pytest`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add procurement/coverage.py api/main.py tests/test_extraction_status.py tests/test_api_extraction_status.py
+git commit -m "feat(api): per-vendor extraction status
+
+Which of a vendor's files were read, by which extractor, and what each one
+contributed. Reports route beside doc_class - after the routing change they
+legitimately differ, and that difference is what explains a blank column.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 9: Per-vendor extraction status — web UI
+
+**Files:**
+- Create: `web/src/pages/ExtractionStatus.tsx`
+- Modify: `web/src/types.ts`, `web/src/api.ts`, `web/src/App.tsx`, `web/src/pages/Dashboard.tsx`, `web/src/theme.css`
+- Test: `npm --prefix web run build` (the project has no front-end test runner; the API contract is covered by Task 8)
+
+**Interfaces:**
+- Consumes: `GET /api/projects/{slug}/extraction-status` and the `extraction` key on `/summary`, both from Task 8
+- Produces: `ExtractionStatus` / `VendorExtraction` / `DocumentStatus` TypeScript interfaces; `fetchExtractionStatus(slug)`; a fourth nav entry
+- **Store invariant owned:** none — display only.
+
+Two placements, per the agreed design: a one-line roll-up per vendor on the Dashboard card, reading the `extraction` key already on `/summary`, and a dedicated screen with the full per-file listing.
+
+The roll-up must be readable at a glance, so it carries only what changes a decision: `ADPOWER · 4 files · 2 read · 1 failed · 2 facts`. A vendor with `fact_count === 0` gets a visible warning marker — that is the single most useful signal on the page and the exact condition that went unnoticed across seven runs.
+
+The detail screen groups by vendor, one row per file: filename, `doc_class → route`, status, fact count, and — for anything not `ok` — the stored `notes` verbatim. Rendering `notes` verbatim rather than re-wording it follows the same rule the compliance screen already applies to `rationale`.
+
+- [ ] **Step 1: Add the types and the fetcher**
+
+```ts
+// web/src/types.ts — append
+export interface DocumentStatus {
+  doc_id: string
+  filename: string
+  path: string
+  doc_class: string
+  route: string | null
+  status: 'ok' | 'failed' | 'skipped' | 'pending'
+  notes: string | null
+  text_source: string | null
+  fact_count: number
+  is_quotation: boolean
+  superseded_by: string | null
+}
+
+export interface VendorExtraction {
+  vendor: string
+  documents: DocumentStatus[]
+  extracted: number
+  failed: number
+  skipped: number
+  fact_count: number
+  has_commercial: boolean
+  unanswered: number
+}
+
+export interface ExtractionStatus {
+  vendors: VendorExtraction[]
+  totals: Record<string, number>
+}
+
+// the /summary roll-up: the same record minus the document list
+export type VendorExtractionRollup = Omit<VendorExtraction, 'documents'>
+```
+
+Add `extraction: VendorExtractionRollup[]` to the existing `ProjectDetail` interface.
+
+```ts
+// web/src/api.ts — append
+export function fetchExtractionStatus(slug: string): Promise<ExtractionStatus> {
+  return getJson(`/api/projects/${encodeURIComponent(slug)}/extraction-status`)
+}
+```
+
+- [ ] **Step 2: Build the detail screen**
+
+```tsx
+// web/src/pages/ExtractionStatus.tsx
+import type { JSX } from 'react'
+import { fetchExtractionStatus } from '../api'
+import type { DocumentStatus, VendorExtraction } from '../types'
+import { useAsync } from '../useAsync'
+
+const STATUS_MARK: Record<DocumentStatus['status'], string> = {
+  ok: '✅', failed: '⚠️', skipped: '—', pending: '·',
+}
+
+export function ExtractionStatus({
+  slug, projectName,
+}: { slug: string; projectName: string }): JSX.Element {
+  const { data, error, loading } = useAsync(
+    () => fetchExtractionStatus(slug),
+    [slug],
+  )
+
+  if (loading) return <div className="skeleton" style={{ height: 240 }} />
+  if (error) return <p className="error">{error.message}</p>
+  if (!data) return <p className="muted">No extraction status yet.</p>
+
+  return (
+    <>
+      <header className="page-head">
+        <h1>Extraction status</h1>
+        <p className="muted">
+          {projectName} — {data.totals.extracted} of {data.totals.documents}{' '}
+          documents read, {data.totals.facts} technical facts,{' '}
+          {data.totals.failed} could not be read.
+        </p>
+      </header>
+      {data.vendors.map((vendor) => (
+        <VendorPanel key={vendor.vendor} vendor={vendor} />
+      ))}
+    </>
+  )
+}
+
+function VendorPanel({ vendor }: { vendor: VendorExtraction }): JSX.Element {
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h2>{vendor.vendor}</h2>
+        <span className="meta">
+          {vendor.documents.length} files · {vendor.extracted} read ·{' '}
+          {vendor.failed} failed · {vendor.skipped} skipped ·{' '}
+          {vendor.fact_count} facts · {vendor.unanswered} unanswered
+        </span>
+      </div>
+
+      {vendor.fact_count === 0 && (
+        // the condition that went unnoticed across seven runs
+        <p className="warn">
+          No technical facts were extracted for this vendor. Every
+          machine-checked requirement will read as unanswered.
+        </p>
+      )}
+      {!vendor.has_commercial && (
+        <p className="warn">No commercial terms were extracted for this vendor.</p>
+      )}
+
+      {vendor.documents.length === 0 ? (
+        <p className="muted mono">No documents uploaded.</p>
+      ) : (
+        <table className="grid">
+          <thead>
+            <tr>
+              <th>File</th><th>Classified</th><th>Read as</th>
+              <th>Status</th><th>Facts</th>
+            </tr>
+          </thead>
+          <tbody>
+            {vendor.documents.map((doc) => (
+              <tr key={doc.doc_id}>
+                <td>
+                  {doc.filename}
+                  {doc.is_quotation && <span className="vpill">quotation</span>}
+                  {/* stored notes are displayed verbatim, never re-worded —
+                      the rule the compliance screen applies to rationale */}
+                  {doc.status !== 'ok' && doc.notes && (
+                    <p className="muted mono">{doc.notes}</p>
+                  )}
+                </td>
+                <td className="mono">{doc.doc_class}</td>
+                <td className="mono">{doc.route ?? '—'}</td>
+                <td>
+                  {STATUS_MARK[doc.status]} {doc.status}
+                  {doc.text_source && (
+                    <span className="muted mono"> {doc.text_source}</span>
+                  )}
+                </td>
+                <td className="mono">{doc.fact_count}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  )
+}
+```
+
+- [ ] **Step 3: Wire the nav and the Dashboard roll-up**
+
+`web/src/App.tsx` — add to the `View` union and the `NAV` array, and render it beside the other project-scoped screens. The compliance matrix stays `02`, so extraction status takes `04` rather than renumbering screens users already know:
+
+```tsx
+type View = 'dashboard' | 'setup' | 'matrix' | 'statement' | 'extraction'
+
+  { view: 'extraction', index: '04', label: 'Extraction status', needsProject: true },
+```
+
+```tsx
+            {view === 'extraction' && active && (
+              <ExtractionStatus slug={active.slug} projectName={active.name} />
+            )}
+```
+
+`web/src/pages/Dashboard.tsx` — inside `ProjectCard`, after the existing `vendors` block, using `data.extraction` which `/summary` now carries:
+
+```tsx
+      {data?.extraction && data.extraction.length > 0 && (
+        <div className="meta" aria-label="Extraction status">
+          {data.extraction.map((v) => (
+            <span key={v.vendor} className={v.fact_count === 0 ? 'warn' : undefined}>
+              {v.vendor} {v.extracted}/{v.extracted + v.failed + v.skipped} read
+              {v.fact_count === 0 && ' · no facts'}
+            </span>
+          ))}
+        </div>
+      )}
+```
+
+`web/src/theme.css` — add a `.warn` rule and a `.grid` table rule if the sheet has no equivalent; reuse the existing `.panel`, `.meta`, `.mono`, `.muted` and `.vpill` classes rather than introducing parallel ones.
+
+- [ ] **Step 4: Verify in the browser**
+
+Build first, then run both dev servers from `.claude/launch.json` via the preview tooling — never a bare `npm run dev` or `streamlit run`:
+
+```bash
+npm --prefix web run build
+```
+
+Then open the app, select a project that has been ingested, and confirm: the Dashboard card shows the per-vendor roll-up; the Extraction status screen lists every file with its class, route, status and fact count; a vendor with no facts shows the warning; an unreadable document shows its stored note. Check the browser console for errors and take a screenshot of the populated screen for the ledger.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add web/src/pages/ExtractionStatus.tsx web/src/types.ts web/src/api.ts web/src/App.tsx web/src/pages/Dashboard.tsx web/src/theme.css
+git commit -m "feat(web): per-vendor extraction status screen
+
+A roll-up on each Dashboard card and a detail screen listing every file with
+its class, the extractor that read it, its status and its fact count. A vendor
+with zero technical facts is called out explicitly.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+```
+
+---
+
 ## Approval checklist
 
-- [x] Every task's `Interfaces` block has a **Store invariant owned** bullet (Tasks 6 and 7 own none and say so explicitly, defending others' instead).
+- [x] Every task's `Interfaces` block has a **Store invariant owned** bullet (Tasks 6-9 own none and say so explicitly — 6 and 7 defend others', 8 and 9 introduce no stored collection).
 - [x] No invariant is claimed twice; each of `documents.json`, `VendorFacts.technical`, `requirements.json` and `compliance.json` has an owner.
 - [x] The integration task carries all nine required rows (1-3, 5, 7-11) plus phase-specific rows for every collection this plan touches (12-19) and one regression row (20).
 - [x] Every matrix row names an invariant; every invariant INV-A…INV-E has at least one row.
@@ -1460,7 +2021,9 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ## Self-review notes
 
-- **Cause coverage.** Cause 1 → Task 2. Cause 2 → Task 2, with Task 1 keeping the cost down. Cause 3 → Task 3. Cause 4 → Tasks 4 and 5. The silent-empty-success finding (MKON's `HSD 230.pdf`) → Task 1's guard plus matrix row 11.
-- **Type consistency.** `checkability` is the string `"auto" | "stated" | "judgement"` in `store/models.py`, `matrix.py`, `compliance.py`, `extract_requirements.py`, `portal/views/compliance.py` and `web/src/types.ts`. `_vendor_route` returns a *route* (a key of `PROMPT_VERSION_BY_CLASS`), never a `doc_class`. `read_text_with_source` returns `(text, reader)` and `text_source` stores `f"{reader}:{n}chars"` — the reader alone is not what is stored.
-- **Ordering is load-bearing.** Task 1 before Task 2 (cost and silent empties). Task 4 before Task 5 (`vocabulary()` must include `stated` parameters before `evaluate` can find their facts). Task 6 after 1-5. Task 7 last, because its acceptance check requires a real re-ingestion.
+- **Cause coverage.** Cause 1 → Task 2. Cause 2 → Task 2, with Task 1 keeping the cost down. Cause 3 → Task 3. Cause 4 → Tasks 4 and 5. The silent-empty-success finding (MKON's `HSD 230.pdf`) → Task 1's guard plus matrix row 11. Making all of it visible without a store audit → Tasks 8 and 9.
+- **Type consistency.** `checkability` is the string `"auto" | "stated" | "judgement"` in `store/models.py`, `matrix.py`, `compliance.py`, `extract_requirements.py`, `portal/views/compliance.py` and `web/src/types.ts`. `_vendor_route` returns a *route* (a key of `PROMPT_VERSION_BY_CLASS`), never a `doc_class`, and `coverage.py` imports the public `VENDOR_ROUTE` table rather than re-deriving the mapping. `read_text_with_source` returns `(text, reader)` and `text_source` stores `f"{reader}:{n}chars"` — the reader alone is not what is stored. `DocumentStatus.status` carries `DocumentRecord.extraction_status` unchanged, so the four values match on both sides of the API.
+- **Ordering is load-bearing.** Task 1 before Task 2 (cost and silent empties). Task 4 before Task 5 (`vocabulary()` must include `stated` parameters before `evaluate` can find their facts). Task 8 before Task 9 (the UI consumes the route). Tasks 6 and 7 after 1-5; Task 7 last of those, because its acceptance check requires a real re-ingestion.
+- **Tasks 8 and 9 are independent of 6 and 7.** They depend only on Task 1 (`text_source`) and Task 2 (`VENDOR_ROUTE`), and they touch disjoint files, so they can run in parallel with the mutation matrix. Doing them *early* has a practical benefit: the extraction status screen is the fastest way to read the result of every other task in this plan.
+- **Tasks 8 and 9 own no store invariant, deliberately.** `coverage.py` introduces no stored collection — it derives from `documents.json`, `facts.json` and `compliance.json` and is recomputed wholesale on every call, exactly as `matrix.py` is. That is why neither appears in the invariant register and why the mutation matrix has no row for them: there is no accumulating state for a second run to corrupt.
 - **Known gap, deliberately unclosed.** The inferred-quotation fallback pool at `pipeline.py:392` still filters on `doc_class not in _EXTRACTABLE`, so a vendor with no recognised quotation can have an `other`-classed document taken as their quotation, losing that document's technical facts. This is pre-existing, unchanged by this plan, and narrower than before, since such a vendor now has seven other routed classes to contribute facts from. Closing it means letting one document feed two extractors, which is a store-shape change and belongs in its own plan.
