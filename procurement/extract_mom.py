@@ -189,5 +189,9 @@ def apply_amendments(requirements: list[RequirementRecord],
                 target.parameter and target.operator
                 and target.value is not None and target.unit is not None):
             target.checkability = "judgement"
+        elif target.checkability == "stated" and not target.parameter:
+            # same rule one tier over: a stated row with nothing to match a
+            # fact against is a human's call, not a check
+            target.checkability = "judgement"
 
     return out, linked

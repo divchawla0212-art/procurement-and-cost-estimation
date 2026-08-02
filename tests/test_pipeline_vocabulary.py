@@ -167,3 +167,21 @@ def test_a_phase2_store_reextracts_each_datasheet_once_then_settles(tmp_path):
     third = VocabClient()
     run_ingestion(root, "p", third)
     assert third.calls.count("facts") == 0
+
+
+def test_vocabulary_includes_stated_parameters():
+    from procurement.compliance import vocabulary
+    from procurement.store.models import RequirementRecord, RequirementSet
+    reqset = RequirementSet(requirements=[
+        RequirementRecord(req_id="r-1", clause_ref="1", text="t", source_doc_id="d",
+                          checkability="auto", parameter="h2s_content",
+                          operator="<=", value=700, unit="ppm"),
+        RequirementRecord(req_id="r-2", clause_ref="2", text="t", source_doc_id="d",
+                          checkability="stated", parameter="generator_insulation_class",
+                          value="Class F"),
+        RequirementRecord(req_id="r-3", clause_ref="3", text="t", source_doc_id="d",
+                          checkability="judgement"),
+    ])
+    # without this the datasheet pass is never asked for the stated parameter,
+    # no fact is stored, and every stated row lands on `unanswered`
+    assert vocabulary(reqset) == ["generator_insulation_class", "h2s_content"]

@@ -215,7 +215,7 @@ def test_a_two_member_list_under_in_is_left_as_membership(tmp_path):
 
 
 def test_the_prompt_version_is_the_prompt_filename():
-    assert REQUIREMENTS_PROMPT_VERSION == "requirements_v3"
+    assert REQUIREMENTS_PROMPT_VERSION == "requirements_v4"
 
 
 def test_the_prompt_tells_the_model_which_operator_a_limit_takes():
@@ -354,3 +354,60 @@ def test_position_stays_global_across_a_chunk_boundary_for_unreferenced_clauses(
     # continuing the count from the first chunk.
     assert beta.clause_ref == "#3"
     assert beta.req_id == req_id_for("d1", "#3")
+
+
+def test_a_stated_value_clause_is_stored_as_stated(tmp_path):
+    src = tmp_path / "mr.txt"
+    src.write_text("Generator Insulation Temperature: Class F", encoding="utf-8")
+    client = MockLLMClient({"requirements": [{
+        "clause_ref": "2.6", "text": "Generator Insulation Temperature: Class F",
+        "category": "technical", "checkability": "stated",
+        "parameter": "generator_insulation_class", "value": "Class F"}]})
+    records, status, _ = extract_requirements("d1", str(src), client)
+    r = records[0]
+    assert (status, r.checkability, r.parameter, r.value) == (
+        "ok", "stated", "generator_insulation_class", "Class F")
+    assert r.operator is None and r.unit is None
+
+
+def test_a_presence_clause_is_stated_with_a_null_value(tmp_path):
+    src = tmp_path / "mr.txt"
+    src.write_text("Anchor Bolt Required", encoding="utf-8")
+    client = MockLLMClient({"requirements": [{
+        "clause_ref": "1.10", "text": "Anchor Bolt Required",
+        "checkability": "stated", "parameter": "anchor_bolt"}]})
+    records, _, _ = extract_requirements("d1", str(src), client)
+    assert (records[0].checkability, records[0].value) == ("stated", None)
+
+
+def test_stated_without_a_parameter_degrades_to_judgement(tmp_path):
+    src = tmp_path / "mr.txt"
+    src.write_text("Vendor shall be reputable", encoding="utf-8")
+    client = MockLLMClient({"requirements": [{
+        "clause_ref": "9.1", "text": "Vendor shall be reputable",
+        "checkability": "stated", "value": "reputable"}]})
+    records, _, _ = extract_requirements("d1", str(src), client)
+    # nothing to match a fact against: this is a human's call, not a check
+    assert (records[0].checkability, records[0].parameter) == ("judgement", None)
+
+
+def test_a_stated_list_value_degrades_to_judgement(tmp_path):
+    src = tmp_path / "mr.txt"
+    src.write_text("Codes: several", encoding="utf-8")
+    client = MockLLMClient({"requirements": [{
+        "clause_ref": "5.1", "text": "Codes: several", "checkability": "stated",
+        "parameter": "codes", "value": ["IEC 60034-1", "ISO 8528"]}]})
+    records, _, _ = extract_requirements("d1", str(src), client)
+    # a set of permitted values is `in`, which is an auto bound, not a stated one
+    assert records[0].checkability == "judgement"
+
+
+def test_stated_never_keeps_an_operator_or_unit(tmp_path):
+    src = tmp_path / "mr.txt"
+    src.write_text("Insulation Class F", encoding="utf-8")
+    client = MockLLMClient({"requirements": [{
+        "clause_ref": "2.6", "text": "Insulation Class F", "checkability": "stated",
+        "parameter": "generator_insulation_class", "value": "Class F",
+        "operator": ">=", "unit": "degC"}]})
+    records, _, _ = extract_requirements("d1", str(src), client)
+    assert records[0].operator is None and records[0].unit is None

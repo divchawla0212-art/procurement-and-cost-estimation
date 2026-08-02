@@ -1,10 +1,12 @@
 """MR / spec document -> RequirementRecords.
 
-Two tiers, per spec section 4: `auto` requirements carry a machine-checkable
-bound (parameter, operator, value, unit) and `judgement` requirements carry
-clause text for a human. A clause that looks machine-checkable but is missing
-any part of its bound is stored as `judgement` - never as an `auto` with a
-null bound, which compliance.py would compare against and blame a vendor for.
+Three tiers, per spec section 4: `auto` requirements carry a machine-checkable
+bound (parameter, operator, value, unit); `stated` requirements carry a
+parameter and an optional non-numeric value, with operator and unit always
+null; `judgement` requirements carry clause text for a human. A clause that
+looks machine-checkable but is missing any part of its bound is stored as
+`judgement` - never as an `auto` with a null bound, which compliance.py would
+compare against and blame a vendor for.
 """
 import logging
 import os
@@ -17,9 +19,9 @@ from procurement.store.models import RequirementRecord, req_id_for
 
 _log = logging.getLogger(__name__)
 
-REQUIREMENTS_PROMPT_VERSION = "requirements_v3"
+REQUIREMENTS_PROMPT_VERSION = "requirements_v4"
 _PROMPT = (Path(__file__).parents[1] / "shared" / "llm" / "prompts"
-           / "requirements_v3.txt")
+           / "requirements_v4.txt")
 
 # The output JSON echoes every clause verbatim, so it is larger than the input.
 # The live 25,176-char MR overflowed the 8192-token ceiling in one call and
@@ -35,6 +37,7 @@ _NOISE = re.compile(r"[^a-z0-9]+")
 # read as a set fails a vendor offering 55 degC for meeting the requirement.
 _OPERATORS = (">=", "<=", "==", "in", "between")
 _CATEGORIES = ("technical", "commercial", "documentation", "testing", "codes")
+_CHECKABILITY = ("auto", "stated", "judgement")
 
 
 def _is_range(value) -> bool:
@@ -161,16 +164,30 @@ def extract_requirements(doc_id: str, path: str, client, pdf_fallback=None,
                 and item.value is not None
                 and item.unit is not None)
 
+        # A stated clause needs something to match a fact against, so the
+        # parameter is mandatory; the value is not, because "Anchor Bolt
+        # Required" genuinely states none. A list value is the `in` operator's
+        # shape - an auto bound - and never a stated one.
+        stated = (not auto
+                  and item.checkability == "stated"
+                  and bool((item.parameter or "").strip())
+                  and not isinstance(item.value, (list, tuple, dict)))
+
+        if auto:
+            tier, parameter, value, unit = ("auto", (item.parameter or "").strip(),
+                                            item.value, item.unit)
+        elif stated:
+            # operator and unit stay None: a stated row that acquired either
+            # would be an auto row with a half-stated bound (INV-2, phase 3).
+            tier, parameter, value, unit = ("stated", (item.parameter or "").strip(),
+                                            item.value, None)
+            operator = None
+        else:
+            tier, parameter, value, unit, operator = ("judgement", None, None, None, None)
+
         out.append(RequirementRecord(
-            req_id=req_id,
-            clause_ref=clause,
-            text=body,
+            req_id=req_id, clause_ref=clause, text=body,
             category=item.category if item.category in _CATEGORIES else "technical",
-            checkability="auto" if auto else "judgement",
-            parameter=(item.parameter or "").strip() or None if auto else None,
-            operator=operator if auto else None,
-            value=item.value if auto else None,
-            unit=item.unit if auto else None,
-            source_doc_id=doc_id,
-        ))
+            checkability=tier, parameter=parameter, operator=operator,
+            value=value, unit=unit, source_doc_id=doc_id))
     return out, "ok", None

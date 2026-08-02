@@ -132,8 +132,8 @@ class RequirementRecord(BaseModel):
     clause_ref: str
     text: str
     category: str = "technical"      # technical|commercial|documentation|testing|codes
-    checkability: str = "judgement"  # auto|judgement
-    parameter: str | None = None     # auto only
+    checkability: str = "judgement"  # auto|stated|judgement
+    parameter: str | None = None     # auto|stated
     # >= | <= | == | in (a set of permitted values) | between (a stated range,
     # whose value is exactly two bounds)
     operator: str | None = None

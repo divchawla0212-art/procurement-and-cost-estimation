@@ -36,9 +36,15 @@ def _now() -> str:
 
 
 def vocabulary(reqset: RequirementSet) -> list[str]:
-    """The parameter names the datasheet pass will be asked to look for."""
+    """The parameter names the datasheet pass will be asked to look for.
+
+    Both checked tiers contribute. Omitting `stated` would mean never asking a
+    datasheet for `generator_insulation_class`, so every stated row would land
+    on `unanswered` and the tier would measure nothing.
+    """
     return sorted({r.parameter for r in reqset.requirements
-                   if r.checkability == "auto" and r.parameter and not r.withdrawn})
+                   if r.checkability in ("auto", "stated")
+                   and r.parameter and not r.withdrawn})
 
 
 def vocabulary_sha(params: list[str]) -> str:
