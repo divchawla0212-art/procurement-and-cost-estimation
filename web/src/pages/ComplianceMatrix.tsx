@@ -80,7 +80,9 @@ function WorklistRow({ row, vendors }: { row: MatrixRow; vendors: string[] }) {
         <span className="clause">{row.clause_ref}</span>
         <span className="bound">{bound(row)}</span>
       </div>
-      {row.checkability === 'auto' && <p className="rationale">{row.text}</p>}
+      {(row.checkability === 'auto' || row.checkability === 'stated') && (
+        <p className="rationale">{row.text}</p>
+      )}
       <CellList row={row} vendors={vendors} />
     </div>
   )

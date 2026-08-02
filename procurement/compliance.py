@@ -54,6 +54,17 @@ def vocabulary_sha(params: list[str]) -> str:
     return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:12]
 
 
+def _stated_matches(required, stated) -> bool:
+    """True when every token of the required value appears in the stated one.
+
+    Subset, not equality: a datasheet prints "Class F / Class B rise" for a
+    clause requiring "Class F", and equality would fail every real vendor.
+    """
+    req_tokens = {t for t in _NOISE.split(str(required).lower()) if t}
+    got_tokens = {t for t in _NOISE.split(str(stated).lower()) if t}
+    return bool(req_tokens) and req_tokens <= got_tokens
+
+
 def evaluate(requirement, facts: list[dict], deviations: list[dict],
              vendor: str, now: str) -> ComplianceResult:
     """One cell. Verdict order is the whole design; see the module docstring
@@ -74,6 +85,28 @@ def evaluate(requirement, facts: list[dict], deviations: list[dict],
         # evidence of it.
         return result("deviation",
                       f"vendor declared a deviation: {deviated.get('statement')}")
+
+    if requirement.checkability == "stated":
+        want = _norm(requirement.parameter)
+        fact = next((f for f in facts if _norm(f.get("parameter")) == want), None)
+        if fact is None:
+            # the same rule `auto` follows: not having read the answer is not
+            # the vendor having answered wrongly
+            return result("unanswered",
+                          f"no vendor document stated {requirement.parameter!r}")
+        got = fact.get("value")
+        if requirement.value is None:
+            return result("pass",
+                          f"vendor states {requirement.parameter} = {got!r}", fact)
+        if _stated_matches(requirement.value, got):
+            return result("pass",
+                          f"vendor states {requirement.parameter} = {got!r}, "
+                          f"which carries the required {requirement.value!r}", fact)
+        # never `fail`: "Class H" is better insulation than "Class F", and a
+        # token comparison cannot know that. Cite both and let a human decide.
+        return result("review",
+                      f"required {requirement.parameter} = {requirement.value!r}; "
+                      f"vendor states {got!r}", fact)
 
     if requirement.checkability != "auto":
         candidates = [f"{f.get('parameter')}={f.get('value')} {f.get('unit') or ''}".strip()

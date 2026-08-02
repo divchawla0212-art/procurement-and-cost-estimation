@@ -16,7 +16,10 @@ _VERDICT_MARK = {"pass": "✅", "fail": "❌", "deviation": "⚠️",
 
 
 def _bound(row) -> str:
-    """The requirement's machine-checkable bound, or its clause text."""
+    """The requirement's checkable bound, or its clause text."""
+    if row.checkability == "stated":
+        return (f"{row.parameter} = {row.value}" if row.value is not None
+                else f"{row.parameter} (must be stated)")
     if row.checkability != "auto":
         return row.text
     value = row.value if not isinstance(row.value, list) else "..".join(
@@ -55,7 +58,7 @@ def _render_coverage(coverage) -> None:
 
 def _render_row(row, vendors) -> None:
     st.markdown(f"**{row.clause_ref}** — {_bound(row)}")
-    if row.checkability == "auto":
+    if row.checkability in ("auto", "stated"):
         st.caption(row.text)
     for vendor in vendors:
         cell = row.cells[vendor]

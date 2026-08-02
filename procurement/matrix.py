@@ -42,7 +42,7 @@ class MatrixRow(BaseModel):
     req_id: str
     clause_ref: str
     text: str
-    checkability: str               # auto|judgement
+    checkability: str               # auto|stated|judgement
     parameter: str | None = None
     operator: str | None = None
     value: str | float | list | None = None
@@ -51,10 +51,15 @@ class MatrixRow(BaseModel):
 
 
 class Coverage(BaseModel):
-    """Counted over `auto` cells only. A percentage over every cell would be
-    dominated by `review` - four to six times as many on every real store -
-    and would say nothing about extraction."""
+    """`auto_cells` and `stated_cells` are separate denominators - they measure
+    different things, arithmetic settling versus text matching settling - but
+    `by_verdict` tallies both tiers together. A percentage over every cell,
+    including `judgement`, would be dominated by `review` - four to six times
+    as many on every real store - and would say nothing about extraction."""
     auto_cells: int = 0
+    stated_cells: int = 0           # text-matched, counted separately: the
+                                    # unanswered_silent/refused split below is
+                                    # only meaningful against `auto`
     by_verdict: dict[str, int] = {}
     unanswered_silent: int = 0      # no vendor document stated the parameter
     unanswered_refused: int = 0     # the fact was found; the comparison was not
@@ -94,6 +99,10 @@ def build_matrix(root: str, slug: str) -> ComplianceMatrix:
                     doc_id=result.doc_id)
             if requirement.checkability == "auto":
                 _tally(coverage, cells[vendor])
+            elif requirement.checkability == "stated":
+                coverage.stated_cells += 1
+                coverage.by_verdict[cells[vendor].verdict] = (
+                    coverage.by_verdict.get(cells[vendor].verdict, 0) + 1)
 
         rows.append(MatrixRow(
             req_id=requirement.req_id, clause_ref=requirement.clause_ref,

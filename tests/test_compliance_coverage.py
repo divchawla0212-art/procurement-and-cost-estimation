@@ -14,6 +14,7 @@ answer it was actually compared against on 2026-07-31.
 import pytest
 
 from procurement.compliance import evaluate_project
+from procurement.matrix import build_matrix
 from procurement.project import create_project, load_project, save_project
 from procurement.store import snapshots
 from procurement.store.models import (RequirementRecord, RequirementSet,
@@ -122,3 +123,41 @@ def test_a_parameter_no_vendor_document_states_is_still_unanswered(tmp_path):
     cell = cells[req_id_for("d1", _clause(index))]
     assert cell.verdict == "unanswered"
     assert "no vendor document stated" in cell.rationale
+
+
+# --- stated cells counted separately from auto ------------------------------
+
+def test_stated_cells_are_counted_separately_from_auto(tmp_path):
+    root = str(tmp_path)
+    create_project(root, "P")
+    project = load_project(root, "p")
+    project.vendors = ["KERUI"]
+    save_project(root, project)
+
+    snapshots.save_requirements(root, "p", RequirementSet(requirements=[
+        RequirementRecord(req_id=req_id_for("d1", "1.1"), clause_ref="1.1",
+                          text="noise limit 85 dBA", checkability="auto",
+                          parameter="noise_limit", operator="<=", value=85.0,
+                          unit="dBA", source_doc_id="d1"),
+        RequirementRecord(req_id=req_id_for("d1", "2.6"), clause_ref="2.6",
+                          text="Generator Insulation Temperature: Class F",
+                          checkability="stated",
+                          parameter="generator_insulation_class",
+                          value="Class F", source_doc_id="d1"),
+        RequirementRecord(req_id=req_id_for("d1", "3.1"), clause_ref="3.1",
+                          text="Vendor shall be reputable",
+                          checkability="judgement", source_doc_id="d1"),
+    ]))
+    snapshots.save_facts(root, "p", VendorFacts(vendor="KERUI", technical=[
+        {"fact_id": "f-1", "parameter": "noise_limit", "value": 82.0,
+         "unit": "dBA", "verbatim": "82 dBA", "doc_id": "d9"},
+        {"fact_id": "f-2", "parameter": "generator_insulation_class",
+         "value": "Class F / Class B rise", "unit": None,
+         "verbatim": "Class F / Class B rise", "doc_id": "d9"},
+    ]))
+    evaluate_project(root, "p", now=NOW)
+    coverage = build_matrix(root, "p").coverage
+
+    # one vendor, one cell each: the judgement row is counted in neither
+    assert (coverage.auto_cells, coverage.stated_cells) == (1, 1)
+    assert coverage.by_verdict["pass"] == 2

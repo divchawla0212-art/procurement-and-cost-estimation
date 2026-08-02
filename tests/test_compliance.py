@@ -233,3 +233,51 @@ def test_a_withdrawn_requirement_leaves_the_vocabulary():
         _req("4.2.7"),
         _req("4.2.8", parameter="continuous_rating", withdrawn=True)])
     assert vocabulary(reqset) == ["h2s_tolerance"]
+
+
+# --- the `stated` tier -------------------------------------------------------
+
+def _stated(parameter="generator_insulation_class", value="Class F", clause="2.6"):
+    return RequirementRecord(req_id="r-1", clause_ref=clause, text="Insulation Class F",
+                             source_doc_id="d", checkability="stated",
+                             parameter=parameter, value=value)
+
+
+def _stated_fact(parameter, value, fact_id="f-1"):
+    return {"fact_id": fact_id, "parameter": parameter, "value": value,
+            "unit": None, "doc_id": "d9"}
+
+
+def test_stated_passes_when_the_required_tokens_are_present():
+    r = evaluate(_stated(), [_stated_fact("generator_insulation_class",
+                                          "Class F / Class B rise")], [], "KERUI", "now")
+    assert (r.verdict, r.fact_id) == ("pass", "f-1")
+
+
+def test_stated_with_no_matching_fact_is_unanswered_never_fail():
+    r = evaluate(_stated(), [_stated_fact("continuous_rating", "525")],
+                 [], "ADPOWER", "now")
+    assert r.verdict == "unanswered"
+    assert "generator_insulation_class" in r.rationale
+
+
+def test_a_stated_mismatch_is_review_not_fail():
+    # Class H is better insulation than Class F; a token diff cannot know that
+    r = evaluate(_stated(), [_stated_fact("generator_insulation_class", "Class H")],
+                 [], "MKON", "now")
+    assert r.verdict == "review"
+    assert "Class F" in r.rationale and "Class H" in r.rationale
+    assert r.fact_id == "f-1"       # cite the evidence the human must weigh
+
+
+def test_a_presence_requirement_passes_when_the_parameter_is_stated_at_all():
+    r = evaluate(_stated(parameter="anchor_bolt", value=None),
+                 [_stated_fact("anchor_bolt", "Provided")], [], "KERUI", "now")
+    assert (r.verdict, r.fact_id) == ("pass", "f-1")
+
+
+def test_a_declared_deviation_still_beats_a_stated_pass():
+    dev = [{"clause_ref": "2.6", "statement": "Class B only", "disposition": "deviate"}]
+    r = evaluate(_stated(), [_stated_fact("generator_insulation_class", "Class F")],
+                 dev, "MKON", "now")
+    assert r.verdict == "deviation"

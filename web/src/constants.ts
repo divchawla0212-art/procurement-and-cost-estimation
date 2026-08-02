@@ -16,8 +16,13 @@ export const GROUP_LABEL: Record<string, string> = {
   matched: 'Matched',
 }
 
-/** The requirement's machine-checkable bound, or its clause text. */
+/** The requirement's checkable bound, or its clause text. */
 export function bound(row: MatrixRow): string {
+  if (row.checkability === 'stated') {
+    return row.value != null
+      ? `${row.parameter ?? ''} = ${row.value}`
+      : `${row.parameter ?? ''} (must be stated)`
+  }
   if (row.checkability !== 'auto') return row.text
   const value = Array.isArray(row.value)
     ? row.value.map(String).join('..')
