@@ -315,3 +315,42 @@ def test_a_clause_repeated_across_chunks_is_stored_once(tmp_path):
     records, status, _ = extract_requirements("d1", str(src), client)
     assert status == "ok"
     assert len(records) == 1
+
+
+def test_position_stays_global_across_a_chunk_boundary_for_unreferenced_clauses(tmp_path):
+    # req_id_for falls back to f"#{position}" when a clause prints no reference.
+    # If the merge loop's position counter were per-chunk instead of global
+    # over the merged raw_items list, this clause would collide with an
+    # earlier unreferenced clause and every stored override/verdict keyed on
+    # the resulting req_id would be orphaned the next time the chunk budget
+    # changed. This is the property every other multi-chunk test in this file
+    # leaves unpinned, because they all use explicit clause_refs.
+    src = tmp_path / "mr.txt"
+    # range(400) at this line shape produces exactly 2 chunks under the
+    # default 8000-char budget (7975 + 2313 chars), confirmed empirically -
+    # the same fixture already reused by the tests above.
+    src.write_text("\n".join(f"clause {i} body text here" for i in range(400)),
+                   encoding="utf-8")
+    client = MockLLMClient([
+        {"requirements": [{"clause_ref": "1.1", "text": "first stated clause"},
+                          {"clause_ref": "", "text": "alpha body distinct one"}]},
+        {"requirements": [{"clause_ref": "", "text": "beta body distinct two"}]},
+    ])
+    records, status, notes = extract_requirements("d1", str(src), client)
+    assert status == "ok" and notes is None
+    assert len(client.calls) == 2          # genuinely two chunks, not one
+
+    by_text = {r.text: r for r in records}
+    alpha = by_text["alpha body distinct one"]
+    beta = by_text["beta body distinct two"]
+
+    # alpha is the 2nd item overall (after "1.1" at position 1).
+    assert alpha.clause_ref == "#2"
+    assert alpha.req_id == req_id_for("d1", "#2")
+
+    # beta is the 1st item of the 2nd chunk but the 3rd item overall. A
+    # per-chunk counter would reset here and hand it "#1" - colliding with
+    # whatever the first chunk's own "#1" would have been - instead of
+    # continuing the count from the first chunk.
+    assert beta.clause_ref == "#3"
+    assert beta.req_id == req_id_for("d1", "#3")
