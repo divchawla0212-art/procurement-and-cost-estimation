@@ -43,22 +43,22 @@ There are therefore **two** baselines, and both are correct:
 
 | where | baseline |
 |---|---|
-| a developer workstation, `.env`, `data/` and an ingested multi-vendor `projects/` present | **752 passed, 3 skipped, 2 failed** |
-| CI, and any clean checkout | **748 passed, 9 skipped, 0 failed** |
+| a developer workstation, `.env`, `data/` and an ingested multi-vendor `projects/` present | **753 passed, 3 skipped, 2 failed** |
+| CI, and any clean checkout | **748 passed, 10 skipped, 0 failed** |
 
 Anything else is a real regression.
 
 CI being green is not luck. With no `.env` the key stays deleted, the advisory
-warning fires, and the portal test passes. With no `projects/` all three
+warning fires, and the portal test passes. With no `projects/` all four
 `test_real_corpus_coverage.py` tests skip on their module-level guard, which is
 what turns the AESL failure into a skip. The remaining three extra skips are
 not credential failures: they are the tests guarded on the untracked `data/`
 sample directory, which a workstation has and a fresh checkout does not.
 
 So the CI row is the workstation row with the portal failure turned into a
-pass, the three corpus-coverage results (2 passed, 1 failed here) turned into
+pass, the four corpus-coverage results (3 passed, 1 failed here) turned into
 skips, and the three `data/` passes turned into skips —
-`748 = 752 + 1 - 2 - 3`, `9 = 3 + 3 + 3`, `0 = 2 - 1 - 1`; 757 tests either
+`748 = 753 + 1 - 3 - 3`, `10 = 3 + 4 + 3`, `0 = 2 - 1 - 1`; 758 tests either
 way. When the counts move, measure the workstation row and derive the CI row
 from it; editing the two rows independently is how they drift apart.
 
