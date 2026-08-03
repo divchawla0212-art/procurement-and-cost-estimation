@@ -97,6 +97,12 @@ export interface VendorExtraction {
   // document can fail both passes, and often will, since both hit the same
   // provider on the same text.
   secondary_failed: number
+  // Stored technical facts whose doc_id matches no document of this vendor —
+  // a breach of "a stored collection contains exactly the records of its
+  // currently-live sources". `fact_count` is read off the stored collection,
+  // so these are inside it and in no document row; the difference is reported
+  // here rather than vanishing out of the vendor total.
+  unattributed_facts: number
 }
 
 // Mirrors the `totals` dict procurement/coverage.py:163-172 actually emits.
@@ -112,6 +118,7 @@ export interface ExtractionTotals {
   facts: number
   unanswered: number
   secondary_failed: number
+  unattributed_facts: number
 }
 
 export interface ExtractionStatus {

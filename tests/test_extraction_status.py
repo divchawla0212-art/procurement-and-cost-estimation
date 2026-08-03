@@ -254,3 +254,54 @@ def test_a_failed_inferred_quotation_with_a_failed_secondary_pass_still_reports_
 
     vendor = status.vendors[0]
     assert vendor.secondary_failed == 1      # both passes failed here
+
+
+# ------------------------------------------------------- an orphaned fact
+#
+# "A stored collection contains exactly the records of its currently-live
+# sources — no more" is the invariant `_prune_orphan_facts` enforces, and this
+# panel is the instrument that says when it has been breached. Summing the
+# vendor total from the per-document counts made it silent about exactly that:
+# a fact whose doc_id matches no document of the vendor is in no document row,
+# so it vanished from the total and the panel reported a clean store.
+
+
+def _store_with_an_orphan_fact(tmp_path):
+    root = str(tmp_path)
+    create_project(root, "P")
+    project = load_project(root, "p")
+    project.vendors = ["ADPOWER"]
+    save_project(root, project)
+
+    snapshots.save_documents(root, "p", [
+        DocumentRecord(doc_id="d1", path="vendors/ADPOWER/datasheet.pdf",
+                       vendor="ADPOWER", doc_class="datasheet",
+                       content_sha256="a", extraction_status="ok",
+                       prompt_version="tech_facts_v1"),
+    ])
+    snapshots.save_facts(root, "p", VendorFacts(
+        vendor="ADPOWER",
+        technical=[{"fact_id": "f-1", "parameter": "continuous_rating",
+                    "value": 525.0, "unit": "kW", "doc_id": "d1"},
+                   # the breach: a fact of a document that is no longer here
+                   {"fact_id": "f-2", "parameter": "rated_voltage",
+                    "value": 415.0, "unit": "V", "doc_id": "deleted-doc"}]))
+    return root
+
+
+def test_a_fact_no_live_document_claims_is_counted_and_named(tmp_path):
+    status = build_extraction_status(_store_with_an_orphan_fact(tmp_path), "p")
+    vendor = status.vendors[0]
+    # the total is the stored collection, not the sum of what is attributable
+    assert vendor.fact_count == 2
+    assert sum(d.fact_count for d in vendor.documents) == 1
+    # and the difference is surfaced rather than quietly dropped
+    assert vendor.unattributed_facts == 1
+    assert status.totals["facts"] == 2
+    assert status.totals["unattributed_facts"] == 1
+
+
+def test_a_clean_store_reports_no_unattributed_facts(tmp_path):
+    status = build_extraction_status(_store(tmp_path), "p")
+    assert all(v.unattributed_facts == 0 for v in status.vendors)
+    assert status.totals["unattributed_facts"] == 0

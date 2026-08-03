@@ -126,3 +126,62 @@ def test_a_stated_pass_does_not_push_coverage_past_100_percent(tmp_path, monkeyp
     assert checked.value == "2"
     passed = next(m for m in at.metric if m.label == "Pass")
     assert passed.value == "2  (100%)"
+
+
+# --- the coverage note's arithmetic -----------------------------------------
+#
+# `stated_unanswered` is a remainder of three separately-tallied counts, so
+# nothing in its type stops it going negative. Rendered on truthiness, a
+# negative read as "**-3** unanswered on a `stated` requirement" - a measured-
+# looking number that was never measured. web/src/pages/ComplianceMatrix.tsx
+# guards with `> 0`; these pin the portal to the same rule. Driven through
+# `_render_coverage` with a fake `st` rather than through a store, because
+# `build_matrix` cannot currently produce the negative and a fixture that
+# faked one into the store would be asserting against a lie.
+
+
+class _FakeColumn:
+    def metric(self, *args, **kwargs):
+        pass
+
+
+class _FakeStreamlit:
+    def __init__(self):
+        self.markdown_calls: list[str] = []
+        self.captions: list[str] = []
+
+    def markdown(self, text, **kwargs):
+        self.markdown_calls.append(text)
+
+    def caption(self, text, **kwargs):
+        self.captions.append(text)
+
+    def columns(self, count):
+        return [_FakeColumn() for _ in range(count)]
+
+
+def _render(monkeypatch, coverage):
+    from portal.views import compliance as view
+    fake = _FakeStreamlit()
+    monkeypatch.setattr(view, "st", fake)
+    view._render_coverage(coverage)
+    return " ".join(fake.markdown_calls)
+
+
+def test_a_negative_stated_remainder_is_not_rendered_as_a_count(monkeypatch):
+    from procurement.matrix import Coverage
+    body = _render(monkeypatch, Coverage(
+        auto_cells=4, stated_cells=0, by_verdict={"unanswered": 1, "pass": 3},
+        unanswered_silent=3, unanswered_refused=1))       # remainder: -3
+    assert "-3" not in body
+    assert "stated` requirement" not in body
+    # the two counts that *were* measured are still reported
+    assert "**3** unanswered because no vendor document stated" in body
+
+
+def test_a_real_stated_remainder_is_still_reported(monkeypatch):
+    from procurement.matrix import Coverage
+    body = _render(monkeypatch, Coverage(
+        auto_cells=4, stated_cells=2, by_verdict={"unanswered": 4, "pass": 2},
+        unanswered_silent=1, unanswered_refused=1))        # remainder: 2
+    assert "**2** unanswered on a `stated` requirement" in body

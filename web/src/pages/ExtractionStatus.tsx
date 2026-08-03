@@ -98,6 +98,17 @@ function VendorPanel({ vendor }: { vendor: VendorExtraction }): JSX.Element {
           technical-extraction pass.
         </p>
       )}
+      {vendor.unattributed_facts > 0 && (
+        // a store breach, not an extraction outcome: these facts are in the
+        // vendor's stored collection and belong to no document listed below,
+        // so no row accounts for them. They are still counted in `fact_count`
+        // — dropping them from the total is what made this invisible.
+        <p className="warn">
+          {vendor.unattributed_facts} stored fact
+          {vendor.unattributed_facts === 1 ? '' : 's'} belong to no document
+          listed here, and no row below accounts for them.
+        </p>
+      )}
 
       {vendor.documents.length === 0 ? (
         <p className="muted mono">No documents uploaded.</p>

@@ -48,7 +48,11 @@ def _render_coverage(coverage) -> None:
     silent, refused = coverage.unanswered_silent, coverage.unanswered_refused
     unanswered_total = coverage.by_verdict.get("unanswered", 0)
     stated_unanswered = unanswered_total - silent - refused
-    if silent or refused or stated_unanswered:
+    # `> 0`, not truthiness: the three counts come from separate tallies, so
+    # the remainder can go negative, and a bare truthiness test rendered
+    # "-3 unanswered on a `stated` requirement" as though it were measured.
+    # The same guard web/src/pages/ComplianceMatrix.tsx already applies.
+    if silent or refused or stated_unanswered > 0:
         lines = [
             f"- **{silent}** unanswered because no vendor document stated the "
             "parameter — this is the real coverage gap.",
@@ -56,7 +60,7 @@ def _render_coverage(coverage) -> None:
             "comparison could not be made — this measures our reach, not the "
             "vendor's answer.",
         ]
-        if stated_unanswered:
+        if stated_unanswered > 0:
             lines.append(
                 f"- **{stated_unanswered}** unanswered on a `stated` "
                 "requirement — no vendor document named the parameter at all."

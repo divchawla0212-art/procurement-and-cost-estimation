@@ -72,6 +72,14 @@ class VendorExtraction(BaseModel):
     # this a document sitting `ok` with a quietly-failed second read is
     # indistinguishable from one that was never routed a second time at all.
     secondary_failed: int = 0
+    # Stored technical facts whose doc_id matches no document of this vendor.
+    # `fact_count` is read off the stored collection and the per-document
+    # counts are what is attributable to a live source, so the difference is
+    # exactly the store breach this panel exists to expose: a fact of a
+    # superseded, reclassified or deleted document that _prune_orphan_facts
+    # should have removed. Summing the per-document counts into the vendor
+    # total dropped it silently, which is the one thing this panel must not do.
+    unattributed_facts: int = 0
 
 
 class ExtractionStatus(BaseModel):
@@ -157,7 +165,15 @@ def build_extraction_status(root: str, slug: str) -> ExtractionStatus:
             if doc.secondary_status == "failed":
                 entry.secondary_failed += 1
 
-        entry.fact_count = sum(d.fact_count for d in entry.documents)
+        # From the stored collection, not from the per-document sum: a fact
+        # whose doc_id matches no live document is invisible to that sum, and
+        # a vendor total that quietly excludes it makes the panel silent about
+        # precisely the breach it was built to surface. Reported, never coerced
+        # away - and this stays a read-only derivation, so it reports the
+        # difference rather than pruning it.
+        entry.fact_count = len(facts.technical) if facts else 0
+        entry.unattributed_facts = entry.fact_count - sum(
+            d.fact_count for d in entry.documents)
         out.append(entry)
 
     totals = {
@@ -169,6 +185,7 @@ def build_extraction_status(root: str, slug: str) -> ExtractionStatus:
         "facts": sum(v.fact_count for v in out),
         "unanswered": sum(v.unanswered for v in out),
         "secondary_failed": sum(v.secondary_failed for v in out),
+        "unattributed_facts": sum(v.unattributed_facts for v in out),
     }
     return ExtractionStatus(vendors=out, totals=totals)
 
