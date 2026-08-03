@@ -916,19 +916,32 @@ file and follow the established fixture shape rather than inventing one.
 | an override addressed at the 700 kW reading, both readings preserved | T1: ids unique within the collection | `apply_overrides` changes the 700 kW record and leaves the 525 kW record untouched |
 | a reading's value is reworded between runs | T1 | the override orphans **visibly** — `reconcile` sets `conflict`, and `apply_overrides` logs; it does not silently retarget |
 | a refusal appears as a later reading of a presence-only parameter | T4 | cell moves `pass` → `review`, citing the refusing reading |
-| **a newer revision of an already-extracted document arrives** | T3 + store invariant C1 | facts of the superseded revision are pruned; no cell cites a pruned id |
-| **a document is deleted from its source folder** | C1 | same — pruned, and no cell cites a pruned id |
-| **a second upload arrives carrying a sibling revision** | C2b | lineage pointers survive; ids of the still-live revision unchanged |
-| **each prompt-version constant is bumped, one at a time** | C2a | the bump persists; a re-run makes no further calls; ids are re-minted consistently |
-| **an LLM call fails on run 1 and succeeds on run 2** | I1 | run 2's facts are stored with fresh ids; run 1's failure is not cached as an answer |
-| **an LLM call fails on both runs** | I4 | the reason is in `DocumentRecord.notes`; prior good facts survive |
-| **an entity's only source document is unrecognised** | I2 | the vendor still gets a column of `unanswered`, not a vanished column |
-| **a re-extraction fails after a successful one** | I3 | previously-good facts and their ids survive unchanged |
-| **the model returns a response omitting an optional array** | I5 | read as "no facts", not as a failure |
 
-The nine bolded rows are the template's required set. They are not decorative
-here: this plan changes what a `fact_id` *is*, so every row that involves facts
-crossing a run boundary is exercising the new key.
+**Write only the six rows above.** The template's nine required rows are
+**already implemented** in `tests/test_extraction_coverage.py` and are not to be
+duplicated here:
+
+| template-required mutation | existing test |
+|---|---|
+| a newer revision of an already-extracted document arrives (C1) | `test_row1_a_newer_revision_takes_over_the_facts_of_the_one_it_supersedes` |
+| a document is deleted from its source folder (C1) | `test_row2_deleting_a_document_removes_exactly_its_own_facts` |
+| a sibling revision arrives later (C2b) | `test_row3_a_sibling_revision_arriving_later_keeps_both_lineage_pointers` |
+| each prompt-version constant is bumped (C2a) | `test_row5_bumping_the_tech_prompt_reextracts_every_routed_document_once`, `test_row4_bumping_the_requirements_prompt_reextracts_the_spec_once`, `test_row6_editing_a_requirement_parameter_reextracts_every_datasheet_once` |
+| an LLM call fails on run 1, succeeds on run 2 (I1) | `test_row7_a_transient_tech_failure_is_not_cached_as_an_answer` |
+| an LLM call fails on both runs (I4) | `test_row8_a_permanently_failing_document_keeps_its_reason_every_run` |
+| an entity's only source document is unrecognised (I2) | `test_row9_a_vendor_whose_only_document_stops_routing_keeps_its_column` |
+| a re-extraction fails after a successful one (I3) | `test_row10_a_failed_reextraction_keeps_the_facts_the_good_run_stored` |
+| the model returns a response omitting an optional array (I5) | `test_row11_a_response_omitting_facts_is_ok_with_no_facts` |
+
+Those nine already exercise facts crossing a run boundary, so this plan's change
+to what a `fact_id` *is* runs straight through them — they are the regression
+guard, and duplicating them would create two places to update. **Confirm they are
+green** as Step 4a below; do not rewrite them.
+
+> **Controller ruling, 2026-08-03.** The plan as first written mandated all
+> fifteen rows in this file. Pre-flight scan found the nine already implemented;
+> the human partner ruled that the existing tests govern and only the six
+> phase-specific rows are new. Recorded in the ledger.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -945,6 +958,16 @@ and fix it rather than adjusting the row.
 
 If a row fails for a reason other than "not written yet", the defect is in Tasks
 1–5, not in this file. Fix it there.
+
+- [ ] **Step 4a: Confirm the nine existing rows are green under the new key**
+
+```bash
+python -m pytest tests/test_extraction_coverage.py -q
+```
+
+Expected: 25 passed. These are the template's nine required rows. If one goes
+red, an earlier task broke a property that crosses a run boundary — fix it there,
+do not adjust the test.
 
 - [ ] **Step 4: Run the full suite**
 
