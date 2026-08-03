@@ -206,5 +206,9 @@ class ComplianceResult(BaseModel):
     verdict: str                     # pass|fail|deviation|unanswered|review
     fact_id: str | None = None
     doc_id: str | None = None
+    # Every reading the cell was computed from, including the one named by
+    # fact_id. Empty when a single reading settled it. Defaults to [] so every
+    # snapshot written before this field existed still validates.
+    candidate_fact_ids: list[str] = []
     rationale: str = ""
     evaluated_at: str

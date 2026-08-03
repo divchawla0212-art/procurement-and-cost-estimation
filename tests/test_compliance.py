@@ -418,3 +418,79 @@ def test_groups_and_members_stay_in_document_order():
     groups = _readings(facts, "p")
     assert [g[0]["fact_id"] for g in groups] == ["f-b", "f-a"]
     assert [m["fact_id"] for m in groups[0]] == ["f-b", "f-c"]
+
+
+# --- wiring _readings into evaluate: multiplicity is review, never fail -----
+
+def test_two_distinct_readings_are_review_not_an_auto_decision():
+    req = _req(parameter="continuous_rating", checkability="auto",
+               operator=">=", value=600, unit="kW")
+    facts = [_fact("continuous_rating", "700", "kW", fact_id="f-a"),
+             _fact("continuous_rating", "525", "kW", fact_id="f-b")]
+    r = evaluate(req, facts, [], "ADPOWER", "now")
+    assert r.verdict == "review"
+    assert set(r.candidate_fact_ids) == {"f-a", "f-b"}
+    assert "700" in r.rationale and "525" in r.rationale
+
+
+def test_a_vendor_is_no_longer_failed_on_print_order():
+    # The live defect: on coverage-floor-t7 this cell currently reads `fail`.
+    req = _req(parameter="continuous_rating", checkability="auto",
+               operator=">=", value=600, unit="kW")
+    facts = [_fact("continuous_rating", "525", "kW", fact_id="f-b"),
+             _fact("continuous_rating", "700", "kW", fact_id="f-a")]
+    assert evaluate(req, facts, [], "ADPOWER", "now").verdict == "review"
+
+
+def test_one_reading_decides_exactly_as_before():
+    req = _req(parameter="continuous_rating", checkability="auto",
+               operator=">=", value=600, unit="kW")
+    facts = [_fact("continuous_rating", "700", "kW", fact_id="f-a")]
+    r = evaluate(req, facts, [], "ADPOWER", "now")
+    assert r.verdict == "pass"
+    assert r.fact_id == "f-a"
+    assert r.candidate_fact_ids == []
+
+
+def test_equivalent_readings_still_decide():
+    req = _req(parameter="continuous_rating", checkability="auto",
+               operator=">=", value=600, unit="kW")
+    facts = [_fact("continuous_rating", "700", "kW", fact_id="f-a"),
+             _fact("continuous_rating", "700000", "W", fact_id="f-c")]
+    r = evaluate(req, facts, [], "ADPOWER", "now")
+    assert r.verdict == "pass"
+    assert r.fact_id == "f-a"                  # first in document order
+    assert r.candidate_fact_ids == ["f-a", "f-c"]
+
+
+def test_a_stated_value_requirement_with_two_readings_is_review():
+    req = _req(parameter="insulation_class", checkability="stated",
+               value="Class F")
+    facts = [_fact("insulation_class", "Class F", fact_id="f-a"),
+             _fact("insulation_class", "Class H", fact_id="f-b")]
+    r = evaluate(req, facts, [], "ADPOWER", "now")
+    assert r.verdict == "review"
+    assert set(r.candidate_fact_ids) == {"f-a", "f-b"}
+
+
+def test_multiplicity_never_produces_fail():
+    req = _req(parameter="continuous_rating", checkability="auto",
+               operator=">=", value=900, unit="kW")
+    facts = [_fact("continuous_rating", "700", "kW"),
+             _fact("continuous_rating", "525", "kW")]
+    assert evaluate(req, facts, [], "ADPOWER", "now").verdict == "review"
+
+
+def test_a_declared_deviation_still_wins_over_multiplicity():
+    req = _req(clause="2.3", parameter="continuous_rating", checkability="auto",
+               operator=">=", value=600, unit="kW")
+    facts = [_fact("continuous_rating", "700", "kW"),
+             _fact("continuous_rating", "525", "kW")]
+    devs = [{"clause_ref": "2.3", "disposition": "deviate", "statement": "no"}]
+    assert evaluate(req, facts, devs, "ADPOWER", "now").verdict == "deviation"
+
+
+def test_no_reading_is_still_unanswered_not_review():
+    req = _req(parameter="continuous_rating", checkability="auto",
+               operator=">=", value=600, unit="kW")
+    assert evaluate(req, [], [], "ADPOWER", "now").verdict == "unanswered"

@@ -158,14 +158,23 @@ def _readings(facts: list[dict], parameter: str | None) -> list[list[dict]]:
     return list(groups.values())
 
 
+def _cite(groups: list[list[dict]]) -> str:
+    """One printable clause per distinct reading, with its source document."""
+    return "; ".join(
+        f"{g[0].get('value')!r}{' ' + str(g[0].get('unit')) if g[0].get('unit') else ''}"
+        f" (doc {g[0].get('doc_id')})" for g in groups)
+
+
 def evaluate(requirement, facts: list[dict], deviations: list[dict],
              vendor: str, now: str) -> ComplianceResult:
     """One cell. Verdict order is the whole design; see the module docstring
     and the plan's Task 6 for why each step precedes the next."""
-    def result(verdict, rationale, fact=None):
+    def result(verdict, rationale, fact=None, candidates=()):
         return ComplianceResult(
             req_id=requirement.req_id, vendor=vendor, verdict=verdict,
             fact_id=(fact or {}).get("fact_id"), doc_id=(fact or {}).get("doc_id"),
+            candidate_fact_ids=[c.get("fact_id") for c in candidates
+                                if c.get("fact_id")],
             rationale=rationale, evaluated_at=now)
 
     want_clause = _norm_clause(requirement.clause_ref)
@@ -180,14 +189,24 @@ def evaluate(requirement, facts: list[dict], deviations: list[dict],
                       f"vendor declared a deviation: {deviated.get('statement')}")
 
     if requirement.checkability == "stated":
-        want = _norm(requirement.parameter)
-        fact = next((f for f in facts if _norm(f.get("parameter")) == want
-                    and _states_something(f.get("value"))), None)
-        if fact is None:
+        groups = _readings(facts, requirement.parameter)
+        if not groups:
             # the same rule `auto` follows: not having read the answer is not
             # the vendor having answered wrongly
             return result("unanswered",
                           f"no vendor document stated {requirement.parameter!r}")
+        if requirement.value is not None and len(groups) > 1:
+            # Two different stated values disagree about the thing asked. Which
+            # one governs is not in the documents, and a token comparison that
+            # picked one would be deciding on print order.
+            flat = [f for g in groups for f in g]
+            return result("review",
+                          f"required {requirement.parameter} = "
+                          f"{requirement.value!r}; vendor states more than one "
+                          f"value: {_cite(groups)} — decide which governs",
+                          groups[0][0], flat)
+        fact = groups[0][0]
+        candidates = groups[0] if len(groups[0]) > 1 else ()
         got = fact.get("value")
         if requirement.value is None or _stated_matches(requirement.value, got):
             # Everything that reaches here would once have been a `pass`. A
@@ -203,26 +222,27 @@ def evaluate(requirement, facts: list[dict], deviations: list[dict],
                               f"{requirement.parameter} must be stated; vendor "
                               f"states {got!r}, which reads as a refusal "
                               f"({', '.join(negations)}) — read it before "
-                              f"accepting", fact)
+                              f"accepting", fact, candidates)
             if negations:
                 return result("review",
                               f"required {requirement.parameter} = "
                               f"{requirement.value!r}; vendor states {got!r}, "
                               f"which carries the required tokens but also "
                               f"{', '.join(negations)} — read it before "
-                              f"accepting", fact)
+                              f"accepting", fact, candidates)
             if requirement.value is None:
                 return result("pass",
                               f"vendor states {requirement.parameter} = {got!r}",
-                              fact)
+                              fact, candidates)
             return result("pass",
                           f"vendor states {requirement.parameter} = {got!r}, "
-                          f"which carries the required {requirement.value!r}", fact)
+                          f"which carries the required {requirement.value!r}",
+                          fact, candidates)
         # never `fail`: "Class H" is better insulation than "Class F", and a
         # token comparison cannot know that. Cite both and let a human decide.
         return result("review",
                       f"required {requirement.parameter} = {requirement.value!r}; "
-                      f"vendor states {got!r}", fact)
+                      f"vendor states {got!r}", fact, candidates)
 
     if requirement.checkability != "auto":
         candidates = [f"{f.get('parameter')}={f.get('value')} {f.get('unit') or ''}".strip()
@@ -234,13 +254,24 @@ def evaluate(requirement, facts: list[dict], deviations: list[dict],
                       + (f" | candidate facts: {candidates}" if candidates else "")
                       + (f" | vendor statements: {statements}" if statements else ""))
 
-    want = _norm(requirement.parameter)
-    fact = next((f for f in facts if _norm(f.get("parameter")) == want), None)
-    if fact is None:
+    groups = _readings(facts, requirement.parameter)
+    if not groups:
         # Never `fail`: the pipeline not having read the answer is not the
         # vendor having answered wrongly.
         return result("unanswered",
                       f"no vendor document stated {requirement.parameter!r}")
+    if len(groups) > 1:
+        # The parameter is stated more than once with genuinely different
+        # values. Which one governs is not in the documents, and picking one
+        # to compare would be deciding the vendor's award on print order.
+        flat = [f for g in groups for f in g]
+        return result("review",
+                      f"{requirement.parameter} is stated more than once with "
+                      f"different values: {_cite(groups)} — decide which "
+                      f"governs before comparing against {requirement.value!r}",
+                      groups[0][0], flat)
+    fact = groups[0][0]
+    candidates = groups[0] if len(groups[0]) > 1 else ()
 
     try:
         ok, why = units.compare(requirement.operator, requirement.value,
@@ -249,8 +280,8 @@ def evaluate(requirement, facts: list[dict], deviations: list[dict],
     except units.Unconvertible as exc:
         # The evidence was found; only the comparison could not be made. Cite
         # the fact so a human can finish the check by hand.
-        return result("unanswered", str(exc), fact)
-    return result("pass" if ok else "fail", why, fact)
+        return result("unanswered", str(exc), fact, candidates)
+    return result("pass" if ok else "fail", why, fact, candidates)
 
 
 def evaluate_project(root: str, slug: str, now: str | None = None
