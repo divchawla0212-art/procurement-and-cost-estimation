@@ -1263,7 +1263,7 @@ Per `docs/superpowers/PLAN-TEMPLATE.md` Rule 2: every plan defect that survived 
 | 8 | the tech extractor fails on both runs | INV-B | `notes` is non-null on both runs; the previously-stored facts survive both |
 | 9 | a vendor's only document becomes unclassified | INV-B | the vendor keeps a column of `unanswered` in the matrix and does not vanish |
 | 10 | a re-extraction fails after a successful one | INV-B | the good facts from run 1 are still stored after run 2's failure |
-| 11 | the model returns a response omitting `facts` | INV-B | status is `ok` with zero facts, not `failed`; `notes` records the empty result |
+| 11 | the model returns a response omitting `facts` | INV-B | status is `ok` with zero facts, not `failed`; `notes` stays `None`, and the empty answer is cached rather than re-charged every run |
 | 12 | **a document's text layer disappears between runs** | **INV-A** | run 2 records `failed` with "no readable text", and run 1's facts survive — this is the `pdftotext`-missing scenario |
 | 13 | **a document's class changes from routed to `unclassified`** | **INV-B** | its facts are pruned from `technical` — routing widened in Task 2 makes this the new C1 surface |
 | 14 | **chunk 2 of 3 fails on run 2 after all 3 succeeded on run 1** | **INV-C** | `requirements.json` still holds run 1's complete set; nothing partial is stored |
