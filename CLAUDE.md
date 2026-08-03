@@ -19,31 +19,53 @@ python -m pytest
 Run from the repo root. Tests are key-free — they use `shared/llm/mock_client.py`,
 and no test may require `ANTHROPIC_API_KEY`.
 
-**One test fails for anyone with a populated `.env`, and it is not yours to
-fix in passing:** `tests/test_portal_app.py::test_missing_api_key_does_not_block_creation`.
-`portal/app.py` calls `load_dotenv()`, which repopulates `ANTHROPIC_API_KEY`
-after that test's `monkeypatch.delenv`. `load_dotenv()` resolves the file
-relative to `portal/app.py`, not to your working directory, so running pytest
-from somewhere else does not dodge it — only the absence of a `.env` does.
+**Two tests fail on a developer workstation, and neither is yours to fix in
+passing.**
 
-There are therefore **two** green baselines, and both are correct:
+The first is `tests/test_portal_app.py::test_missing_api_key_does_not_block_creation`,
+which fails for anyone with a populated `.env`. `portal/app.py` calls
+`load_dotenv()`, which repopulates `ANTHROPIC_API_KEY` after that test's
+`monkeypatch.delenv`. `load_dotenv()` resolves the file relative to
+`portal/app.py`, not to your working directory, so running pytest from
+somewhere else does not dodge it — only the absence of a `.env` does.
+
+The second is `tests/test_real_corpus_coverage.py::test_no_vendor_in_a_multi_vendor_store_has_zero_technical_facts`,
+and it is **a live finding, not flake**. It reads the newest multi-vendor store
+under `projects/` and fails on AESL, whose only bid document is a
+220k-character techno-commercial proposal that classifies as `quotation`.
+`VENDOR_ROUTE` sends each `doc_class` to exactly one extractor, so that
+document yields commercial facts and no technical ones, and AESL cannot be
+checked against a single requirement. This is the phase-4 motivating defect
+(ADPOWER contributing zero technical facts) recurring on a different route.
+**Fix the routing, not the test** — and re-measure the row below afterwards.
+
+There are therefore **two** baselines, and both are correct:
 
 | where | baseline |
 |---|---|
-| a developer workstation, `.env` and `data/` present | **750 passed, 3 skipped, 1 failed** |
-| CI, and any clean checkout | **748 passed, 6 skipped, 0 failed** |
+| a developer workstation, `.env`, `data/` and an ingested multi-vendor `projects/` present | **752 passed, 3 skipped, 2 failed** |
+| CI, and any clean checkout | **748 passed, 9 skipped, 0 failed** |
 
 Anything else is a real regression.
 
 CI being green is not luck. With no `.env` the key stays deleted, the advisory
-warning fires, and the test passes. The three extra skips are not credential
-failures: they are the tests guarded on the untracked `data/` sample directory,
-which a workstation has and a fresh checkout does not.
+warning fires, and the portal test passes. With no `projects/` all three
+`test_real_corpus_coverage.py` tests skip on their module-level guard, which is
+what turns the AESL failure into a skip. The remaining three extra skips are
+not credential failures: they are the tests guarded on the untracked `data/`
+sample directory, which a workstation has and a fresh checkout does not.
 
-So the CI row is the workstation row with that one failure turned into a pass
-and those three passes turned into skips — `748 = 750 + 1 - 3`, `6 = 3 + 3`,
-`0` failures. When the counts move, measure the workstation row and derive the
-CI row from it; editing the two rows independently is how they drift apart.
+So the CI row is the workstation row with the portal failure turned into a
+pass, the three corpus-coverage results (2 passed, 1 failed here) turned into
+skips, and the three `data/` passes turned into skips —
+`748 = 752 + 1 - 2 - 3`, `9 = 3 + 3 + 3`, `0 = 2 - 1 - 1`; 757 tests either
+way. When the counts move, measure the workstation row and derive the CI row
+from it; editing the two rows independently is how they drift apart.
+
+The workstation row also depends on what your untracked `projects/` holds:
+`test_real_corpus_coverage.py` asserts against the newest store there with more
+than one vendor, so it is a coverage instrument for the live corpus, not a
+fixture-backed unit test.
 
 CI runs that same command on every pull request into `main`, via
 [`.github/workflows/tests.yml`](.github/workflows/tests.yml) — Ubuntu, Python
