@@ -528,6 +528,108 @@ td.vc-review { background: var(--review-soft); }
    caller supplies its own whitespace between the pill and its neighbor. */
 .vpill { font-family: var(--font-mono); font-size: 0.72rem; background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 0.15rem 0.55rem; color: var(--text); }
 
+/* ------------------------------------------------------- overview charts */
+
+.charts-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) 1fr;
+  gap: 1.1rem;
+  align-items: start;
+}
+
+/* donut */
+.donut { display: block; }
+.donut-value {
+  font-family: var(--font-display);
+  font-size: 1.6rem;
+  font-weight: 600;
+  fill: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.donut-label {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  fill: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.donut-row { display: flex; gap: 1.1rem; align-items: center; flex-wrap: wrap; }
+.donut-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.4rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.donut-legend li { display: flex; align-items: center; gap: 0.5rem; }
+.donut-legend .sw { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+.donut-legend b { color: var(--text); font-weight: 600; }
+
+/* per-vendor compliance bars */
+.vbar-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.55rem; }
+.vbar-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 8rem 1fr 3rem;
+  align-items: center;
+  gap: 0.75rem;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: 0.35rem 0.4rem;
+  cursor: pointer;
+  text-align: left;
+}
+.vbar-row:hover { background: var(--surface-2); border-color: var(--border); }
+.vbar-name { font-weight: 600; }
+.vbar-stat { font-size: 0.82rem; color: var(--muted); text-align: right; }
+
+/* horizontal metric bars (price) */
+.hbars { display: grid; gap: 0.7rem; }
+.hbar-row { display: grid; grid-template-columns: 9rem 1fr; align-items: center; gap: 0.75rem; }
+.hbar-name { font-weight: 600; display: inline-flex; align-items: center; gap: 0.4rem; }
+.hbar { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 0.7rem; }
+.hbar-track {
+  height: 16px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--border);
+  overflow: hidden;
+}
+.hbar-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 0.4s ease;
+}
+.hbar-fill.lead { background: var(--pass); }
+.hbar-value { font-size: 0.82rem; color: var(--text); white-space: nowrap; text-align: right; }
+
+/* leader tag */
+.lead-tag {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  border: 1px solid #bfe0e3;
+  margin-left: 0.5rem;
+  white-space: nowrap;
+}
+.lead-tag.ok { background: var(--pass-soft); color: #145a43; border-color: #bfe3d1; }
+
+/* ranking table */
+table.grid.rank th.sortable { cursor: pointer; user-select: none; }
+table.grid.rank th.sortable:hover { color: var(--accent-ink); }
+table.grid.rank .rank-row { cursor: pointer; }
+table.grid.rank .rank-row:hover td { background: var(--accent-soft); }
+
 /* ----------------------------------------------------- empty/loading/error */
 
 .state {
@@ -726,4 +828,7 @@ p.warn { margin: 0.5rem 0 0; }
   .rail-nav { grid-auto-flow: column; }
   .rail-label, .rail-foot { display: none; }
   .metrics { grid-template-columns: repeat(2, 1fr); }
+  .charts-grid { grid-template-columns: 1fr; }
+  .vbar-row { grid-template-columns: 6rem 1fr 2.6rem; }
+  .hbar-row { grid-template-columns: 6rem 1fr; }
 }

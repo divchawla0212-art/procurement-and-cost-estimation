@@ -3,19 +3,21 @@ import { fetchProjects } from './api'
 import type { ProjectSummary } from './types'
 import { useAsync } from './useAsync'
 import { Dashboard } from './pages/Dashboard'
+import { Overview } from './pages/Overview'
 import { ComplianceMatrix } from './pages/ComplianceMatrix'
 import { ComparativeStatement } from './pages/ComparativeStatement'
 import { ExtractionStatus } from './pages/ExtractionStatus'
 import { Setup } from './pages/Setup'
 
-type View = 'dashboard' | 'setup' | 'matrix' | 'statement' | 'extraction'
+type View = 'dashboard' | 'setup' | 'overview' | 'matrix' | 'statement' | 'extraction'
 
 const NAV: { view: View; index: string; label: string; needsProject: boolean }[] = [
   { view: 'dashboard', index: '00', label: 'Dashboard', needsProject: false },
   { view: 'setup', index: '01', label: 'Set up & ingest', needsProject: false },
-  { view: 'matrix', index: '02', label: 'Compliance matrix', needsProject: true },
-  { view: 'statement', index: '03', label: 'Comparative statement', needsProject: true },
-  { view: 'extraction', index: '04', label: 'Extraction status', needsProject: true },
+  { view: 'overview', index: '02', label: 'Overview', needsProject: true },
+  { view: 'matrix', index: '03', label: 'Compliance matrix', needsProject: true },
+  { view: 'statement', index: '04', label: 'Comparative statement', needsProject: true },
+  { view: 'extraction', index: '05', label: 'Extraction status', needsProject: true },
 ]
 
 export default function App() {
@@ -27,6 +29,9 @@ export default function App() {
   const [view, setView] = useState<View>('dashboard')
   const [slug, setSlug] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
+  // A vendor to pre-select when the matrix is opened from the Overview, so a
+  // click on a vendor there lands on that vendor's rows rather than "all".
+  const [matrixVendor, setMatrixVendor] = useState<string | null>(null)
 
   useEffect(() => {
     if (projects && projects.length && slug === null) {
@@ -39,7 +44,20 @@ export default function App() {
 
   function open(nextSlug: string) {
     setSlug(nextSlug)
+    setMatrixVendor(null)
+    setView('overview')
+  }
+
+  function openMatrix(vendor?: string) {
+    setMatrixVendor(vendor ?? null)
     setView('matrix')
+  }
+
+  function navigate(next: View) {
+    // A plain nav click to the matrix shows every vendor; only an Overview
+    // drill-down carries a vendor filter into it.
+    if (next === 'matrix') setMatrixVendor(null)
+    setView(next)
   }
 
   function startNew() {
@@ -98,7 +116,7 @@ export default function App() {
                     className={view === item.view ? 'active' : ''}
                     disabled={disabled}
                     style={disabled ? { opacity: 0.4, cursor: 'not-allowed' } : undefined}
-                    onClick={() => setView(item.view)}
+                    onClick={() => navigate(item.view)}
                   >
                     <span className="nav-index">{item.index}</span>
                     {item.label}
@@ -163,8 +181,19 @@ export default function App() {
                 onOpen={open}
               />
             )}
+            {view === 'overview' && active && (
+              <Overview
+                slug={active.slug}
+                projectName={active.name}
+                onOpenMatrix={openMatrix}
+              />
+            )}
             {view === 'matrix' && active && (
-              <ComplianceMatrix slug={active.slug} projectName={active.name} />
+              <ComplianceMatrix
+                slug={active.slug}
+                projectName={active.name}
+                initialVendor={matrixVendor ?? undefined}
+              />
             )}
             {view === 'statement' && active && (
               <ComparativeStatement slug={active.slug} projectName={active.name} />
