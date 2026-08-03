@@ -1,6 +1,6 @@
 # Setup Guide — Fresh Machine
 
-From a computer with **nothing installed** to a running portal, API, and web UI.
+From a computer with **nothing installed** to a running API and web UI.
 
 Every code block below is **one command** — copy it, paste it, run it, move to the next.
 
@@ -11,9 +11,8 @@ What you end up with:
 
 | Piece | What it is | URL |
 |---|---|---|
-| Streamlit portal | upload requirements + vendor ZIPs, run ingestion | http://localhost:8501 |
-| FastAPI backend | read-only compliance data over the store | http://localhost:8000 |
-| React web UI | enterprise comparison matrix | http://localhost:5173 |
+| FastAPI backend | setup, ingestion and compliance data over the store | http://localhost:8000 |
+| React web UI | upload requirements + vendor ZIPs, run ingestion, review the matrix | http://localhost:5173 |
 
 ---
 
@@ -94,9 +93,9 @@ Install the project in editable mode with dev extras (test suite included):
 ```
 
 This pulls in `pydantic`, `openpyxl`, `pyyaml`, `anthropic`, `openai`, `pypdf`,
-`python-docx`, `streamlit`, `fastapi`, `uvicorn` — and puts the local
-`procurement`, `shared`, `cost_estimation`, `portal`, and `api` packages on the
-import path. Editable means source edits take effect with no reinstall.
+`python-docx`, `fastapi`, `uvicorn` — and puts the local `procurement`,
+`shared`, `cost_estimation`, and `api` packages on the import path. Editable
+means source edits take effect with no reinstall.
 
 > The guide calls `.venv\Scripts\python.exe` explicitly everywhere, so you never
 > have to remember whether the venv is activated. If you prefer activating it,
@@ -126,12 +125,9 @@ Expected on a fresh clone: **647 passed, 6 skipped, 0 failed.**
 Those 6 skips are correct, not a problem: 3 need provider credentials you have not
 set yet, and 3 need an untracked `data/` sample directory a fresh clone does not have.
 
-> After you create `.env` in the next step, one test —
-> `tests/test_portal_app.py::test_missing_api_key_does_not_block_creation` — starts
-> failing on your machine and **that is expected**. `portal/app.py` calls
-> `load_dotenv()`, which puts `ANTHROPIC_API_KEY` back after the test removes it.
-> See the *Running things* section of [`CLAUDE.md`](../CLAUDE.md) for both green
-> baselines. Do not "fix" it.
+> Creating `.env` in the next step does **not** change the counts — no test
+> reads it. See the *Running things* section of [`CLAUDE.md`](../CLAUDE.md) for
+> both green baselines. A failure here is a real one.
 
 ---
 
@@ -172,25 +168,10 @@ browser; they only ever come from this `.env`.
 
 ---
 
-## 7. Run the Streamlit portal (upload + ingestion)
+## 7. Run the app (API + React)
 
-This is where data comes *in*.
-
-```powershell
-.venv\Scripts\python.exe -m streamlit run portal/app.py
-```
-
-Open http://localhost:8501 — create a project, upload the requirements file and the
-vendor ZIP, set FX rates, then click **Run ingestion**.
-
-Stop it with `Ctrl+C` when you are done.
-
----
-
-## 8. Run the review UI (API + React)
-
-The comparison matrix is read-only and needs ingested data under `projects/` first.
-It is two processes, so you need **two terminals**, both in the repo root.
+Setup, ingestion and review all happen here. It is two processes, so you need
+**two terminals**, both in the repo root.
 
 **Terminal 1 — the API:**
 
@@ -204,17 +185,18 @@ It is two processes, so you need **two terminals**, both in the repo root.
 npm --prefix web run dev
 ```
 
-Open http://localhost:5173 and pick a project in the sidebar. Vite proxies `/api`
-straight to `127.0.0.1:8000`, so both must be running. This UI never writes to the store.
+Open http://localhost:5173. Create a project in the sidebar, attach the
+requirements file, upload the vendor ZIP, set FX rates, then run ingestion —
+after which the compliance matrix and comparative statement fill in. Vite
+proxies `/api` straight to `127.0.0.1:8000`, so both must be running.
 
 ---
 
-## 9. You're set — quick reference
+## 8. You're set — quick reference
 
 | Task | Command |
 |---|---|
 | Run tests | `.venv\Scripts\python.exe -m pytest` |
-| Streamlit portal | `.venv\Scripts\python.exe -m streamlit run portal/app.py` |
 | API | `.venv\Scripts\python.exe -m uvicorn api.main:app --reload --port 8000` |
 | Web UI | `npm --prefix web run dev` |
 | Lint the web app | `npm --prefix web run lint` |
@@ -222,13 +204,13 @@ straight to `127.0.0.1:8000`, so both must be running. This UI never writes to t
 | Costing CLI | `.venv\Scripts\cost-est.exe --help` |
 
 Inside Claude Code, prefer the preview tooling over bare commands — `.claude/launch.json`
-already defines `procurement-portal`, `procurement-api`, and `enterprise-web`.
+already defines `procurement-api` and `enterprise-web`.
 
 ---
 
 ## Optional: activating the venv
 
-If you would rather type `python` / `pytest` / `streamlit` without the
+If you would rather type `python` / `pytest` / `uvicorn` without the
 `.venv\Scripts\` prefix, activate the environment once per terminal:
 
 ```powershell
@@ -261,7 +243,7 @@ Update *App Installer* from the Microsoft Store, then reopen the terminal.
 **`npm` is not recognized right after installing Node.**
 The `PATH` change only applies to new terminals. Close this one and open a new one.
 
-**Port already in use (8501 / 8000 / 5173).**
+**Port already in use (8000 / 5173).**
 Find what is holding it — replace `8000` with the port in question:
 
 ```powershell
@@ -270,7 +252,7 @@ Get-NetTCPConnection -LocalPort 8000 -State Listen | Select-Object OwningProcess
 
 **The web UI loads but every panel is empty.**
 Either the API is not running on 8000, or nothing has been ingested yet. The matrix
-reads from `projects/<slug>/store/` — run ingestion in the Streamlit portal first.
+reads from `projects/<slug>/store/` — create a project and run ingestion first.
 
 **`pip install -e ".[dev]"` fails compiling a dependency.**
 You are almost certainly not on 3.12. Check with `.venv\Scripts\python.exe --version`,
@@ -313,10 +295,6 @@ npm --prefix web install
 
 ```bash
 cp .env.example .env
-```
-
-```bash
-.venv/bin/python -m streamlit run portal/app.py
 ```
 
 ```bash

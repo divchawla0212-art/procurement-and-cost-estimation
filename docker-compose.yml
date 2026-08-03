@@ -1,36 +1,14 @@
 name: procurement
 
 services:
-  # FastAPI + the compiled React UI on one origin.
+  # FastAPI + the compiled React UI on one origin. The single service: setup,
+  # ingestion and review all go through it.
   api:
     build:
       context: .
     image: procurement-review:latest
     ports:
       - "8000:8000"
-    env_file:
-      - path: .env
-        required: false
-    environment:
-      PROCUREMENT_PROJECTS_ROOT: /data/projects
-    volumes:
-      - projects:/data/projects
-    restart: unless-stopped
-
-  # The Streamlit portal — same image, same store, different front end.
-  portal:
-    image: procurement-review:latest
-    depends_on:
-      - api
-    command:
-      - streamlit
-      - run
-      - portal/app.py
-      - --server.port=8501
-      - --server.address=0.0.0.0
-      - --server.headless=true
-    ports:
-      - "8501:8501"
     env_file:
       - path: .env
         required: false

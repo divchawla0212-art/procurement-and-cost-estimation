@@ -2,12 +2,6 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "procurement-portal",
-      "runtimeExecutable": ".venv/Scripts/python.exe",
-      "runtimeArgs": ["-m", "streamlit", "run", "portal/app.py", "--server.headless", "true"],
-      "port": 8501
-    },
-    {
       "name": "procurement-api",
       "runtimeExecutable": ".venv/Scripts/python.exe",
       "runtimeArgs": ["-m", "uvicorn", "api.main:app", "--reload", "--port", "8000", "--env-file", ".env"],
