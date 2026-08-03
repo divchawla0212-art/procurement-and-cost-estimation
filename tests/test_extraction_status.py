@@ -1,4 +1,5 @@
 from procurement.coverage import build_extraction_status
+from procurement.pipeline import PROMPT_VERSION
 from procurement.project import create_project, load_project, save_project
 from procurement.store import snapshots
 from procurement.store.models import (ComplianceResult, DocumentRecord,
@@ -175,3 +176,81 @@ def test_a_document_with_no_secondary_pass_reports_none(tmp_path):
     assert doc.secondary_route is None
     assert doc.secondary_status is None
     assert status.vendors[0].secondary_failed == 0
+
+
+# --------------------------------------------- a failed inferred quotation
+#
+# `facts.quotation_doc_id` is written only on a SUCCESSFUL quotation
+# extraction (pipeline.py:774: `quotation_doc_id = doc.doc_id if status ==
+# "ok" else base.quotation_doc_id`). The pipeline's own routing decision, by
+# contrast, comes from `inferred_quotes` membership (pipeline.py:295-297) and
+# is made before extraction, independent of how the run went. A vendor's one
+# file the classifier calls "other" can enter the inferred-quotation fallback
+# pool, get dispatched to the quotation extractor, and have that extraction
+# fail — in which case `quotation_doc_id` is never repointed at it. The naive
+# `route = "quotation" if doc.doc_id == quotation_doc_id else
+# VENDOR_ROUTE.get(doc.doc_class)` derivation then reports "datasheet" (every
+# class in the inferred pool maps to "datasheet" in VENDOR_ROUTE) — the wrong
+# extractor, on exactly the blank-column case this panel exists to explain.
+#
+# The fix reads the route the pipeline actually dispatched from
+# doc.prompt_version, which pipeline.py:798-802 sets whenever a primary pass
+# ran, `failed` exactly as `ok`.
+
+
+def _store_with_failed_inferred_quotation(tmp_path, secondary_status="ok"):
+    root = str(tmp_path)
+    create_project(root, "P")
+    project = load_project(root, "p")
+    project.vendors = ["ADPOWER"]
+    save_project(root, project)
+
+    snapshots.save_documents(root, "p", [
+        DocumentRecord(doc_id="d1", path="vendors/ADPOWER/proposal.pdf",
+                       vendor="ADPOWER", doc_class="other",
+                       content_sha256="a", extraction_status="failed",
+                       notes="token ceiling exceeded",
+                       text_source="pdftotext:220000chars",
+                       extractor=f"llm:{PROMPT_VERSION}",
+                       # set on every primary pass that RAN, failed exactly as
+                       # ok (pipeline.py:798-802) -- this is the signal the fix
+                       # reads instead of quotation_doc_id
+                       prompt_version=PROMPT_VERSION,
+                       secondary_status=secondary_status,
+                       secondary_notes=(None if secondary_status == "ok"
+                                        else "token ceiling exceeded"),
+                       secondary_prompt_version="tech_facts_v1"),
+    ])
+    snapshots.save_facts(root, "p", VendorFacts(
+        vendor="ADPOWER",
+        # the primary (quotation) extraction failed, so quotation_doc_id was
+        # never repointed at d1 -- pipeline.py:774 only does that on "ok"
+        quotation_doc_id=None,
+        technical=([{"fact_id": "f-1", "parameter": "continuous_rating",
+                     "value": 500.0, "unit": "kW", "doc_id": "d1"}]
+                   if secondary_status == "ok" else [])))
+    return root
+
+
+def test_a_failed_inferred_quotation_reports_the_dispatched_route_not_the_class(tmp_path):
+    root = _store_with_failed_inferred_quotation(tmp_path, secondary_status="ok")
+    status = build_extraction_status(root, "p")
+    doc = status.vendors[0].documents[0]
+    assert doc.doc_class == "other"          # what the classifier decided
+    assert doc.status == "failed"
+    # NOT "datasheet" -- VENDOR_ROUTE["other"], what the old
+    # quotation_doc_id-based derivation would report on this failure path
+    assert doc.route == "quotation"
+    # follows from the corrected route via SECONDARY_VENDOR_ROUTE
+    assert doc.secondary_route == "datasheet"
+
+
+def test_a_failed_inferred_quotation_with_a_failed_secondary_pass_still_reports_quotation_route(tmp_path):
+    root = _store_with_failed_inferred_quotation(tmp_path, secondary_status="failed")
+    status = build_extraction_status(root, "p")
+    doc = status.vendors[0].documents[0]
+    assert doc.route == "quotation"
+    assert doc.secondary_status == "failed"
+
+    vendor = status.vendors[0]
+    assert vendor.secondary_failed == 1      # both passes failed here

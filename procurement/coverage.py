@@ -7,7 +7,8 @@ it describes, and no new stored collection is introduced.
 """
 from pydantic import BaseModel
 
-from procurement.pipeline import SECONDARY_VENDOR_ROUTE, VENDOR_ROUTE
+from procurement.pipeline import (PROMPT_VERSION_BY_CLASS,
+                                  SECONDARY_VENDOR_ROUTE, VENDOR_ROUTE)
 from procurement.project import load_project
 from procurement.store import snapshots
 
@@ -15,6 +16,22 @@ from procurement.store import snapshots
 # purpose: 255 of gas-11's 300 cells are `review` and none of them says
 # anything about extraction coverage.
 _UNANSWERED = ("unanswered",)
+
+# Inverted, never transcribed: PROMPT_VERSION_BY_CLASS is the pipeline's own
+# route -> prompt_version table (pipeline.py:30-34), and it is 1:1 across all
+# three routes, so inverting it recovers the route a document was actually
+# dispatched to from doc.prompt_version alone. This is the fix for the
+# quotation-fallback case VENDOR_ROUTE.get(doc.doc_class) gets wrong: a
+# document the inferred-quotation pool routed to "quotation" whose extraction
+# then failed never repoints facts.quotation_doc_id at it (pipeline.py:774,
+# only on status == "ok"), so doc.doc_id == quotation_doc_id is false even
+# though the pipeline dispatched it to the quotation extractor. prompt_version,
+# by contrast, is written whenever a primary pass RAN — `failed` exactly as
+# `ok` (pipeline.py:798-802, unconditional on status) — and is carried forward
+# on a cache hit (pipeline.py:691-692, :759-760), so it is reliable wherever a
+# primary pass has ever run.
+_ROUTE_BY_PROMPT_VERSION = {version: route
+                           for route, version in PROMPT_VERSION_BY_CLASS.items()}
 
 
 class DocumentStatus(BaseModel):
@@ -92,11 +109,15 @@ def build_extraction_status(root: str, slug: str) -> ExtractionStatus:
 
         for doc in sorted((d for d in documents if d.vendor == vendor),
                           key=lambda d: d.path):
-            # re-derived, never re-invented: VENDOR_ROUTE is the pipeline's own
-            # table. An inferred quotation is reported by its stored link
-            # rather than by re-running the fallback heuristic.
-            route = ("quotation" if doc.doc_id == quotation_doc_id
-                     else VENDOR_ROUTE.get(doc.doc_class))
+            # The route the pipeline actually dispatched to, recovered from
+            # doc.prompt_version via the inverted PROMPT_VERSION_BY_CLASS.
+            # Falls back to the doc_class/quotation_doc_id derivation only
+            # when no primary pass has ever run (skipped, pending) and there
+            # is therefore no dispatched route on the record to recover.
+            route = _ROUTE_BY_PROMPT_VERSION.get(doc.prompt_version)
+            if route is None:
+                route = ("quotation" if doc.doc_id == quotation_doc_id
+                         else VENDOR_ROUTE.get(doc.doc_class))
             # `secondary_status is None` is DocumentRecord's own documented
             # contract for "no second route" — the same signal pipeline.py
             # writes, so this needs no independent notion of eligibility.
@@ -124,7 +145,25 @@ def build_extraction_status(root: str, slug: str) -> ExtractionStatus:
                 entry.failed += 1
             elif doc.extraction_status == "skipped":
                 entry.skipped += 1
-            if doc.extraction_status == "ok" and doc.secondary_status == "failed":
+            # Not conditioned on the primary status: run_secondary does not
+            # depend on the primary's outcome (pipeline.py:804), and a
+            # primary-failed/secondary-failed vendor is reachable and likely —
+            # both passes hit the same provider on the same text, so one
+            # outage or one token-ceiling condition fails both. Excluding that
+            # case here would make rollup()'s only surfaced view of secondary
+            # failures (coverage.py:145-147 strips `documents`) silently miss
+            # it. Not a term in the extracted+failed+skipped==len(documents)
+            # invariant below, so this does not disturb it.
+            # Not conditioned on the primary status: run_secondary does not
+            # depend on the primary's outcome (pipeline.py:804), and a
+            # primary-failed/secondary-failed vendor is reachable and likely —
+            # both passes hit the same provider on the same text, so one
+            # outage or one token-ceiling condition fails both. Excluding that
+            # case here would make rollup()'s only surfaced view of secondary
+            # failures (coverage.py:145-147 strips `documents`) silently miss
+            # it. Not a term in the extracted+failed+skipped==len(documents)
+            # invariant below, so this does not disturb it.
+            if doc.secondary_status == "failed":
                 entry.secondary_failed += 1
 
         entry.fact_count = sum(d.fact_count for d in entry.documents)
