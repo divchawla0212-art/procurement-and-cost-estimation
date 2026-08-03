@@ -25,6 +25,7 @@ from fastapi.staticfiles import StaticFiles
 import dotenv
 
 from procurement import project as proj
+from procurement.coverage import build_extraction_status, rollup
 from procurement.matrix import GROUP_ORDER, build_matrix, rows_in_group
 from procurement.pipeline import load_dataset, run_ingestion
 from procurement.quote_select import pick_quote
@@ -137,7 +138,14 @@ def get_summary(slug: str) -> dict:
         "requirement_count": len(matrix.rows),
         "coverage": matrix.coverage.model_dump(),
         "group_counts": group_counts,
+        "extraction": rollup(build_extraction_status(ROOT, slug)),
     }
+
+
+@app.get("/api/projects/{slug}/extraction-status")
+def get_extraction_status(slug: str) -> dict:
+    _load_or_404(slug)
+    return build_extraction_status(ROOT, slug).model_dump()
 
 
 @app.get("/api/projects/{slug}/statement")
