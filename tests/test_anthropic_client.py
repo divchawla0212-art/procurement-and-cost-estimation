@@ -227,6 +227,94 @@ def test_a_stringified_envelope_under_an_unknown_key_is_unwrapped(monkeypatch):
     assert out == payload
 
 
+def test_an_envelope_beside_a_sibling_key_is_unwrapped(monkeypatch):
+    """The shape that lost ADPOWER's commercial terms on gas-14.
+
+    `{"parameter_name": ..., "parameter_value": ...}` - TWO keys, neither of
+    them a schema field. `unwrap_envelope` bailed on `len(data) != 1` before
+    looking at any value, `recover_stringified_envelope` only inspects keys the
+    schema declares, so the payload reached `require_known_field` and raised
+    with a full extraction sitting inside one of the two values. The vendor's
+    quotation column went blank: no base price, no currency, no delivery terms.
+
+    The lone-key rule was never what made the unwrap safe - the inner object
+    naming schema fields is. So the count stops mattering and the structural
+    test stands on its own.
+    """
+    payload = {"facts": _ENTRIES, "label": "x"}
+    _patch(monkeypatch, _Message(
+        [_Block("tool_use", input={"parameter_name": payload,
+                                   "parameter_value": None})], "tool_use"))
+    out = AnthropicClient(api_key="dummy").classify_structure("p", _Listy, "ctx")
+    assert out == payload
+
+
+def test_a_stringified_envelope_beside_a_sibling_key_is_unwrapped(monkeypatch):
+    # Same shape one step stringified - the two live repairs compose, and the
+    # string form is the one actually seen under `parameter_name`.
+    payload = {"facts": _ENTRIES, "label": "x"}
+    _patch(monkeypatch, _Message(
+        [_Block("tool_use", input={"parameter_name": json.dumps(payload),
+                                   "parameter_value": "base_price"})], "tool_use"))
+    out = AnthropicClient(api_key="dummy").classify_structure("p", _Listy, "ctx")
+    assert out == payload
+
+
+def test_a_bare_name_value_pair_still_raises(monkeypatch):
+    """The other reading of the same two keys, and it must NOT be recovered.
+
+    `{"parameter_name": "label", "parameter_value": "x"}` is the model
+    answering with one parameter instead of the structure. Rebuilding it into
+    `{"label": "x"}` would store one field and thirteen defaults as a
+    successful extraction - "missing data is never coerced to a passing or zero
+    value", the store invariant `require_known_field` exists to defend. No
+    value here is an object naming schema fields, so nothing is recoverable and
+    the loud failure is the correct outcome.
+    """
+    _patch(monkeypatch, _Message(
+        [_Block("tool_use", input={"parameter_name": "label",
+                                   "parameter_value": "x"})], "tool_use"))
+    with pytest.raises(RuntimeError) as exc:
+        AnthropicClient(api_key="dummy").classify_structure("p", _Listy, "ctx")
+    assert "no field" in str(exc.value).lower()
+
+
+def test_two_candidate_envelopes_raise_rather_than_guess(monkeypatch):
+    # Two values both name schema fields. Picking one would decide the vendor's
+    # terms on key order; there is no evidence for either, so it raises.
+    _patch(monkeypatch, _Message(
+        [_Block("tool_use", input={"a": {"facts": _ENTRIES},
+                                   "b": {"label": "other"}})], "tool_use"))
+    with pytest.raises(RuntimeError) as exc:
+        AnthropicClient(api_key="dummy").classify_structure("p", _Listy, "ctx")
+    assert "no field" in str(exc.value).lower()
+
+
+def test_the_failure_names_what_the_payload_actually_held(monkeypatch):
+    """The gas-14 note recorded only key NAMES, so the shape could not be
+    diagnosed after the fact - the values needed to tell a recoverable envelope
+    from a bare name/value pair were discarded by the error itself. A bounded
+    preview is what makes the next occurrence answerable.
+    """
+    _patch(monkeypatch, _Message(
+        [_Block("tool_use", input={"parameter_name": "base_price",
+                                   "parameter_value": 1110836})], "tool_use"))
+    with pytest.raises(RuntimeError) as exc:
+        AnthropicClient(api_key="dummy").classify_structure("p", _Listy, "ctx")
+    message = str(exc.value)
+    assert "base_price" in message and "1110836" in message
+
+
+def test_the_failure_preview_is_bounded(monkeypatch):
+    # The note goes into DocumentRecord.notes and is rendered in the portal; a
+    # 200k-character payload must not be pasted into the store wholesale.
+    _patch(monkeypatch, _Message(
+        [_Block("tool_use", input={"junk": "x" * 50_000})], "tool_use"))
+    with pytest.raises(RuntimeError) as exc:
+        AnthropicClient(api_key="dummy").classify_structure("p", _Listy, "ctx")
+    assert len(str(exc.value)) < 2_000
+
+
 def test_a_lone_unknown_key_holding_unrelated_json_still_raises(monkeypatch):
     """The unwrap must not turn any stray string into an answer.
 

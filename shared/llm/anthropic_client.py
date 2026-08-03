@@ -63,24 +63,60 @@ def unwrap_envelope(data: dict, output_schema: type[BaseModel]) -> dict:
     went blank. A decoded string is only accepted when it names a field the
     schema declares, so a stray string is still rejected downstream rather than
     stored as an answer.
+
+    The envelope is sometimes not alone. ADPOWER's gas-14 quotation came back
+    as `{"parameter_name": ..., "parameter_value": ...}` — two keys, neither a
+    schema field — and the old one-key test bailed before looking at either
+    value, losing the vendor's whole commercial column. The count was never
+    what made the unwrap safe; the inner object naming schema fields is. So a
+    sibling key no longer blocks the unwrap, and the structural test stands on
+    its own. When more than one value qualifies there is no evidence for
+    either, so it raises rather than deciding the vendor's terms on key order.
     """
     fields = set(output_schema.model_fields)
     for _ in range(_MAX_ENVELOPE_DEPTH):
-        if len(data) != 1 or (set(data) & fields):
+        if set(data) & fields:
             break
-        inner = next(iter(data.values()))
-        if isinstance(inner, str):
-            try:
-                decoded = json.loads(inner)
-            except ValueError:
-                break
-            if not isinstance(decoded, dict) or not (set(decoded) & fields):
-                break
-            inner = decoded
-        if not isinstance(inner, dict):
+        inner = _sole_envelope_value(data, fields)
+        if inner is None:
             break
         data = inner
     return data
+
+
+def _decoded_answer(value, fields: set[str]) -> dict | None:
+    """`value` as an object naming at least one schema field, or None.
+
+    A JSON string holding such an object counts; anything else does not. This
+    is the whole safety test: an object that names a field the schema declares
+    is the answer, and nothing else is ever treated as one.
+    """
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return None
+    if isinstance(value, dict) and (set(value) & fields):
+        return value
+    return None
+
+
+def _sole_envelope_value(data: dict, fields: set[str]) -> dict | None:
+    """The one value that is the wrapped structure, or None to stop unwrapping.
+
+    A single key keeps its original latitude: any dict is descended into, so a
+    two- or three-deep wrapper still unwraps on the next pass. With siblings
+    present that latitude would be a guess, so a value must *demonstrably* be
+    the answer — and exactly one of them may be.
+    """
+    if len(data) == 1:
+        inner = next(iter(data.values()))
+        if isinstance(inner, str):
+            return _decoded_answer(inner, fields)
+        return inner if isinstance(inner, dict) else None
+    answers = [a for a in (_decoded_answer(v, fields) for v in data.values())
+               if a is not None]
+    return answers[0] if len(answers) == 1 else None
 
 
 def recover_stringified_envelope(data: dict, output_schema: type[BaseModel]) -> dict:
@@ -129,7 +165,27 @@ def require_known_field(data: dict, output_schema: type[BaseModel]) -> None:
         f"the model returned no field of {output_schema.__name__}: "
         f"got keys {sorted(data)!r}, expected any of "
         f"{sorted(output_schema.model_fields)!r}. Treating this as an empty "
-        "extraction would store defaults as if they were the vendor's terms.")
+        "extraction would store defaults as if they were the vendor's terms. "
+        f"payload was {_preview(data)}")
+
+
+# Long enough to show the shape of a wrapper and what it holds, short enough
+# that the note it lands in stays readable in DocumentRecord.notes and in the
+# portal. The gas-14 failure recorded key names only, which is exactly the
+# information that cannot distinguish a recoverable envelope from a bare
+# name/value pair - so the next occurrence of an unrepairable shape has to
+# carry its values with it.
+_PREVIEW_CHARS = 800
+
+
+def _preview(data: dict) -> str:
+    try:
+        text = json.dumps(data, default=str, sort_keys=True)
+    except (TypeError, ValueError):
+        text = repr(data)
+    if len(text) <= _PREVIEW_CHARS:
+        return text
+    return f"{text[:_PREVIEW_CHARS]}... [{len(text)} chars total]"
 
 
 def _admits_str(annotation) -> bool:
