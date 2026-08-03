@@ -63,10 +63,49 @@ def _stated_matches(required, stated) -> bool:
 
     Subset, not equality: a datasheet prints "Class F / Class B rise" for a
     clause requiring "Class F", and equality would fail every real vendor.
+
+    The limitation the subset carries, and why `_negations_in` guards it: a
+    subset is blind to the sentence the tokens sit in, so "Class B rise (Class F
+    insulation not offered)" is a superset of {class, f} and reads here as a
+    match. Every caller must therefore run `_negations_in` before turning a
+    match into a `pass`, and downgrade to `review` when it finds anything.
     """
     req_tokens = _tokens(required)
     got_tokens = _tokens(stated)
     return bool(req_tokens) and req_tokens <= got_tokens
+
+
+# Words a stated value uses to say the thing is not offered. Deliberately short
+# and literal - every entry has to be a word that reverses the sentence it sits
+# in. A wrong entry costs a reviewer one row to clear; a missing one clears a
+# vendor on a string diff, which is the failure this tier exists not to make.
+_NEGATIONS = frozenset({"not", "no", "none", "nil", "without", "excluded",
+                        "excluding", "except", "unavailable"})
+
+# "n/a" tokenizes to {"n", "a"}, and "n" alone is far too common a token to
+# treat as a word, so the joined form is matched on the raw string instead.
+_NOT_APPLICABLE = re.compile(r"\bn\s*[/.\-]?\s*a\b")
+
+
+def _negations_in(required, stated) -> list[str]:
+    """The negation words the vendor's value carries and the requirement does not.
+
+    Subtracting the requirement's own tokens is what lets a clause requiring
+    "no asbestos" be satisfied by a vendor stating "No asbestos used": the "no"
+    there is the clause's own word echoed back, not a refusal.
+
+    Broad on purpose - any negation anywhere in the value, not just one next to
+    the matched tokens. A positional rule over tokenized prose would be a
+    confident guess, and the two mistakes are not equal: a false trigger costs
+    a `review` row, a miss books an award against a vendor who said no.
+    """
+    req_tokens = _tokens(required) if required is not None else set()
+    found = (_tokens(stated) & _NEGATIONS) - req_tokens
+    if (_NOT_APPLICABLE.search(str(stated).lower())
+            and not (required is not None
+                     and _NOT_APPLICABLE.search(str(required).lower()))):
+        found = found | {"n/a"}
+    return sorted(found)
 
 
 def _states_something(value) -> bool:
@@ -109,10 +148,32 @@ def evaluate(requirement, facts: list[dict], deviations: list[dict],
             return result("unanswered",
                           f"no vendor document stated {requirement.parameter!r}")
         got = fact.get("value")
-        if requirement.value is None:
-            return result("pass",
-                          f"vendor states {requirement.parameter} = {got!r}", fact)
-        if _stated_matches(requirement.value, got):
+        if requirement.value is None or _stated_matches(requirement.value, got):
+            # Everything that reaches here would once have been a `pass`. A
+            # token subset cannot read the sentence its tokens sit in, so a
+            # value that negates or excludes arrives looking exactly like one
+            # that satisfies - and a wrong `pass` lands in the `matched` group,
+            # where a reviewer looks least. `review`, never `fail`: the words
+            # may be qualifying something else entirely, and blaming a vendor
+            # on a string diff is the thing this tier exists not to do.
+            negations = _negations_in(requirement.value, got)
+            if negations and requirement.value is None:
+                return result("review",
+                              f"{requirement.parameter} must be stated; vendor "
+                              f"states {got!r}, which reads as a refusal "
+                              f"({', '.join(negations)}) — read it before "
+                              f"accepting", fact)
+            if negations:
+                return result("review",
+                              f"required {requirement.parameter} = "
+                              f"{requirement.value!r}; vendor states {got!r}, "
+                              f"which carries the required tokens but also "
+                              f"{', '.join(negations)} — read it before "
+                              f"accepting", fact)
+            if requirement.value is None:
+                return result("pass",
+                              f"vendor states {requirement.parameter} = {got!r}",
+                              fact)
             return result("pass",
                           f"vendor states {requirement.parameter} = {got!r}, "
                           f"which carries the required {requirement.value!r}", fact)

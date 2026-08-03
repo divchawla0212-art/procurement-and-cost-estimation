@@ -298,6 +298,56 @@ def test_a_null_valued_fact_is_unanswered_for_a_stated_value_requirement():
     assert r.verdict == "unanswered" and r.fact_id is None
 
 
+def test_a_stated_value_that_negates_the_requirement_is_review_not_pass():
+    # The token subset says "Class F" is present, so the tier used to call this
+    # a pass and file it under `matched`, where a reviewer looks least - while
+    # the sentence says the opposite. 93 of 143 requirements land in this tier,
+    # and this is the error direction that silently clears a vendor.
+    r = evaluate(_stated(),
+                 [_stated_fact("generator_insulation_class",
+                               "Class B rise (Class F insulation not offered)")],
+                 [], "MKON", "now")
+    assert r.verdict == "review"
+    assert "Class F" in r.rationale                   # the requirement
+    assert "not offered" in r.rationale               # and the vendor's words
+    assert r.fact_id == "f-1"                         # cite the evidence
+
+
+def test_a_negated_presence_answer_does_not_satisfy_must_be_stated():
+    # The other `pass` the tier can return. "N/A" against "Anchor Bolt
+    # Required" is the vendor declining, not the vendor answering, and coercing
+    # it into a pass is missing data read as compliance.
+    r = evaluate(_stated(parameter="anchor_bolt", value=None),
+                 [_stated_fact("anchor_bolt", "N/A")], [], "KERUI", "now")
+    assert r.verdict == "review" and r.fact_id == "f-1"
+    assert "N/A" in r.rationale
+
+
+def test_the_requirements_own_negation_is_not_read_as_a_refusal():
+    # The false-positive direction that matters: a clause that is itself
+    # phrased in the negative, echoed back verbatim by the vendor, is a match
+    # and must stay one. Only a negation the *vendor* added counts.
+    r = evaluate(_stated(parameter="asbestos_content", value="no asbestos"),
+                 [_stated_fact("asbestos_content",
+                               "No asbestos used in any component")],
+                 [], "ADPOWER", "now")
+    assert r.verdict == "pass"
+
+
+def test_a_compound_value_carrying_an_unrelated_negation_is_reviewed_not_passed():
+    # Deliberate, and the conservative side of the trade: the guard fires on a
+    # negation anywhere in the stated value, so a compound value whose "no"
+    # qualifies something else is demoted to `review` rather than passed. A
+    # positional heuristic over tokenized prose would be a confident guess, and
+    # `review` costs a reviewer a minute where `pass` costs an award. Never
+    # `fail` on this path, whatever the words say (INV-E).
+    r = evaluate(_stated(),
+                 [_stated_fact("generator_insulation_class",
+                               "Class F, no derating below 40 degC")],
+                 [], "AESL", "now")
+    assert r.verdict == "review"
+
+
 def test_a_blank_valued_fact_is_unanswered_not_a_token_match():
     # "   " tokenizes to nothing; it is not evidence, whatever the string diff says
     r = evaluate(_stated(), [_stated_fact("generator_insulation_class", "   ")],
