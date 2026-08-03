@@ -416,6 +416,22 @@ def test_two_standards_sharing_digits_are_not_one_reading():
     assert len(_readings(facts, "applicable_standard")) == 2
 
 
+def test_an_internal_space_does_not_split_a_reading_in_two():
+    # Same text key material, differently spaced - not a genuine disagreement.
+    facts = [_fact("ip_rating", "IP 55", None),
+             _fact("ip_rating", "IP55", None)]
+    assert len(_readings(facts, "ip_rating")) == 1
+
+
+def test_degc_and_the_single_glyph_celsius_sign_are_one_reading():
+    # "55" degC resolves through the numeric path; "55" ℃ used to fall to text
+    # because units._ALIASES had no entry for the single-glyph sign, splitting
+    # one quantity into two "distinct" readings.
+    facts = [_fact("ambient_design_temp", "55", "degC"),
+             _fact("ambient_design_temp", "55", "℃")]
+    assert len(_readings(facts, "ambient_design_temp")) == 1
+
+
 def test_a_range_is_not_collapsed_onto_its_lower_bound():
     # ADPOWER states ambient_design_temp as 55, 5-58 and 4-58 on one store.
     facts = [_fact("ambient_design_temp", "55", "Deg C"),
@@ -519,3 +535,29 @@ def test_no_reading_is_still_unanswered_not_review():
     req = _req(parameter="continuous_rating", checkability="auto",
                operator=">=", value=600, unit="kW")
     assert evaluate(req, [], [], "ADPOWER", "now").verdict == "unanswered"
+
+
+def test_candidate_fact_ids_are_deduplicated():
+    # No current call site can produce this (every group is disjoint), but
+    # nothing enforces that upstream, so the id list itself must not repeat.
+    req = _req(parameter="continuous_rating", checkability="auto",
+               operator=">=", value=600, unit="kW")
+    fact = _fact("continuous_rating", "700", "kW", fact_id="f-a")
+    facts = [fact, dict(fact)]      # same fact_id, appears twice in one group
+    r = evaluate(req, facts, [], "ADPOWER", "now")
+    assert r.candidate_fact_ids == ["f-a"]
+
+
+def test_a_blank_or_none_valued_fact_does_not_manufacture_a_second_reading():
+    # Before _readings filtered blank evidence, a bare next(...) could pick up
+    # this fact first and reach units.compare with a blank value, producing a
+    # confusing Unconvertible -> unanswered instead of deciding on the real one.
+    req = _req(parameter="continuous_rating", checkability="auto",
+               operator=">=", value=600, unit="kW")
+    facts = [_fact("continuous_rating", "", None, fact_id="f-b"),
+             _fact("continuous_rating", None, None, fact_id="f-c"),
+             _fact("continuous_rating", "700", "kW", fact_id="f-a")]
+    r = evaluate(req, facts, [], "ADPOWER", "now")
+    assert r.verdict == "pass"
+    assert r.fact_id == "f-a"
+    assert r.candidate_fact_ids == []

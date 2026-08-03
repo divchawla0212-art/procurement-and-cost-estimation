@@ -30,7 +30,7 @@ def test_to_canonical_scales_within_a_family(value, unit, expected):
 
 @pytest.mark.parametrize("value,unit,expected", [
     (25.0, "degC", 25.0), (77.0, "degF", 25.0), (298.15, "K", 25.0),
-    (25.0, "°C", 25.0), (77.0, "°F", 25.0),
+    (25.0, "°C", 25.0), (77.0, "°F", 25.0), (25.0, "℃", 25.0),
 ])
 def test_temperature_conversion_is_affine_not_scalar(value, unit, expected):
     got, canonical = to_canonical(value, unit)

@@ -134,7 +134,11 @@ def _reading_key(value, unit, parameter: str | None):
             return ("num", round(canonical, 9), canonical_unit)
         except units.Unconvertible:
             pass
-    return ("txt", str(value).strip().lower())
+    # Squeeze internal whitespace too, the same idiom units._fold uses for
+    # unit strings, so "IP 55" and "IP55" fold to one key. This is formatting
+    # tolerance only: it does not touch punctuation, so "±10" and "±10%" -
+    # different quantities in some parameter families - stay apart.
+    return ("txt", str(value).strip().lower().replace(" ", ""))
 
 
 def _readings(facts: list[dict], parameter: str | None) -> list[list[dict]]:
@@ -170,11 +174,16 @@ def evaluate(requirement, facts: list[dict], deviations: list[dict],
     """One cell. Verdict order is the whole design; see the module docstring
     and the plan's Task 6 for why each step precedes the next."""
     def result(verdict, rationale, fact=None, candidates=()):
+        # Every current call site passes candidates built from disjoint
+        # groups, so a duplicate can't arise today - but de-duplicating here,
+        # order-preserving, means a future caller can't silently store a
+        # repeated id.
+        candidate_ids = list(dict.fromkeys(
+            c.get("fact_id") for c in candidates if c.get("fact_id")))
         return ComplianceResult(
             req_id=requirement.req_id, vendor=vendor, verdict=verdict,
             fact_id=(fact or {}).get("fact_id"), doc_id=(fact or {}).get("doc_id"),
-            candidate_fact_ids=[c.get("fact_id") for c in candidates
-                                if c.get("fact_id")],
+            candidate_fact_ids=candidate_ids,
             rationale=rationale, evaluated_at=now)
 
     want_clause = _norm_clause(requirement.clause_ref)
