@@ -54,16 +54,69 @@ def unwrap_envelope(data: dict, output_schema: type[BaseModel]) -> dict:
     key that the schema does not declare, holding a dict, cannot be the answer
     itself. A lone key the schema *does* declare is that field's value and is
     left alone, so a single-field schema is never mistaken for an envelope.
+
+    The wrapped object is sometimes a *string* rather than a dict — the same
+    quotation returned `{"parameter": {...}}` on one call and the stringified
+    equivalent under `parameter_name` on another. That shape reached neither
+    repair (this one needs a dict; `recover_stringified_envelope` only inspects
+    keys the schema declares), so a fully-read quotation raised and the vendor
+    went blank. A decoded string is only accepted when it names a field the
+    schema declares, so a stray string is still rejected downstream rather than
+    stored as an answer.
+
+    The envelope is sometimes not alone. ADPOWER's gas-14 quotation came back
+    as `{"parameter_name": ..., "parameter_value": ...}` — two keys, neither a
+    schema field — and the old one-key test bailed before looking at either
+    value, losing the vendor's whole commercial column. The count was never
+    what made the unwrap safe; the inner object naming schema fields is. So a
+    sibling key no longer blocks the unwrap, and the structural test stands on
+    its own. When more than one value qualifies there is no evidence for
+    either, so it raises rather than deciding the vendor's terms on key order.
     """
     fields = set(output_schema.model_fields)
     for _ in range(_MAX_ENVELOPE_DEPTH):
-        if len(data) != 1 or (set(data) & fields):
+        if set(data) & fields:
             break
-        inner = next(iter(data.values()))
-        if not isinstance(inner, dict):
+        inner = _sole_envelope_value(data, fields)
+        if inner is None:
             break
         data = inner
     return data
+
+
+def _decoded_answer(value, fields: set[str]) -> dict | None:
+    """`value` as an object naming at least one schema field, or None.
+
+    A JSON string holding such an object counts; anything else does not. This
+    is the whole safety test: an object that names a field the schema declares
+    is the answer, and nothing else is ever treated as one.
+    """
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return None
+    if isinstance(value, dict) and (set(value) & fields):
+        return value
+    return None
+
+
+def _sole_envelope_value(data: dict, fields: set[str]) -> dict | None:
+    """The one value that is the wrapped structure, or None to stop unwrapping.
+
+    A single key keeps its original latitude: any dict is descended into, so a
+    two- or three-deep wrapper still unwraps on the next pass. With siblings
+    present that latitude would be a guess, so a value must *demonstrably* be
+    the answer — and exactly one of them may be.
+    """
+    if len(data) == 1:
+        inner = next(iter(data.values()))
+        if isinstance(inner, str):
+            return _decoded_answer(inner, fields)
+        return inner if isinstance(inner, dict) else None
+    answers = [a for a in (_decoded_answer(v, fields) for v in data.values())
+               if a is not None]
+    return answers[0] if len(answers) == 1 else None
 
 
 def recover_stringified_envelope(data: dict, output_schema: type[BaseModel]) -> dict:
@@ -112,7 +165,72 @@ def require_known_field(data: dict, output_schema: type[BaseModel]) -> None:
         f"the model returned no field of {output_schema.__name__}: "
         f"got keys {sorted(data)!r}, expected any of "
         f"{sorted(output_schema.model_fields)!r}. Treating this as an empty "
-        "extraction would store defaults as if they were the vendor's terms.")
+        "extraction would store defaults as if they were the vendor's terms. "
+        f"payload was {_preview(data)}")
+
+
+# Long enough to show the shape of a wrapper and what it holds, short enough
+# that the note it lands in stays readable in DocumentRecord.notes and in the
+# portal. The gas-14 failure recorded key names only, which is exactly the
+# information that cannot distinguish a recoverable envelope from a bare
+# name/value pair - so the next occurrence of an unrepairable shape has to
+# carry its values with it.
+_PREVIEW_CHARS = 800
+
+
+def _preview(data: dict) -> str:
+    try:
+        text = json.dumps(data, default=str, sort_keys=True)
+    except (TypeError, ValueError):
+        text = repr(data)
+    if len(text) <= _PREVIEW_CHARS:
+        return text
+    return f"{text[:_PREVIEW_CHARS]}... [{len(text)} chars total]"
+
+
+def _admits_str(annotation) -> bool:
+    """True when the field could legitimately hold a string the vendor printed."""
+    return annotation is str or any(a is str for a in typing.get_args(annotation))
+
+
+def unbox_scalar_fields(data: dict, output_schema: type[BaseModel]) -> dict:
+    """Unbox a number the model wrapped in `{"value": …}`.
+
+    Observed live on the same quotations as the two envelope shapes above, and
+    again only on some calls: `base_price` arrives as `{"value": 1110836}`, or
+    as that object stringified. Pydantic rejects the box on a float field, so
+    the whole extraction fails and the vendor's column goes blank in the
+    statement — with the number the model read sitting inside the box.
+
+    Narrow on both sides, because the alternative to unboxing is a loud
+    failure, never a guess:
+
+    - only a *lone* `value` key is a box. `{"value": 1110836, "currency":
+      "AED"}` is an answer; unboxing it would drop the currency and price the
+      bid in the wrong money, so it falls through to pydantic.
+    - only fields the schema cannot hold a string in are unboxed, so a vendor
+      who literally prints `{"value": …}` in their delivery terms keeps it.
+
+    This reads the number the model returned. It never supplies one.
+    """
+    out = dict(data)
+    for name, field in output_schema.model_fields.items():
+        if typing.get_origin(field.annotation) in (list, dict):
+            continue
+        if _admits_str(field.annotation):
+            continue
+        value = out.get(name)
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except ValueError:
+                continue
+        if not isinstance(value, dict) or set(value) != {"value"}:
+            continue
+        inner = value["value"]
+        if inner is None or isinstance(inner, (bool, int, float, str)):
+            out[name] = inner
+    return out
 
 
 def coerce_structured(data: dict, output_schema: type[BaseModel]) -> dict:
@@ -120,8 +238,8 @@ def coerce_structured(data: dict, output_schema: type[BaseModel]) -> dict:
 
     Unwraps an envelope around the whole structure (nested under a wrapper key,
     or stringified onto one scalar field), rejects a payload that names nothing
-    the schema declares, then decodes list-valued fields returned as a JSON
-    string.
+    the schema declares, unboxes a number returned as `{"value": …}`, then
+    decodes list-valued fields returned as a JSON string.
 
     Observed against the real client MR: `requirements` came back as a string
     holding the whole `{"requirements": [...]}` envelope. Callers then do
@@ -137,7 +255,7 @@ def coerce_structured(data: dict, output_schema: type[BaseModel]) -> dict:
     out = unwrap_envelope(dict(data), output_schema)
     out = recover_stringified_envelope(out, output_schema)
     require_known_field(out, output_schema)
-    out = dict(out)
+    out = unbox_scalar_fields(out, output_schema)
     for name, field in output_schema.model_fields.items():
         if typing.get_origin(field.annotation) not in (list, dict):
             continue

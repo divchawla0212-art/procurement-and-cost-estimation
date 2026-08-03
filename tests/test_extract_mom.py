@@ -239,3 +239,18 @@ def test_stored_amendments_all_carry_provenance(tmp_path):
     assert len(loaded.amendments) == 2                      # nothing dropped
     live = {r.req_id for r in loaded.requirements}
     assert all(a.req_id is None or a.req_id in live for a in loaded.amendments)
+
+
+def test_an_amendment_cannot_leave_a_stated_requirement_without_a_parameter():
+    from procurement.extract_mom import apply_amendments
+    from procurement.store.models import Amendment, RequirementRecord
+    req = RequirementRecord(req_id="r-1", clause_ref="2.6", text="Class F",
+                            source_doc_id="d", checkability="stated",
+                            parameter="generator_insulation_class", value="Class F")
+    # parameter="" (not None) passes the `is not None` copy guard in
+    # apply_amendments and actually clears the field - unlike value=None below,
+    # which the guard skips and leaves untouched.
+    amend = Amendment(amendment_id="a-1", clause_ref="2.6", text="withdrawn value",
+                      parameter="", value=None, source_doc_id="m", action="modify")
+    out, _ = apply_amendments([req], [amend])
+    assert out[0].checkability == "judgement"

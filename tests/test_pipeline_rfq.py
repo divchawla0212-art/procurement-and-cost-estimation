@@ -51,13 +51,24 @@ class RfqClient:
         return {"currency": "USD", "base_price": 1000.0}
 
 
+# Padding appended to every synthetic fixture body that stands in for a real,
+# extractable RFQ document: real specs and MOMs are always well over
+# MIN_EXTRACTABLE_CHARS, and a fixture short enough to trip the pipeline's
+# no-readable-text guard would silently turn these into tests of the guard
+# instead of the extraction logic they mean to exercise.
+_PAD = (" This synthetic fixture body is padded with filler prose so its "
+       "character count clears the pipeline's minimum-extractable-text "
+       "guard, letting the extraction logic under test run rather than "
+       "the guard itself.")
+
+
 def _rfq(tmp_path, files):
     root = str(tmp_path)
     create_project(root, "P")
     rdir = tmp_path / "p" / "requirements"
     rdir.mkdir(parents=True, exist_ok=True)
     for name, body in files.items():
-        (rdir / name).write_text(body, encoding="utf-8")
+        (rdir / name).write_text(body + _PAD, encoding="utf-8")
     return root
 
 
@@ -81,7 +92,7 @@ def test_a_spec_document_produces_stored_requirements(tmp_path):
     assert reqset.requirements[0].checkability == "auto"
     doc = next(d for d in snapshots.load_documents(root, "p") if d.vendor is None)
     assert (doc.doc_class, doc.extraction_status) == ("spec", "ok")
-    assert doc.prompt_version == "requirements_v3"
+    assert doc.prompt_version == "requirements_v4"
 
 
 def test_a_mom_amends_the_requirement_and_keeps_the_base(tmp_path):
@@ -104,7 +115,7 @@ def test_an_rfq_datasheet_is_routed_to_requirements_with_an_event(tmp_path):
     doc = next(d for d in snapshots.load_documents(root, "p") if d.vendor is None)
     assert doc.doc_class == "datasheet"          # the classifier's answer stands
     assert doc.extraction_status == "ok"
-    assert doc.prompt_version == "requirements_v3"
+    assert doc.prompt_version == "requirements_v4"
     assert snapshots.load_requirements(root, "p").requirements
     actions = [e.action for e in events.read_events(root, "p")]
     assert "rfq.requirements_inferred" in actions
@@ -199,7 +210,7 @@ def test_a_failed_spec_extraction_keeps_the_previous_requirements(tmp_path):
     root = _rfq(tmp_path, {_MR: "4.2.7 H2S at least 50 ppm"})
     run_ingestion(root, "p", RfqClient())
     before = snapshots.load_requirements(root, "p").model_dump()
-    (tmp_path / "p" / "requirements" / _MR).write_text("edited", encoding="utf-8")
+    (tmp_path / "p" / "requirements" / _MR).write_text("edited" + _PAD, encoding="utf-8")
     run_ingestion(root, "p", RfqClient(fail_on=("requirements",)))
     assert snapshots.load_requirements(root, "p").model_dump() == before
     doc = next(d for d in snapshots.load_documents(root, "p") if d.vendor is None)
@@ -208,7 +219,7 @@ def test_a_failed_spec_extraction_keeps_the_previous_requirements(tmp_path):
 
 
 def test_rfq_prompt_versions_are_per_class():
-    assert RFQ_PROMPT_VERSION_BY_CLASS == {"spec": "requirements_v3",
+    assert RFQ_PROMPT_VERSION_BY_CLASS == {"spec": "requirements_v4",
                                            "mom": "mom_amend_v1"}
 
 
@@ -216,7 +227,7 @@ def test_the_rfq_pass_does_not_disturb_vendor_facts(tmp_path):
     root = _rfq(tmp_path, {_MR: "4.2.7 H2S at least 50 ppm"})
     vdir = tmp_path / "p" / "vendors" / "KERUI"
     vdir.mkdir(parents=True)
-    (vdir / "Quotation.txt").write_text("base price 1000", encoding="utf-8")
+    (vdir / "Quotation.txt").write_text("base price 1000" + _PAD, encoding="utf-8")
     from procurement.project import load_project, save_project
     project = load_project(root, "p")
     project.vendors = ["KERUI"]

@@ -1,0 +1,78 @@
+You are decomposing a client material requisition (MR) for gas generator sets
+into individual requirement clauses, for a procurement compliance review.
+
+Return a list of requirements. For each one give:
+  clause_ref   - the clause number exactly as printed (e.g. "4.2.7"). Omit if
+                 the document prints none.
+  text         - the requirement stated verbatim, trimmed to one clause.
+  category     - technical | commercial | documentation | testing | codes
+  checkability - "auto", "stated", or "judgement".
+                 "auto"      the clause states a single parameter, a
+                             comparison, and a NUMBER a computer could check
+                             against a vendor datasheet.
+                 "stated"    the clause requires a named property to have a
+                             particular non-numeric value, or to be present at
+                             all. "Generator Insulation Temperature: Class F",
+                             "Hazardous Area Classification: Safe Area",
+                             "Neutral Earthing: Solidly Earthed", "Anchor Bolt
+                             Required", "Generator Duty Type: S1 according to
+                             IEC 60034-1".
+                 "judgement" everything else - anything needing a human to weigh
+                             wording, scope, or adequacy.
+  parameter    - auto and stated: a short snake_case name matching how a
+                 datasheet would print it (h2s_tolerance, continuous_rating,
+                 frequency, ambient_design_temp, nox_emission,
+                 generator_insulation_class).
+  operator     - auto only: one of >= <= == in between. A "stated" clause
+                 never has an operator - omit this field for "stated".
+  value        - auto and stated, exactly as printed - do not convert or
+                 compute:
+                   auto, >= <= ==   a single number
+                   auto, in         the list of permitted values
+                   auto, between    exactly two numbers, the lower and upper
+                                    bound
+                   stated           the non-numeric value required, or omit
+                                    this field entirely for a clause that only
+                                    requires the parameter to be present
+  unit         - auto only: the unit exactly as printed (ppm, kW, degC, bar,
+                 Hz, V). Use "" for a genuinely dimensionless bound. A
+                 "stated" clause never has a unit - omit this field for
+                 "stated".
+
+Rules:
+- Copy values exactly as stated. Never convert between units.
+- Mark a clause "auto" only when all four of parameter, operator, value and
+  unit are present. If any is missing or ambiguous and the clause is not
+  "stated" (see the "stated" rules below), use "judgement" and leave those
+  fields out - a half-stated bound is worse than no bound.
+- "between" is for a stated range: "Temperature 5-58 deg C", "gas pressure
+  2.76 to 4.14 barg", "ambient 5 degC minimum to 58 degC maximum".
+  "in" is for a set of permitted values: "50 or 60 Hz", "415V / 690V".
+  They are not interchangeable. A vendor reading of 55 satisfies
+  "between 5 and 58" and does not satisfy "in [50, 60]". If a clause states a
+  range, always use "between" - never "in" with the two endpoints.
+- A range needs both ends. If the clause states only one ("maximum 58 deg C"),
+  use <= or >= with that single number instead.
+- Choose the operator from what the clause requires, not from how it reads:
+    "maximum 58 deg C", "up to 700 ppm", "not exceeding 85 dB(A)"  -> <=
+    "minimum 525 kW", "at least 3 starts", "no less than 110 %"    -> >=
+    "5-58 deg C", "between 2.76 and 4.14 barg"                     -> between
+    "50 or 60 Hz", "415V / 690V"                                   -> in
+    "exactly 415 V", "shall be 50 Hz"                              -> ==
+  Use == only when the clause requires that exact value and any other value -
+  higher or lower - would be non-compliant. A limit is never ==: writing
+  "H2S up to 700 ppm" as "== 700" fails a vendor offering 50 ppm, which meets
+  the requirement comfortably.
+- Never invent a clause number, a value, or a unit.
+- One clause per entry. Do not merge two requirements into one entry.
+- Do not judge any vendor. This document is the requirement, not a bid.
+- A "stated" clause gives parameter and value only. Never give it an operator
+  or a unit: a value with an operator is an "auto" bound, and one missing its
+  unit is a half-stated bound, which is worse than no bound.
+- A "stated" clause whose text names a property but no value - "Anchor Bolt
+  Required", "Shaft Couplings Required" - gives the parameter and omits value.
+  That means "the vendor must state this", not "the value is empty".
+- Use "auto", never "stated", whenever the required value is a number with a
+  unit. Use "judgement", never "stated", when you cannot name the single
+  property the clause constrains.
+- A set of permitted values is the "auto" operator "in", not a "stated" value.

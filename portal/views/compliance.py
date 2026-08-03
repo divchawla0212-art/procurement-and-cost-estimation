@@ -5,7 +5,7 @@ logic worth testing: it decides layout, not meaning.
 """
 import streamlit as st
 
-from procurement.matrix import build_matrix, rows_in_group
+from procurement.matrix import bound as _bound, build_matrix, rows_in_group
 
 _GROUP_LABEL = {"not_matched": "Not matched",
                 "needs_human": "Needs a human",
@@ -15,47 +15,55 @@ _VERDICT_MARK = {"pass": "✅", "fail": "❌", "deviation": "⚠️",
                  "unanswered": "❓", "review": "👤"}
 
 
-def _bound(row) -> str:
-    """The requirement's machine-checkable bound, or its clause text."""
-    if row.checkability != "auto":
-        return row.text
-    value = row.value if not isinstance(row.value, list) else "..".join(
-        str(v) for v in row.value)
-    return f"{row.parameter} {row.operator} {value} {row.unit or ''}".strip()
-
-
 def _render_coverage(coverage) -> None:
     st.markdown("#### Coverage")
-    if not coverage.auto_cells:
-        st.caption("No machine-checkable requirements are stored yet.")
+    checked = coverage.auto_cells + coverage.stated_cells
+    if not checked:
+        st.caption("No checked requirements are stored yet.")
         return
 
-    checked = coverage.auto_cells
     cols = st.columns(4)
-    cols[0].metric("Machine-checkable cells", checked)
+    cols[0].metric("Checked cells", checked)
     for col, verdict in zip(cols[1:], ("pass", "fail", "unanswered")):
         count = coverage.by_verdict.get(verdict, 0)
         col.metric(verdict.capitalize(), f"{count}  ({count / checked:.0%})")
 
+    # `unanswered_silent`/`unanswered_refused` only ever tally `auto` cells
+    # (matrix.py's docstring: the split "only makes sense against `auto`").
+    # A `stated` requirement is `unanswered` for exactly the "silent" reason -
+    # no vendor document named the parameter - so the remainder after
+    # subtracting the auto-tier split is that stated-tier count, not slop.
     silent, refused = coverage.unanswered_silent, coverage.unanswered_refused
-    if silent or refused:
-        st.markdown(
+    unanswered_total = coverage.by_verdict.get("unanswered", 0)
+    stated_unanswered = unanswered_total - silent - refused
+    # `> 0`, not truthiness: the three counts come from separate tallies, so
+    # the remainder can go negative, and a bare truthiness test rendered
+    # "-3 unanswered on a `stated` requirement" as though it were measured.
+    # The same guard web/src/pages/ComplianceMatrix.tsx already applies.
+    if silent or refused or stated_unanswered > 0:
+        lines = [
             f"- **{silent}** unanswered because no vendor document stated the "
-            "parameter — this is the real coverage gap.\n"
+            "parameter — this is the real coverage gap.",
             f"- **{refused}** unanswered because the fact was found and the "
             "comparison could not be made — this measures our reach, not the "
-            "vendor's answer."
-        )
+            "vendor's answer.",
+        ]
+        if stated_unanswered > 0:
+            lines.append(
+                f"- **{stated_unanswered}** unanswered on a `stated` "
+                "requirement — no vendor document named the parameter at all."
+            )
+        st.markdown("\n".join(lines))
     st.caption(
-        "Counted over machine-checkable requirements only. A percentage over "
-        "every requirement would be dominated by the ones needing human "
-        "judgement and would say nothing about extraction."
+        "Counted over checked requirements only — `auto` and `stated`. A "
+        "percentage over every requirement would be dominated by the ones "
+        "needing human judgement and would say nothing about extraction."
     )
 
 
 def _render_row(row, vendors) -> None:
     st.markdown(f"**{row.clause_ref}** — {_bound(row)}")
-    if row.checkability == "auto":
+    if row.checkability in ("auto", "stated"):
         st.caption(row.text)
     for vendor in vendors:
         cell = row.cells[vendor]

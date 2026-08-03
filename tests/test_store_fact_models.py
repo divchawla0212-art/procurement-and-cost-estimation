@@ -7,19 +7,51 @@ def test_fact_record_defaults():
     assert f.value is None and f.unit is None and f.verbatim is None
 
 
-def test_fact_id_is_stable_across_re_extraction():
-    a = fact_id_for("d1", "h2s_tolerance")
-    assert a == fact_id_for("d1", "h2s_tolerance")
+def test_the_same_reading_hashes_to_the_same_id():
+    a = fact_id_for("d1", "h2s_tolerance", "500", "ppm")
+    assert a == fact_id_for("d1", "h2s_tolerance", "500", "ppm")
     assert a.startswith("f-")
 
 
-def test_fact_id_varies_by_document_and_parameter():
-    assert fact_id_for("d1", "h2s") != fact_id_for("d2", "h2s")
-    assert fact_id_for("d1", "h2s") != fact_id_for("d1", "kw_rating")
+def test_the_document_and_the_parameter_still_participate():
+    assert (fact_id_for("d1", "h2s", "500", "ppm")
+            != fact_id_for("d2", "h2s", "500", "ppm"))
+    assert (fact_id_for("d1", "h2s", "500", "ppm")
+            != fact_id_for("d1", "kw_rating", "500", "ppm"))
 
 
-def test_fact_id_ignores_parameter_case_and_padding():
-    assert fact_id_for("d1", "  H2S_Tolerance ") == fact_id_for("d1", "h2s_tolerance")
+def test_the_parameter_is_still_case_and_whitespace_insensitive():
+    assert (fact_id_for("d1", "  H2S_Tolerance ", "500", "ppm")
+            == fact_id_for("d1", "h2s_tolerance", "500", "ppm"))
+
+
+def test_two_readings_of_one_parameter_no_longer_collide():
+    # The defect this task exists to fix: ADPOWER prints continuous_rating at
+    # both 525 kW and 700 kW, and both are stored.
+    assert (fact_id_for("d1", "continuous_rating", "525", "kW")
+            != fact_id_for("d1", "continuous_rating", "700", "kW"))
+
+
+def test_one_number_written_two_ways_is_one_id():
+    # Task 7c's other deferred minor: value is str|float|None, so two chunks
+    # formatting one number differently produced two keys and both survived.
+    assert (fact_id_for("d1", "continuous_rating", 525.0, "kW")
+            == fact_id_for("d1", "continuous_rating", "525", "kW"))
+
+
+def test_the_unit_is_folded_but_never_converted():
+    assert (fact_id_for("d1", "continuous_rating", "525", " kW ")
+            == fact_id_for("d1", "continuous_rating", "525", "kw"))
+    # Different quantity as printed, therefore separately addressable. The
+    # equivalence is the compliance layer's to draw, not the store's.
+    assert (fact_id_for("d1", "continuous_rating", "525", "kW")
+            != fact_id_for("d1", "continuous_rating", "525000", "W"))
+
+
+def test_a_missing_value_or_unit_is_keyed_not_crashed():
+    assert fact_id_for("d1", "p", None, None).startswith("f-")
+    assert (fact_id_for("d1", "p", None, None)
+            != fact_id_for("d1", "p", "", None))
 
 
 def test_deviation_record_defaults_to_noted():

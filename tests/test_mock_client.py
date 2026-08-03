@@ -28,3 +28,18 @@ def test_mock_returns_a_copy():
     out = client.classify_structure("p", _Layout, "c")
     out["columns"]["code"] = 999
     assert canned["columns"]["code"] == 2
+
+
+def test_mock_client_returns_a_sequence_in_order():
+    c = MockLLMClient([{"rows": 1}, {"rows": 2}])
+    assert c.classify_structure("p", _Layout, "t")["rows"] == 1
+    assert c.classify_structure("p", _Layout, "t")["rows"] == 2
+    # exhausted: the last response repeats rather than raising, so a test that
+    # miscounts chunks fails on its assertion, not on an IndexError
+    assert c.classify_structure("p", _Layout, "t")["rows"] == 2
+
+
+def test_mock_client_still_accepts_a_single_dict():
+    c = MockLLMClient({"rows": 1})
+    assert c.classify_structure("p", _Layout, "t")["rows"] == 1
+    assert c.classify_structure("p", _Layout, "t")["rows"] == 1

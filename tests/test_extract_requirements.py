@@ -1,12 +1,15 @@
+import importlib
 import os
 
 import pytest
 
+from procurement.chunking import CHUNK_ATTEMPTS
 from procurement.extract_requirements import (REQUIREMENTS_PROMPT_VERSION,
-                                              extract_requirements)
+                                              extract_requirements, _chunks)
 from procurement.store.models import RequirementSet, req_id_for
 from procurement.store import snapshots
 from procurement.project import create_project
+from shared.llm.mock_client import MockLLMClient
 
 
 class StubClient:
@@ -214,7 +217,7 @@ def test_a_two_member_list_under_in_is_left_as_membership(tmp_path):
 
 
 def test_the_prompt_version_is_the_prompt_filename():
-    assert REQUIREMENTS_PROMPT_VERSION == "requirements_v3"
+    assert REQUIREMENTS_PROMPT_VERSION == "requirements_v4"
 
 
 def test_the_prompt_tells_the_model_which_operator_a_limit_takes():
@@ -252,3 +255,222 @@ def test_stored_auto_requirements_all_carry_four_bounds(tmp_path):
     for r in snapshots.load_requirements(root, "p").requirements:
         if r.checkability == "auto":
             assert r.parameter and r.operator and r.value is not None and r.unit is not None
+
+
+def test_chunks_never_split_a_line(tmp_path):
+    text = "\n".join(f"Table 1 | A{i}=4.{i} | B{i}=param | C{i}={i} | D{i}=kW"
+                     for i in range(1, 40))
+    parts = _chunks(text, budget=200)
+    assert len(parts) > 1
+    assert "\n".join(parts) == text          # lossless and in order
+    for part in parts:
+        for line in part.splitlines():
+            assert line in text.splitlines()
+
+
+def test_chunking_is_deterministic():
+    text = "\n".join(f"line {i}" for i in range(200))
+    assert _chunks(text, 500) == _chunks(text, 500)
+
+
+@pytest.mark.parametrize("module_name, name, default", [
+    ("procurement.extract_tech", "TECH_CHUNK_CHARS", 12000),
+    ("procurement.extract_requirements", "REQUIREMENTS_CHUNK_CHARS", 8000),
+])
+def test_a_typo_in_a_chunk_budget_cannot_cost_one_call_per_line(
+        monkeypatch, module_name, name, default):
+    # `int(os.getenv(...) or N)` accepted 0, negatives and any too-small
+    # number, and chunk_on_lines emits at least one line per chunk whatever the
+    # budget - so `TECH_CHUNK_CHARS=0` was one paid LLM call per line of a
+    # 20,000-line proposal. Parametrized over both extractors on purpose: the
+    # floor has to be the same rule in both places, not two copies of one.
+    module = importlib.import_module(module_name)
+    try:
+        for typo in ("0", "-12000", "12", "twelve thousand"):
+            monkeypatch.setenv(name, typo)
+            importlib.reload(module)
+            assert getattr(module, name) == default
+        # and a genuine retune is still honoured
+        monkeypatch.setenv(name, "20000")
+        importlib.reload(module)
+        assert getattr(module, name) == 20000
+    finally:
+        monkeypatch.delenv(name, raising=False)
+        importlib.reload(module)
+        assert getattr(module, name) == default
+
+
+def test_every_chunk_is_asked_and_the_results_merge(tmp_path):
+    src = tmp_path / "mr.txt"
+    # 700 lines guarantees 3 chunks under the default 8000-char budget (the
+    # 400-line fixture used elsewhere in this file only forces 2).
+    src.write_text("\n".join(f"clause {i} body text here" for i in range(700)),
+                   encoding="utf-8")
+    client = MockLLMClient([
+        {"requirements": [{"clause_ref": "1.1", "text": "first"}]},
+        {"requirements": [{"clause_ref": "2.2", "text": "second"}]},
+        {"requirements": [{"clause_ref": "3.3", "text": "third"}]},
+    ])
+    records, status, notes = extract_requirements("d1", str(src), client)
+    assert status == "ok" and notes is None
+    assert [r.clause_ref for r in records] == ["1.1", "2.2", "3.3"]
+    assert len(client.calls) == 3
+
+
+def test_one_failing_chunk_fails_the_whole_extraction(tmp_path):
+    src = tmp_path / "mr.txt"
+    src.write_text("\n".join(f"clause {i} body text here" for i in range(400)),
+                   encoding="utf-8")
+
+    class SecondChunkAlwaysFails(MockLLMClient):
+        """`>= 2`, not `== 2`: the retry ask_each_chunk now makes would clear a
+        stub that failed only once, and this test is about the all-or-nothing
+        merge, not about the retry."""
+
+        def classify_structure(self, prompt, output_schema, context_text, images=None):
+            super().classify_structure(prompt, output_schema, context_text, images)
+            if len(self.calls) >= 2:
+                raise RuntimeError("provider unavailable")
+            return {"requirements": [{"clause_ref": "1.1", "text": "first"}]}
+
+    client = SecondChunkAlwaysFails({})
+    records, status, notes = extract_requirements("d1", str(src), client)
+    # a partial merge would delete the clauses the missing chunks carry
+    assert (records, status) == ([], "failed")
+    assert "provider unavailable" in notes
+    # and the retry is bounded: chunk 1 answered, chunk 2 asked twice and no more
+    assert len(client.calls) == 1 + CHUNK_ATTEMPTS
+
+
+def test_a_chunk_that_fails_once_is_retried_rather_than_losing_the_mr(tmp_path):
+    # The requirements extractor merges all-or-nothing too, so the same
+    # bounded retry guards it: one degenerate response on chunk 2 of 3 would
+    # otherwise cost every clause the MR states.
+    src = tmp_path / "mr.txt"
+    src.write_text("\n".join(f"clause {i} body text here" for i in range(700)),
+                   encoding="utf-8")
+
+    class SecondChunkFlakesOnce(MockLLMClient):
+        def __init__(self, response):
+            super().__init__(response)
+            self.raised = False
+
+        def classify_structure(self, prompt, output_schema, context_text, images=None):
+            super().classify_structure(prompt, output_schema, context_text, images)
+            if len(self.calls) == 2 and not self.raised:
+                self.raised = True
+                raise RuntimeError("provider unavailable")
+            return {"requirements": [{"clause_ref": f"{len(self.calls)}.0",
+                                      "text": f"clause {len(self.calls)}"}]}
+
+    client = SecondChunkFlakesOnce({})
+    records, status, notes = extract_requirements("d1", str(src), client)
+    assert (status, notes) == ("ok", None)
+    assert [r.clause_ref for r in records] == ["1.0", "3.0", "4.0"]
+    assert len(client.calls) == 4       # three chunks, one asked twice
+
+
+def test_a_clause_repeated_across_chunks_is_stored_once(tmp_path):
+    src = tmp_path / "mr.txt"
+    src.write_text("\n".join(f"clause {i} body" for i in range(400)), encoding="utf-8")
+    same = {"requirements": [{"clause_ref": "4.2.7", "text": "H2S up to 700 ppm"}]}
+    client = MockLLMClient([same, same, same])
+    records, status, _ = extract_requirements("d1", str(src), client)
+    assert status == "ok"
+    assert len(records) == 1
+
+
+def test_position_stays_global_across_a_chunk_boundary_for_unreferenced_clauses(tmp_path):
+    # req_id_for falls back to f"#{position}" when a clause prints no reference.
+    # If the merge loop's position counter were per-chunk instead of global
+    # over the merged raw_items list, this clause would collide with an
+    # earlier unreferenced clause and every stored override/verdict keyed on
+    # the resulting req_id would be orphaned the next time the chunk budget
+    # changed. This is the property every other multi-chunk test in this file
+    # leaves unpinned, because they all use explicit clause_refs.
+    src = tmp_path / "mr.txt"
+    # range(400) at this line shape produces exactly 2 chunks under the
+    # default 8000-char budget (7975 + 2313 chars), confirmed empirically -
+    # the same fixture already reused by the tests above.
+    src.write_text("\n".join(f"clause {i} body text here" for i in range(400)),
+                   encoding="utf-8")
+    client = MockLLMClient([
+        {"requirements": [{"clause_ref": "1.1", "text": "first stated clause"},
+                          {"clause_ref": "", "text": "alpha body distinct one"}]},
+        {"requirements": [{"clause_ref": "", "text": "beta body distinct two"}]},
+    ])
+    records, status, notes = extract_requirements("d1", str(src), client)
+    assert status == "ok" and notes is None
+    assert len(client.calls) == 2          # genuinely two chunks, not one
+
+    by_text = {r.text: r for r in records}
+    alpha = by_text["alpha body distinct one"]
+    beta = by_text["beta body distinct two"]
+
+    # alpha is the 2nd item overall (after "1.1" at position 1).
+    assert alpha.clause_ref == "#2"
+    assert alpha.req_id == req_id_for("d1", "#2")
+
+    # beta is the 1st item of the 2nd chunk but the 3rd item overall. A
+    # per-chunk counter would reset here and hand it "#1" - colliding with
+    # whatever the first chunk's own "#1" would have been - instead of
+    # continuing the count from the first chunk.
+    assert beta.clause_ref == "#3"
+    assert beta.req_id == req_id_for("d1", "#3")
+
+
+def test_a_stated_value_clause_is_stored_as_stated(tmp_path):
+    src = tmp_path / "mr.txt"
+    src.write_text("Generator Insulation Temperature: Class F", encoding="utf-8")
+    client = MockLLMClient({"requirements": [{
+        "clause_ref": "2.6", "text": "Generator Insulation Temperature: Class F",
+        "category": "technical", "checkability": "stated",
+        "parameter": "generator_insulation_class", "value": "Class F"}]})
+    records, status, _ = extract_requirements("d1", str(src), client)
+    r = records[0]
+    assert (status, r.checkability, r.parameter, r.value) == (
+        "ok", "stated", "generator_insulation_class", "Class F")
+    assert r.operator is None and r.unit is None
+
+
+def test_a_presence_clause_is_stated_with_a_null_value(tmp_path):
+    src = tmp_path / "mr.txt"
+    src.write_text("Anchor Bolt Required", encoding="utf-8")
+    client = MockLLMClient({"requirements": [{
+        "clause_ref": "1.10", "text": "Anchor Bolt Required",
+        "checkability": "stated", "parameter": "anchor_bolt"}]})
+    records, _, _ = extract_requirements("d1", str(src), client)
+    assert (records[0].checkability, records[0].value) == ("stated", None)
+
+
+def test_stated_without_a_parameter_degrades_to_judgement(tmp_path):
+    src = tmp_path / "mr.txt"
+    src.write_text("Vendor shall be reputable", encoding="utf-8")
+    client = MockLLMClient({"requirements": [{
+        "clause_ref": "9.1", "text": "Vendor shall be reputable",
+        "checkability": "stated", "value": "reputable"}]})
+    records, _, _ = extract_requirements("d1", str(src), client)
+    # nothing to match a fact against: this is a human's call, not a check
+    assert (records[0].checkability, records[0].parameter) == ("judgement", None)
+
+
+def test_a_stated_list_value_degrades_to_judgement(tmp_path):
+    src = tmp_path / "mr.txt"
+    src.write_text("Codes: several", encoding="utf-8")
+    client = MockLLMClient({"requirements": [{
+        "clause_ref": "5.1", "text": "Codes: several", "checkability": "stated",
+        "parameter": "codes", "value": ["IEC 60034-1", "ISO 8528"]}]})
+    records, _, _ = extract_requirements("d1", str(src), client)
+    # a set of permitted values is `in`, which is an auto bound, not a stated one
+    assert records[0].checkability == "judgement"
+
+
+def test_stated_never_keeps_an_operator_or_unit(tmp_path):
+    src = tmp_path / "mr.txt"
+    src.write_text("Insulation Class F", encoding="utf-8")
+    client = MockLLMClient({"requirements": [{
+        "clause_ref": "2.6", "text": "Insulation Class F", "checkability": "stated",
+        "parameter": "generator_insulation_class", "value": "Class F",
+        "operator": ">=", "unit": "degC"}]})
+    records, _, _ = extract_requirements("d1", str(src), client)
+    assert records[0].operator is None and records[0].unit is None

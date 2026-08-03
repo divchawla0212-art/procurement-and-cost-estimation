@@ -23,17 +23,28 @@ class VocabClient(RfqClient):
 
 _MR = "ADN-AEC-ME-SPC-026 MR Gas Genset.txt"
 
+# Padding appended to every synthetic fixture body that stands in for a real,
+# extractable document: real quotations, datasheets, specs and deviation
+# forms are always well over MIN_EXTRACTABLE_CHARS, and a fixture short
+# enough to trip the pipeline's no-readable-text guard would silently turn
+# these into tests of the guard instead of the extraction logic they mean to
+# exercise. Never applied to a fixture that deliberately tests the guard.
+_PAD = (" This synthetic fixture body is padded with filler prose so its "
+       "character count clears the pipeline's minimum-extractable-text "
+       "guard, letting the extraction logic under test run rather than "
+       "the guard itself.")
+
 
 def _project(tmp_path):
     root = str(tmp_path)
     create_project(root, "P")
     rdir = tmp_path / "p" / "requirements"
     rdir.mkdir(parents=True, exist_ok=True)
-    (rdir / _MR).write_text("4.2.7 H2S at least 50 ppm", encoding="utf-8")
+    (rdir / _MR).write_text("4.2.7 H2S at least 50 ppm" + _PAD, encoding="utf-8")
     vdir = tmp_path / "p" / "vendors" / "KERUI"
     vdir.mkdir(parents=True)
-    (vdir / "Quotation.txt").write_text("base price 1000", encoding="utf-8")
-    (vdir / "01 DataSheet Gas Generator.txt").write_text("H2S up to 70 ppm",
+    (vdir / "Quotation.txt").write_text("base price 1000" + _PAD, encoding="utf-8")
+    (vdir / "01 DataSheet Gas Generator.txt").write_text("H2S up to 70 ppm" + _PAD,
                                                          encoding="utf-8")
     project = load_project(root, "p")
     project.vendors = ["KERUI"]
@@ -80,7 +91,7 @@ def test_changing_a_requirement_reextracts_every_datasheet_exactly_once(tmp_path
     root = _project(tmp_path)
     run_ingestion(root, "p", VocabClient())
     (tmp_path / "p" / "requirements" / _MR).write_text(
-        "4.2.7 continuous rating at least 500 kW", encoding="utf-8")
+        "4.2.7 continuous rating at least 500 kW" + _PAD, encoding="utf-8")
 
     second = VocabClient()
     second_response_parameter = "continuous_rating"
@@ -116,11 +127,11 @@ def test_a_cached_datasheet_keeps_its_vocabulary_sha_on_the_stored_record(tmp_pa
 def test_the_vocabulary_does_not_invalidate_quotations_or_deviations(tmp_path):
     root = _project(tmp_path)
     (tmp_path / "p" / "vendors" / "KERUI"
-     / "03 Attachment-2 Vendor Deviation Form.txt").write_text("4.2.7 differs",
-                                                               encoding="utf-8")
+     / "03 Attachment-2 Vendor Deviation Form.txt").write_text(
+        "4.2.7 differs" + _PAD, encoding="utf-8")
     run_ingestion(root, "p", VocabClient())
     (tmp_path / "p" / "requirements" / _MR).write_text(
-        "4.2.7 continuous rating at least 500 kW", encoding="utf-8")
+        "4.2.7 continuous rating at least 500 kW" + _PAD, encoding="utf-8")
     second = VocabClient()
     second.requirement_parameter = "continuous_rating"
     run_ingestion(root, "p", second)
@@ -156,3 +167,21 @@ def test_a_phase2_store_reextracts_each_datasheet_once_then_settles(tmp_path):
     third = VocabClient()
     run_ingestion(root, "p", third)
     assert third.calls.count("facts") == 0
+
+
+def test_vocabulary_includes_stated_parameters():
+    from procurement.compliance import vocabulary
+    from procurement.store.models import RequirementRecord, RequirementSet
+    reqset = RequirementSet(requirements=[
+        RequirementRecord(req_id="r-1", clause_ref="1", text="t", source_doc_id="d",
+                          checkability="auto", parameter="h2s_content",
+                          operator="<=", value=700, unit="ppm"),
+        RequirementRecord(req_id="r-2", clause_ref="2", text="t", source_doc_id="d",
+                          checkability="stated", parameter="generator_insulation_class",
+                          value="Class F"),
+        RequirementRecord(req_id="r-3", clause_ref="3", text="t", source_doc_id="d",
+                          checkability="judgement"),
+    ])
+    # without this the datasheet pass is never asked for the stated parameter,
+    # no fact is stored, and every stated row lands on `unanswered`
+    assert vocabulary(reqset) == ["generator_insulation_class", "h2s_content"]

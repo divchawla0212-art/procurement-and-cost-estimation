@@ -16,14 +16,30 @@ def _zip(entries):
     return buf.getvalue()
 
 
+# Padding appended to every synthetic fixture body that stands in for a real,
+# extractable document: real quotations are always well over
+# MIN_EXTRACTABLE_CHARS, and a fixture short enough to trip the pipeline's
+# no-readable-text guard would silently turn these into tests of the guard
+# instead of the caching/status logic they mean to exercise.
+_PAD = (b" This synthetic fixture body is padded with filler prose so its "
+       b"character count clears the pipeline's minimum-extractable-text "
+       b"guard, letting the extraction logic under test run rather than "
+       b"the guard itself.")
+
+
 def _project(tmp_path):
     root = str(tmp_path)
     create_project(root, "P", target_currency="USD")
     z = tmp_path / "v.zip"
     z.write_bytes(_zip({
-        "KERUI/Quotation.txt": b"base price 1000",
+        "KERUI/Quotation.txt": b"base price 1000" + _PAD,
+        # Deliberately left unpadded: BOM now routes to the technical
+        # extractor (VENDOR_ROUTE), so this file no longer stops at the
+        # routing gate - it is short enough to fail the no-readable-text
+        # guard instead, before any LLM call is made. See
+        # test_first_run_extracts_one_document_per_vendor below.
         "KERUI/BOM.txt": b"bill of materials",
-        "MKON/Quotation.txt": b"base price 900",
+        "MKON/Quotation.txt": b"base price 900" + _PAD,
     }))
     unpack_vendor_zip(root, "p", str(z))
     return root
@@ -46,10 +62,20 @@ def test_first_run_extracts_one_document_per_vendor(tmp_path):
     root = _project(tmp_path)
     client = _client()
     run_ingestion(root, "p", client)
-    assert len(client.calls) == 2                 # the quote only, not the BOM
+    # Two quotations, plus a technical pass on each: neither vendor has a
+    # document that *reaches* the technical extractor, so both quotations pick
+    # up the secondary route. KERUI's BOM is routed there by its class, but its
+    # unpadded body fails the no-readable-text guard, so it never arrives - and
+    # a document that contributed nothing must not withdraw the one route that
+    # gives an under-documented vendor any technical fact at all.
+    assert len(client.calls) == 4
     docs = {d.path: d for d in snapshots.load_documents(root, "p")}
     assert sum(1 for d in docs.values() if d.extraction_status == "ok") == 2
-    assert sum(1 for d in docs.values() if d.extraction_status == "skipped") == 1
+    # BOM.txt is now routed (VENDOR_ROUTE sends "bom" to the technical
+    # extractor), so it no longer stops at the routing gate as "skipped" -
+    # its unpadded, sub-guard-length body fails the no-readable-text check
+    # instead, before any LLM call, so the call count above is unaffected.
+    assert sum(1 for d in docs.values() if d.extraction_status == "failed") == 1
 
 
 def test_rerun_with_no_changes_makes_zero_llm_calls(tmp_path):
@@ -63,10 +89,12 @@ def test_rerun_with_no_changes_makes_zero_llm_calls(tmp_path):
 def test_touching_one_document_reextracts_exactly_that_one(tmp_path):
     root = _project(tmp_path)
     run_ingestion(root, "p", _client())
-    (tmp_path / "p" / "vendors" / "KERUI" / "Quotation.txt").write_bytes(b"base price 2000")
+    (tmp_path / "p" / "vendors" / "KERUI" / "Quotation.txt").write_bytes(b"base price 2000" + _PAD)
     second = _client()
     run_ingestion(root, "p", second)
-    assert len(second.calls) == 1
+    # both passes of that one document: its bytes changed, so the quotation
+    # cache and the secondary technical cache are stale together
+    assert len(second.calls) == 2
 
 
 def test_force_reextracts_everything(tmp_path):
@@ -74,7 +102,7 @@ def test_force_reextracts_everything(tmp_path):
     run_ingestion(root, "p", _client())
     second = _client()
     run_ingestion(root, "p", second, force=True)
-    assert len(second.calls) == 2
+    assert len(second.calls) == 4      # both passes of both quotations, as run 1
 
 
 def test_facts_are_stored_per_vendor(tmp_path):
@@ -91,7 +119,10 @@ def test_run_appends_events(tmp_path):
     actions = [e.action for e in events.read_events(root, "p")]
     assert actions[0] == "run.started" and actions[-1] == "run.finished"
     assert "document.extracted" in actions
-    assert "document.skipped" in actions
+    # BOM.txt is now routed rather than gate-skipped (see _project's comment),
+    # so it records "document.unreadable" - the guard's event - not
+    # "document.skipped", which nothing in this fixture triggers any more.
+    assert "document.unreadable" in actions
 
 
 def test_status_reports_failures_instead_of_always_done(tmp_path):
@@ -144,7 +175,18 @@ def test_status_is_failed_when_nothing_extracted_and_nothing_failed(tmp_path):
 
 
 def test_status_is_done_on_a_clean_run(tmp_path):
-    root = _project(tmp_path)
+    # Not _project: that fixture's BOM.txt is deliberately unreadable (see its
+    # comment) to exercise the no-readable-text guard elsewhere in this file,
+    # which would make this run "done_with_failures" and defeat the point of
+    # this test. A genuinely clean run needs a fixture with nothing to fail.
+    root = str(tmp_path)
+    create_project(root, "P", target_currency="USD")
+    z = tmp_path / "v.zip"
+    z.write_bytes(_zip({
+        "KERUI/Quotation.txt": b"base price 1000" + _PAD,
+        "MKON/Quotation.txt": b"base price 900" + _PAD,
+    }))
+    unpack_vendor_zip(root, "p", str(z))
     run_ingestion(root, "p", _client())
     assert load_project(root, "p").status == "done"
 
@@ -238,11 +280,11 @@ def test_a_second_vendor_zip_adds_to_the_project_rather_than_replacing_it(tmp_pa
     create_project(root, "P", target_currency="USD")
 
     z1 = tmp_path / "adpower.zip"
-    z1.write_bytes(_zip({"ADPOWER/Quotation.txt": b"base price 1200"}))
+    z1.write_bytes(_zip({"ADPOWER/Quotation.txt": b"base price 1200" + _PAD}))
     unpack_vendor_zip(root, "p", str(z1))
 
     z2 = tmp_path / "mkon.zip"
-    z2.write_bytes(_zip({"MKON/Quotation.txt": b"base price 900"}))
+    z2.write_bytes(_zip({"MKON/Quotation.txt": b"base price 900" + _PAD}))
     returned = unpack_vendor_zip(root, "p", str(z2))
 
     assert load_project(root, "p").vendors == ["ADPOWER", "MKON"]
@@ -268,7 +310,7 @@ def test_withdrawn_vendor_is_dropped_from_the_store_and_the_comparison(tmp_path)
     # the buyer withdraws MKON and re-uploads only the remaining vendor
     shutil.rmtree(tmp_path / "p" / "vendors" / "MKON")
     z2 = tmp_path / "v2.zip"
-    z2.write_bytes(_zip({"KERUI/Quotation.txt": b"base price 1000",
+    z2.write_bytes(_zip({"KERUI/Quotation.txt": b"base price 1000" + _PAD,
                          "KERUI/BOM.txt": b"bill of materials"}))
     unpack_vendor_zip(root, "p", str(z2))
     assert load_project(root, "p").vendors == ["KERUI"]

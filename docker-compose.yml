@@ -1,0 +1,46 @@
+name: procurement
+
+services:
+  # FastAPI + the compiled React UI on one origin.
+  api:
+    build:
+      context: .
+    image: procurement-review:latest
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      PROCUREMENT_PROJECTS_ROOT: /data/projects
+    volumes:
+      - projects:/data/projects
+    restart: unless-stopped
+
+  # The Streamlit portal — same image, same store, different front end.
+  portal:
+    image: procurement-review:latest
+    depends_on:
+      - api
+    command:
+      - streamlit
+      - run
+      - portal/app.py
+      - --server.port=8501
+      - --server.address=0.0.0.0
+      - --server.headless=true
+    ports:
+      - "8501:8501"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      PROCUREMENT_PROJECTS_ROOT: /data/projects
+    volumes:
+      - projects:/data/projects
+    restart: unless-stopped
+
+volumes:
+  # Authoritative snapshot store. Persisting this across rebuilds is not
+  # optional — projects/<slug>/store/ is the system of record.
+  projects:

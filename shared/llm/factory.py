@@ -7,18 +7,24 @@ from shared.llm.gemini_client import GeminiClient
 from shared.llm.bedrock_client import BedrockClient
 
 
-def get_client() -> LLMClient:
-    provider = os.getenv("LLM_PROVIDER", "mock").lower()
+def get_client(provider: str | None = None) -> LLMClient:
+    """Build the extraction client.
+
+    `provider=None` resolves through LLM_PROVIDER, which is what every
+    environment-driven caller relies on. An explicit name wins, so a request
+    can choose a provider without mutating the process environment.
+    """
+    name = (provider or os.getenv("LLM_PROVIDER", "mock")).lower()
     model = os.getenv("LLM_MODEL")
     kwargs = {"model": model} if model else {}
-    if provider == "mock":
+    if name == "mock":
         return MockLLMClient(response={})
-    if provider == "anthropic":
+    if name == "anthropic":
         return AnthropicClient(**kwargs)
-    if provider == "openai":
+    if name == "openai":
         return OpenAIClient(**kwargs)
-    if provider == "gemini":
+    if name == "gemini":
         return GeminiClient(**kwargs)
-    if provider == "bedrock":
+    if name == "bedrock":
         return BedrockClient(**kwargs)
-    raise ValueError(f"Unknown LLM_PROVIDER: {provider}")
+    raise ValueError(f"Unknown LLM_PROVIDER: {name}")

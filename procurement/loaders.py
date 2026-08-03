@@ -93,31 +93,53 @@ def _pypdf(path: str) -> str:
         return ""
 
 
-def read_pdf_text(path: str, llm_fallback=None, min_chars: int = 200) -> str:
-    """Robust PDF text: pdftotext CLI -> pypdf -> LLM transcription fallback."""
-    text = _pdftotext(path)
+# Below this many characters of readable text, a document is not extracted.
+# Chosen against the live corpus: the five KERUI drawings yield 1-42 chars,
+# and "11 Attachment-4 Applicable Codes and Standards Pending.pdf" yields 168
+# and is a real, if short, document. Illustrative, not load-bearing — but the
+# 1-42 range must fail the guard and 168 must not, so test fixtures standing
+# in for extractable documents carry realistic (>=100 char) bodies rather
+# than pulling this threshold down to fit short synthetic text.
+MIN_EXTRACTABLE_CHARS = 100
+
+
+def read_pdf_text_with_source(path: str, llm_fallback=None,
+                              min_chars: int = 200) -> tuple[str, str]:
+    """Robust PDF text plus the reader that produced it: pdftotext CLI ->
+    pypdf -> LLM transcription fallback."""
+    text, source = _pdftotext(path), "pdftotext"
     if len(text.strip()) < min_chars:
         alt = _pypdf(path)
         if len(alt.strip()) > len(text.strip()):
-            text = alt
+            text, source = alt, "pypdf"
     if len(text.strip()) < min_chars and llm_fallback is not None:
         try:
             fb = llm_fallback(path)
             if fb and fb.strip():
-                return fb
+                return fb, "llm"
         except Exception:
             pass
-    return text
+    return text, source
 
 
-def read_text(path: str, llm_fallback=None) -> str:
+def read_pdf_text(path: str, llm_fallback=None, min_chars: int = 200) -> str:
+    return read_pdf_text_with_source(path, llm_fallback, min_chars)[0]
+
+
+def read_text_with_source(path: str, llm_fallback=None) -> tuple[str, str]:
+    """Text plus the name of the reader that produced it.
+
+    `text_source` has been declared on DocumentRecord since phase 2 and never
+    populated. It is the only way to tell "this datasheet genuinely states
+    nothing" from "we read this scan with the wrong reader".
+    """
     ext = os.path.splitext(path)[1].lower()
     if ext == ".xlsx":
-        return read_xlsx_text(path)
+        return read_xlsx_text(path), "xlsx"
     if ext == ".pdf":
-        return read_pdf_text(path, llm_fallback=llm_fallback)
+        return read_pdf_text_with_source(path, llm_fallback=llm_fallback)
     if ext == ".docx":
-        return read_docx_text(path)
+        return read_docx_text(path), "docx"
     if ext == ".doc":
         # Legacy binary Word, not an OOXML package — nothing here reads it. The
         # raw fallback below would decode it to mojibake and hand that to an
@@ -126,4 +148,8 @@ def read_text(path: str, llm_fallback=None) -> str:
             f"legacy binary .doc is not supported: {path!r}. "
             "Convert it to .docx or .pdf and re-upload.")
     with open(path, "r", encoding="utf-8", errors="ignore") as fh:
-        return fh.read()
+        return fh.read(), "text"
+
+
+def read_text(path: str, llm_fallback=None) -> str:
+    return read_text_with_source(path, llm_fallback=llm_fallback)[0]

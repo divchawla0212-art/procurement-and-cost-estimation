@@ -16,10 +16,17 @@ def _zip(entries):
 def test_run_ingestion_end_to_end(tmp_path):
     create_project(str(tmp_path), "Proj", target_currency="USD")
     z = tmp_path / "v.zip"
-    # .txt quotes so read_text does not attempt PDF parsing; the mock ignores content.
+    # .txt quotes so read_text does not attempt PDF parsing; the mock ignores
+    # content. Padded past MIN_EXTRACTABLE_CHARS so the guard added for the
+    # extraction-coverage work doesn't turn this into a "no readable text"
+    # failure instead of the "ok" extraction this test is about.
+    _pad = (b" This synthetic fixture body is padded with filler prose so its "
+           b"character count clears the pipeline's minimum-extractable-text "
+           b"guard, letting the extraction logic under test run rather than "
+           b"the guard itself.")
     z.write_bytes(_zip({
-        "KERUI/Quotation.txt": b"base price 1000",
-        "ADPOWER/Quotation.txt": b"base price 1000",
+        "KERUI/Quotation.txt": b"base price 1000" + _pad,
+        "ADPOWER/Quotation.txt": b"base price 1000" + _pad,
     }))
     unpack_vendor_zip(str(tmp_path), "proj", str(z))
     client = MockLLMClient(response={"currency": "USD", "base_price": 1000.0,

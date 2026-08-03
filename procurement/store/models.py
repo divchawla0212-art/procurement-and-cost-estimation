@@ -2,6 +2,8 @@ import hashlib
 from typing import Any
 from pydantic import BaseModel
 
+from procurement import units
+
 
 class Override(BaseModel):
     """A human correction. Survives re-extraction; `conflict` is set when a
@@ -33,10 +35,23 @@ class DocumentRecord(BaseModel):
     extractor: str | None = None
     prompt_version: str | None = None
     # Fingerprint of the `auto` requirement vocabulary this document's facts
-    # were extracted under. Part of the datasheet cache key: the vocabulary is
+    # were extracted under. Part of the technical cache key: the vocabulary is
     # an input to the tech_facts_v1 prompt, so a requirement edit that changes
-    # it must re-ask the datasheets exactly once. None for every other class.
+    # it must re-ask the datasheets exactly once. None for every document that
+    # does not reach the technical extractor, by either route.
     vocabulary_sha: str | None = None
+    # A vendor document can feed a *second* extractor when its vendor's
+    # document set leaves the first one insufficient — see
+    # SECONDARY_VENDOR_ROUTE in pipeline.py, where a quotation also feeds the
+    # technical extractor for a vendor no datasheet of whose reaches it. That
+    # pass is cached, succeeds and fails on its own: both passes read the same
+    # bytes but ask different prompts, so one status and one prompt version
+    # cannot describe both. Folding a failed technical pass into
+    # `extraction_status` would evict the good quotation extraction from the
+    # cache and re-ask it, at cost, on every run thereafter.
+    secondary_status: str | None = None          # ok | failed; None: no second route
+    secondary_notes: str | None = None
+    secondary_prompt_version: str | None = None
 
 
 class VendorFacts(BaseModel):
@@ -68,11 +83,25 @@ class Event(BaseModel):
     detail: dict = {}
 
 
-def fact_id_for(doc_id: str, parameter: str) -> str:
-    """Stable across re-extraction: same document + same parameter -> same id.
-    That is what lets a human override on technical[<id>].value survive a
-    re-run, since list order is not stable and index paths are forbidden."""
-    key = f"{doc_id}:{parameter.strip().lower()}"
+def fact_id_for(doc_id: str, parameter: str,
+                value: str | float | None, unit: str | None) -> str:
+    """Stable across re-extraction for a given (document, parameter, value, unit).
+
+    All four participate, for the reason `deviation_id_for` gives: if a later
+    extraction rewords the value the id shifts and an override orphans, which is
+    strictly better than an override silently retargeting a different reading of
+    the same parameter. A datasheet that states one parameter twice with
+    different numbers is stating two facts, and they must be addressable apart.
+
+    The value is normalised through `units.pure_number` so that 525.0 and "525"
+    are one id. The unit is folded to a stripped, lowercased spelling but never
+    converted: "525 kW" and "525000 W" are two readings as printed, and whether
+    they mean one quantity is the compliance layer's question, not the store's.
+    """
+    number = units.pure_number(value)
+    v = repr(number) if number is not None else str(value).strip().lower()
+    u = (unit or "").strip().lower()
+    key = f"{doc_id}:{parameter.strip().lower()}:{v}:{u}"
     return "f-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:10]
 
 
@@ -132,8 +161,8 @@ class RequirementRecord(BaseModel):
     clause_ref: str
     text: str
     category: str = "technical"      # technical|commercial|documentation|testing|codes
-    checkability: str = "judgement"  # auto|judgement
-    parameter: str | None = None     # auto only
+    checkability: str = "judgement"  # auto|stated|judgement
+    parameter: str | None = None     # auto|stated
     # >= | <= | == | in (a set of permitted values) | between (a stated range,
     # whose value is exactly two bounds)
     operator: str | None = None
@@ -177,5 +206,12 @@ class ComplianceResult(BaseModel):
     verdict: str                     # pass|fail|deviation|unanswered|review
     fact_id: str | None = None
     doc_id: str | None = None
+    # Every fact the cell was computed from, including the one named by
+    # fact_id. Empty when the deciding reading has exactly one member;
+    # non-empty whenever more than one fact contributed - whether from one
+    # reading with equivalent restatements (e.g. 700 kW and 700000 W) or from
+    # a genuine multiplicity that escalated to `review`. Defaults to [] so
+    # every snapshot written before this field existed still validates.
+    candidate_fact_ids: list[str] = []
     rationale: str = ""
     evaluated_at: str
