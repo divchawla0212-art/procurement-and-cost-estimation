@@ -47,9 +47,9 @@ export function ExtractionStatus(props: ExtractionStatusProps): JSX.Element {
       <PageHeader
         eyebrow="Extraction"
         title={props.projectName}
-        sub={`${totals.extracted ?? 0} of ${totals.documents ?? 0} documents read, ${
-          totals.facts ?? 0
-        } technical facts, ${totals.failed ?? 0} could not be read${
+        sub={`${totals.extracted} of ${totals.documents} documents read, ${
+          totals.facts
+        } technical facts, ${totals.failed} could not be read${
           totals.secondary_failed ? `, ${totals.secondary_failed} second pass failed` : ''
         }.`}
       />
@@ -85,13 +85,17 @@ function VendorPanel({ vendor }: { vendor: VendorExtraction }): JSX.Element {
         <p className="warn">No commercial terms were extracted for this vendor.</p>
       )}
       {vendor.secondary_failed > 0 && (
-        // a document can be read twice; this is the case a status of `ok`
-        // alone would hide — see the "second pass" column below for which
-        // file and its stored reason.
+        // a document can be read twice; this counts the second read's
+        // outcome only. coverage.py increments this unconditionally on the
+        // primary status — run_secondary does not depend on it, so the
+        // first pass may have failed too (in fact that is the likelier
+        // case: both passes hit the same provider on the same text). Do not
+        // claim the first pass succeeded — see the row's own Status column
+        // and the "second pass" column for what actually happened to it.
         <p className="warn">
           {vendor.secondary_failed} document
-          {vendor.secondary_failed === 1 ? '' : 's'} read successfully on the
-          first pass but failed the second, technical-extraction pass.
+          {vendor.secondary_failed === 1 ? '' : 's'} failed a second,
+          technical-extraction pass.
         </p>
       )}
 
@@ -128,7 +132,12 @@ function DocumentRow({ doc }: { doc: DocumentStatus }): JSX.Element {
     <tr>
       <td>
         {doc.filename}
-        {doc.is_quotation && <span className="vpill">quotation</span>}
+        {/* On the Dashboard, adjacent `.vpill`s are spaced by the flex
+            `.vendors` row's own `gap` — there is no such container here, so
+            this cell needs its own explicit space between the filename text
+            node and the pill, or they run together unstyled-looking as
+            "...pdfquotation". */}
+        {doc.is_quotation && <>{' '}<span className="vpill">quotation</span></>}
         {doc.superseded_by && (
           <p className="muted mono">superseded by {doc.superseded_by}</p>
         )}

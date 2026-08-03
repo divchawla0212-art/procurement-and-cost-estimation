@@ -520,7 +520,13 @@ td.vc-review { background: var(--review-soft); }
 .pcard .title { font-family: var(--font-display); font-size: 1.1rem; font-weight: 600; letter-spacing: -0.01em; }
 .pcard .meta { font-family: var(--font-mono); font-size: 0.74rem; color: var(--muted); display: flex; gap: 0.9rem; flex-wrap: wrap; }
 .pcard .vendors { display: flex; flex-wrap: wrap; gap: 0.35rem; }
-.pcard .vpill { font-family: var(--font-mono); font-size: 0.72rem; background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 0.15rem 0.55rem; color: var(--text); }
+
+/* .vpill is shared beyond the Dashboard card (e.g. the Extraction status
+   table's "quotation" marker), so the rule lives here unscoped rather than
+   under .pcard. It carries no margin of its own: on the Dashboard, spacing
+   between pills comes from `.pcard .vendors`'s flex `gap`; elsewhere, the
+   caller supplies its own whitespace between the pill and its neighbor. */
+.vpill { font-family: var(--font-mono); font-size: 0.72rem; background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 0.15rem 0.55rem; color: var(--text); }
 
 /* ----------------------------------------------------- empty/loading/error */
 

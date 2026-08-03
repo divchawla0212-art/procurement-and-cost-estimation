@@ -91,15 +91,32 @@ export interface VendorExtraction {
   fact_count: number
   has_commercial: boolean
   unanswered: number
-  // Documents whose primary pass is `ok` but whose secondary pass is
-  // `failed` — counted separately from `failed` because the primary
-  // extraction really did succeed.
+  // Count of documents whose *second* extraction pass failed. Not evidence
+  // the first pass succeeded: coverage.py increments this unconditionally on
+  // the primary status, because run_secondary does not depend on it — a
+  // document can fail both passes, and often will, since both hit the same
+  // provider on the same text.
+  secondary_failed: number
+}
+
+// Mirrors the `totals` dict procurement/coverage.py:163-172 actually emits.
+// Kept as a named interface (not Record<string, number>) so a renamed or
+// dropped key becomes a build error here rather than silently rendering as
+// a measured-looking zero.
+export interface ExtractionTotals {
+  vendors: number
+  documents: number
+  extracted: number
+  failed: number
+  skipped: number
+  facts: number
+  unanswered: number
   secondary_failed: number
 }
 
 export interface ExtractionStatus {
   vendors: VendorExtraction[]
-  totals: Record<string, number>
+  totals: ExtractionTotals
 }
 
 // the /summary roll-up: the same record minus the document list
