@@ -475,6 +475,67 @@ def test_a_failed_secondary_pass_keeps_the_primary_result_and_records_why(tmp_pa
     assert snapshots.load_facts(root, "p", "AESL").technical
 
 
+class TalkativeBidFailingOnFacts(FailingOnSchema):
+    """A quotation extraction that succeeds *and* records a note, while the
+    technical pass fails. `VendorBid.notes` is the vendor's own commercial
+    prose - AESL's real record carries a payment-terms paragraph there - and
+    the pipeline copies it onto `DocumentRecord.notes`, so this is the shape
+    where a secondary failure has something it must not overwrite."""
+
+    def __init__(self):
+        super().__init__("facts")
+
+    def classify_structure(self, prompt, output_schema, context_text, images=None):
+        response = super().classify_structure(prompt, output_schema,
+                                              context_text, images=images)
+        if "currency" in output_schema.model_fields:
+            response = dict(response, notes="Prices exclude VAT.")
+        return response
+
+
+def test_a_failed_secondary_records_its_reason_in_notes_beside_the_primarys(tmp_path):
+    # `notes` is the field every reader already knows about - the document
+    # panel renders it only for a document whose status is not `ok`, and a
+    # dual-routed document stays `ok` on a secondary failure, so a reason
+    # recorded solely on `secondary_notes` is invisible to every existing
+    # reader while a whole document went unread.
+    root = _quotation_only_project(tmp_path)
+    run_ingestion(root, "p", TalkativeBidFailingOnFacts())
+
+    doc = _only_doc(root)
+    assert doc.extraction_status == "ok"
+    assert doc.secondary_status == "failed"
+    # the secondary's reason is named
+    assert "provider unavailable" in doc.notes
+    assert "datasheet" in doc.notes
+    # and the primary's own note survives it
+    assert "Prices exclude VAT." in doc.notes
+    # the structured copy stays beside it
+    assert "provider unavailable" in doc.secondary_notes
+
+
+def test_a_permanently_failing_secondary_does_not_grow_the_note(tmp_path):
+    # The merged note is rebuilt from the primary's half each run, never
+    # appended to: the primary is a cache hit from run 2 on, so a note that
+    # were appended to would gain one copy of the reason per run, forever.
+    root = _quotation_only_project(tmp_path)
+    run_ingestion(root, "p", TalkativeBidFailingOnFacts())
+    first = _only_doc(root).notes
+    run_ingestion(root, "p", TalkativeBidFailingOnFacts())
+    second = _only_doc(root).notes
+    assert second == first
+    assert second.count("provider unavailable") == 1
+    assert second.count("Prices exclude VAT.") == 1
+
+    # and once the pass succeeds, the stale reason is gone rather than stuck
+    # to the record forever
+    run_ingestion(root, "p", RoutingClient())
+    doc = _only_doc(root)
+    assert doc.secondary_status == "ok"
+    assert doc.notes == "Prices exclude VAT."
+    assert snapshots.load_facts(root, "p", "AESL").technical
+
+
 def test_a_quotation_below_the_text_guard_gets_no_secondary_route(tmp_path):
     # Task 1's guard fires ahead of every extraction, primary or secondary: an
     # empty string is never handed to a prompt, and the document is `failed`

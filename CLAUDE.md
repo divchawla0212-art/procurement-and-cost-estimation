@@ -31,8 +31,8 @@ There are therefore **two** baselines, and both are correct:
 
 | where | baseline |
 |---|---|
-| a developer workstation, `.env`, `data/` and an ingested multi-vendor `projects/` present | **761 passed, 3 skipped, 1 failed** |
-| CI, and any clean checkout | **755 passed, 10 skipped, 0 failed** |
+| a developer workstation, `.env`, `data/` and an ingested multi-vendor `projects/` present | **763 passed, 3 skipped, 1 failed** |
+| CI, and any clean checkout | **757 passed, 10 skipped, 0 failed** |
 
 Anything else is a real regression.
 
@@ -45,8 +45,8 @@ a fresh checkout does not.
 
 So the CI row is the workstation row with the portal failure turned into a
 pass, the four corpus-coverage passes turned into skips, and the three `data/`
-passes turned into skips — `755 = 761 + 1 - 4 - 3`, `10 = 3 + 4 + 3`,
-`0 = 1 - 1`; 765 tests either way. When the counts move, measure the
+passes turned into skips — `757 = 763 + 1 - 4 - 3`, `10 = 3 + 4 + 3`,
+`0 = 1 - 1`; 767 tests either way. When the counts move, measure the
 workstation row and derive the CI row from it; editing the two rows
 independently is how they drift apart.
 

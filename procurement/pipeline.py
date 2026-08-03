@@ -84,6 +84,34 @@ RFQ_PROMPT_VERSION_BY_CLASS = {
 }
 
 
+# A failed secondary pass records its reason in `DocumentRecord.notes` like
+# every other failure path, because that is the field every reader already
+# knows about — `secondary_notes` beside it is the structured copy, and nothing
+# outside this module reads it. Without this a document sits `ok` with a clean
+# note while a 220k-character proposal went unread at the token ceiling.
+#
+# `notes` is not part of the cache key (content sha + prompt_version +
+# extraction_status + vocabulary_sha), so writing to it costs no re-extraction.
+#
+# The merged value is *rebuilt* from the primary's half every run rather than
+# appended to: a permanently failing secondary pass would otherwise grow the
+# note without bound, one copy per run. `_primary_note` recovers that half from
+# a stored record by splitting on this marker, which is phrased to be something
+# no extractor and no vendor's own commercial prose would write — `notes` on a
+# successful quotation carries the vendor's terms, not an error.
+_SECONDARY_NOTE_MARKER = "secondary pass failed ("
+
+
+def _primary_note(notes: str | None) -> str | None:
+    """The primary extractor's half of a possibly-merged `notes` value."""
+    return (notes or "").split(_SECONDARY_NOTE_MARKER)[0].rstrip("; ") or None
+
+
+def _with_secondary_note(primary: str | None, route: str, reason: str | None) -> str:
+    tail = f"{_SECONDARY_NOTE_MARKER}{route}): {reason}"
+    return f"{primary}; {tail}" if primary else tail
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -655,7 +683,10 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
                 # upload lost its `supersedes` pointer. Cache semantics are
                 # unchanged: nothing here triggers an extraction.
                 doc.extraction_status = prior.extraction_status
-                doc.notes = prior.notes
+                # the primary's half only: a secondary failure recorded on a
+                # previous run is this run's to restate or drop, and a route
+                # since withdrawn must not leave its old reason behind
+                doc.notes = _primary_note(prior.notes)
                 doc.extracted_at = prior.extracted_at
                 doc.extractor = prior.extractor
                 doc.prompt_version = prior.prompt_version
@@ -723,7 +754,7 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
                 # record — and the facts it stored — carry forward untouched.
                 status = prior.extraction_status
                 doc.extraction_status = prior.extraction_status
-                doc.notes = prior.notes
+                doc.notes = _primary_note(prior.notes)      # as above
                 doc.extracted_at = prior.extracted_at
                 doc.extractor = prior.extractor
                 doc.prompt_version = prior.prompt_version
@@ -782,6 +813,11 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
                 doc.secondary_prompt_version = secondary_version
                 doc.secondary_status = secondary_status
                 doc.secondary_notes = secondary_notes
+                if secondary_status != "ok":
+                    # additive: the primary's own note is the vendor's terms on
+                    # a successful quotation, and must survive
+                    doc.notes = _with_secondary_note(doc.notes, secondary,
+                                                     secondary_notes)
                 if secondary_status == "ok":
                     technical = [f for f in technical if f.get("doc_id") != doc.doc_id]
                     technical += [f.model_dump() for f in facts]
