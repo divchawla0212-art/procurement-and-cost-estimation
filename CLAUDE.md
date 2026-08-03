@@ -31,8 +31,8 @@ There are therefore **two** baselines, and both are correct:
 
 | where | baseline |
 |---|---|
-| a developer workstation, `.env`, `data/` and an ingested multi-vendor `projects/` present | **763 passed, 3 skipped, 1 failed** |
-| CI, and any clean checkout | **757 passed, 10 skipped, 0 failed** |
+| a developer workstation, `.env`, `data/` and an ingested multi-vendor `projects/` present | **768 passed, 3 skipped, 1 failed** |
+| CI, and any clean checkout | **762 passed, 10 skipped, 0 failed** |
 
 Anything else is a real regression.
 
@@ -45,20 +45,24 @@ a fresh checkout does not.
 
 So the CI row is the workstation row with the portal failure turned into a
 pass, the four corpus-coverage passes turned into skips, and the three `data/`
-passes turned into skips — `757 = 763 + 1 - 4 - 3`, `10 = 3 + 4 + 3`,
-`0 = 1 - 1`; 767 tests either way. When the counts move, measure the
+passes turned into skips — `762 = 768 + 1 - 4 - 3`, `10 = 3 + 4 + 3`,
+`0 = 1 - 1`; 772 tests either way. When the counts move, measure the
 workstation row and derive the CI row from it; editing the two rows
 independently is how they drift apart.
 
 The workstation row also depends on what your untracked `projects/` holds:
 `test_real_corpus_coverage.py` asserts against the newest store there with more
 than one vendor, so it is a coverage instrument for the live corpus, not a
-fixture-backed unit test. Its no-vendor-has-zero-technical-facts row needs a
-store ingested with `LLM_MAX_TOKENS` raised above the 8192 default: a
-quotation-only vendor's 220k-character proposal makes the technical extractor
-overrun that ceiling, `check_truncated` records the failure honestly, and the
-vendor lands back at zero facts. Chunk the extractor or raise the ceiling —
-never lower the floor.
+fixture-backed unit test. **It holds at shipped defaults** — measured on
+`projects/phase4c-shipped-defaults`, ingested with no `LLM_MAX_TOKENS` and no
+chunk-budget override. Both extractors that read a whole document split their
+input on line boundaries (`procurement/chunking.py`, budgeted by
+`TECH_CHUNK_CHARS` and `REQUIREMENTS_CHUNK_CHARS`) and merge all-or-nothing, so
+a quotation-only vendor's 220k-character proposal no longer overruns the 8192
+output ceiling and lands its vendor back at zero facts. If a floor goes red,
+chunk further or fix the routing — never lower the floor, and never green it
+with an environment override, which makes the instrument assert something
+weaker than the sentence it reads as.
 
 CI runs that same command on every pull request into `main`, via
 [`.github/workflows/tests.yml`](.github/workflows/tests.yml) — Ubuntu, Python

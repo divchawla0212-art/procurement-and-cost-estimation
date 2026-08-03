@@ -14,6 +14,10 @@ import re
 from pathlib import Path
 from pydantic import BaseModel
 
+# The splitting rule now serves the technical extractor too, so it lives in one
+# place. Kept under this module's original private name because the rule is an
+# implementation detail here, not part of this module's interface.
+from procurement.chunking import chunk_on_lines as _chunks
 from procurement.loaders import read_text
 from procurement.store.models import RequirementRecord, req_id_for
 
@@ -69,28 +73,6 @@ class _Requirement(BaseModel):
 
 class _RequirementList(BaseModel):
     requirements: list[_Requirement] = []
-
-
-def _chunks(text: str, budget: int) -> list[str]:
-    """Split on line boundaries, in order, losslessly.
-
-    Never mid-line: read_xlsx_text emits one spreadsheet row per line, and a
-    value torn from its unit invites the model to pair the wrong number with
-    the wrong unit. No overlap: overlap duplicates clauses.
-    """
-    out: list[str] = []
-    current: list[str] = []
-    size = 0
-    for line in text.splitlines():
-        cost = len(line) + 1
-        if current and size + cost > budget:
-            out.append("\n".join(current))
-            current, size = [], 0
-        current.append(line)
-        size += cost
-    if current:
-        out.append("\n".join(current))
-    return out or [""]
 
 
 def extract_requirements(doc_id: str, path: str, client, pdf_fallback=None,
