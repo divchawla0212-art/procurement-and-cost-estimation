@@ -17,6 +17,7 @@ export interface MatrixCell {
   rationale: string
   fact_id: string | null
   doc_id: string | null
+  candidate_fact_ids: string[]
 }
 
 export interface MatrixRow {

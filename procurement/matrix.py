@@ -36,6 +36,9 @@ class MatrixCell(BaseModel):
     rationale: str = ""
     fact_id: str | None = None
     doc_id: str | None = None
+    # Every reading the verdict was computed from. More than one means the cell
+    # was not auto-decided; the rationale names them in prose.
+    candidate_fact_ids: list[str] = []
 
 
 class MatrixRow(BaseModel):
@@ -96,7 +99,8 @@ def build_matrix(root: str, slug: str) -> ComplianceMatrix:
                     vendor=vendor, verdict=result.verdict,
                     group=GROUPS.get(result.verdict, "needs_human"),
                     rationale=result.rationale, fact_id=result.fact_id,
-                    doc_id=result.doc_id)
+                    doc_id=result.doc_id,
+                    candidate_fact_ids=result.candidate_fact_ids)
             if requirement.checkability == "auto":
                 _tally(coverage, cells[vendor])
             elif requirement.checkability == "stated":

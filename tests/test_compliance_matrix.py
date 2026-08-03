@@ -31,10 +31,12 @@ def _requirement(clause, *, auto=True, withdrawn=False, parameter="h2s",
         source_doc_id=_DOC, withdrawn=withdrawn)
 
 
-def _cell(clause, vendor, verdict, *, fact_id=None, rationale="because"):
+def _cell(clause, vendor, verdict, *, fact_id=None, rationale="because",
+         candidate_fact_ids=()):
     return ComplianceResult(
         req_id=req_id_for(_DOC, clause), vendor=vendor, verdict=verdict,
         fact_id=fact_id, doc_id="d9" if fact_id else None,
+        candidate_fact_ids=list(candidate_fact_ids),
         rationale=rationale, evaluated_at=NOW)
 
 
@@ -148,6 +150,31 @@ def test_an_empty_store_is_an_empty_matrix_not_a_crash(tmp_path):
     matrix = build_matrix(root, "p")
     assert (matrix.rows, matrix.vendors) == ([], [])
     assert matrix.coverage.auto_cells == 0
+
+
+def test_a_multi_reading_cell_carries_its_candidates_into_the_matrix(tmp_path):
+    # ADPOWER states continuous_rating twice; the two readings that made the
+    # verdict `review` must survive into the matrix cell, not just the prose.
+    requirements = [_requirement("1.1", parameter="continuous_rating")]
+    cells = [_cell("1.1", "ADPOWER", "review",
+                   candidate_fact_ids=["f-a", "f-b"])]
+    matrix = build_matrix(_store(tmp_path, requirements, cells,
+                                 vendors=("ADPOWER",)), "p")
+
+    row = next(r for r in matrix.rows if r.parameter == "continuous_rating")
+    cell = row.cells["ADPOWER"]
+    assert cell.verdict == "review"
+    assert len(cell.candidate_fact_ids) == 2
+
+
+def test_a_single_reading_cell_carries_an_empty_candidate_list(tmp_path):
+    requirements = [_requirement("1.1", parameter="continuous_rating")]
+    cells = [_cell("1.1", "ADPOWER", "pass", fact_id="f-a")]
+    matrix = build_matrix(_store(tmp_path, requirements, cells,
+                                 vendors=("ADPOWER",)), "p")
+
+    row = next(r for r in matrix.rows if r.parameter == "continuous_rating")
+    assert row.cells["ADPOWER"].candidate_fact_ids == []
 
 
 def test_build_matrix_never_writes(tmp_path):
