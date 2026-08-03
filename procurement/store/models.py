@@ -206,7 +206,7 @@ class ComplianceResult(BaseModel):
     verdict: str                     # pass|fail|deviation|unanswered|review
     fact_id: str | None = None
     doc_id: str | None = None
-    # Every reading the cell was computed from, including the one named by
+    # Every fact the cell was computed from, including the one named by
     # fact_id. Empty when the deciding reading has exactly one member;
     # non-empty whenever more than one fact contributed - whether from one
     # reading with equivalent restatements (e.g. 700 kW and 700000 W) or from

@@ -255,21 +255,56 @@ single-reading path proven byte-identical to today's.
 
 ## 10. Expected, measured impact
 
+Re-measured on Task 6, at the branch's final tip (098742e plus Task 6's own
+changes), against every multi-vendor store under `projects/` — not just the two
+this table originally cited. Each store's `evaluate()` was run twice per
+`(requirement, vendor)` cell straight from the store's own `requirements.json`
+and each vendor's `facts.json`: once with the shipped evaluator, and once with
+the pre-plan evaluator as it stood at commit `fd9edba` (the plan commit, before
+Task 1 touched `fact_id_for` and before Tasks 2/3 introduced `_readings` and
+grouping) — a literal `next(...)`-over-an-unkeyed-list evaluator, reconstructed
+by checking out that file rather than estimated. The two are diffable because
+both read the same `RequirementRecord`/fact dicts and differ only in the
+function body. The earlier figures in this table (31/664 and 33/740, later
+41 and 36 per the ledger) were measured at different points in the same
+sequence of fixes and are superseded by this run; this table is not additive
+with them.
+
 Cells whose verdict changes, computed against the live stores:
 
 | store | cells | verdicts that change | currently `pass` | currently `fail` | currently `unanswered` |
 |---|---|---|---|---|---|
 | `coverage-floor-t7` | 664 | 31 | 29 | 1 | 1 |
-| `phase4b-acceptance` | 740 | 33 | 30 | 2 | 1 |
+| `gas-08` | 0 | 0 | 0 | 0 | 0 |
+| `gas-1` | 291 | 9 | 8 | 0 | 1 |
+| `gas-11` | 300 | 4 | 3 | 1 | 0 |
+| `gas-6` | 252 | 9 | 8 | 1 | 0 |
+| `phase4-acceptance` | 604 | 37 | 33 | 2 | 2 |
+| `phase4b-acceptance` | 740 | 38 | 35 | 2 | 1 |
+| `phase4c-shipped-defaults` | 572 | 42 | 36 | 3 | 3 |
+| **total** | **3423** | **170** | **152** | **10** | **8** |
+
+`gas-08` holds no ingested requirements, so it contributes zero cells; it is
+listed for transparency rather than omitted. Every remaining multi-vendor store
+under `projects/` at measurement time is represented. In every store and in
+every cell, the change is always *into* `review` — never into `pass` or `fail`
+— matching the direction the ledger recorded at every earlier measurement of
+this same code.
 
 A cell moving off `unanswered` is the one direction that *gains* information: the
 comparison was refused (`units.Unconvertible`) against a single reading, and the
 cell will now name every reading a human could finish the check with.
 
-Roughly 4.5% of the matrix, and about 18% of passes. Cells move from `matched`
-into `needs_human` in both the portal and the web matrix. **This is the
-correction, not a regression** — those cells were decided on print order — but it
-is a number a reviewer watches, so it is recorded here as expected.
+170/3423 = 4.97% of the matrix, and 152/795 = 19.12% of the cells the pre-plan
+evaluator would have called `pass`. Cells move from `matched` into `needs_human`
+in both the portal and the web matrix. **This is the correction, not a
+regression** — those cells were decided on print order — but it is a number a
+reviewer watches, so it is recorded here as expected.
+
+Reproduce with `python measure_impact.py` from a scratch copy holding
+`old_compliance.py` (checked out from `fd9edba`) beside the current
+`procurement/` package — the script this measurement used is not checked in,
+per the plan's own scratch-work convention.
 
 The four live-corpus floors are unaffected by construction: they assert on
 extraction and checkability (every vendor above zero facts, every document

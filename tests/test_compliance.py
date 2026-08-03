@@ -366,6 +366,21 @@ def test_a_refusal_on_a_later_reading_is_not_hidden_by_the_first():
     assert "f-b" in r.candidate_fact_ids
 
 
+def test_a_refusal_in_a_middle_reading_is_not_hidden_by_its_neighbours():
+    # The two-reading row above pins `groups[:1]` but survives a sweep that
+    # checked only the first and last reading. Three readings with the refusal
+    # in the middle is the shape that pins the sweep to *every* group - the
+    # invariant Task 4 owns, on the tier that is 93 of 143 requirements.
+    req = _stated(parameter="anchor_bolt", value=None)
+    facts = [_stated_fact("anchor_bolt", "Supplied", fact_id="f-a"),
+             _stated_fact("anchor_bolt", "N/A", fact_id="f-b"),
+             _stated_fact("anchor_bolt", "M20 galvanised", fact_id="f-c")]
+    r = evaluate(req, facts, [], "ADPOWER", "now")
+    assert r.verdict == "review"
+    assert r.fact_id == "f-b"                         # the refusing reading
+    assert set(r.candidate_fact_ids) == {"f-a", "f-b", "f-c"}
+
+
 def test_presence_only_with_two_clean_readings_still_passes():
     # An enumeration is an answer, at length — not a conflict.
     req = _stated(parameter="applicable_standard", value=None)
@@ -421,6 +436,28 @@ def test_an_internal_space_does_not_split_a_reading_in_two():
     facts = [_fact("ip_rating", "IP 55", None),
              _fact("ip_rating", "IP55", None)]
     assert len(_readings(facts, "ip_rating")) == 1
+
+
+def test_a_non_breaking_space_or_tab_does_not_split_a_reading_either():
+    # `pdftotext` and pypdf both emit U+00A0 and tabs inside values, so an
+    # ASCII-space-only squeeze left the same formatting difference splitting
+    # one reading in two - and a spurious second reading escalates a decidable
+    # cell to `review`. Built with chr(): an invisible literal in the source
+    # is a test nobody can review by reading it.
+    nbsp, tab = chr(0x00A0), chr(0x09)   # U+00A0 no-break space, tab
+    facts = [_fact("ip_rating", "IP 55", None),
+             _fact("ip_rating", f"IP{nbsp}55", None),
+             _fact("ip_rating", f"IP{tab}55", None)]
+    assert len(_readings(facts, "ip_rating")) == 1
+
+
+def test_whitespace_folding_never_merges_two_different_values():
+    # The squeeze is formatting tolerance, not value tolerance: it removes
+    # whitespace, so it can only ever merge strings that are already equal
+    # once whitespace is gone. Two genuinely different ratings stay apart.
+    facts = [_fact("ip_rating", "IP 55", None),
+             _fact("ip_rating", "IP 66", None)]
+    assert len(_readings(facts, "ip_rating")) == 2
 
 
 def test_degc_and_the_single_glyph_celsius_sign_are_one_reading():

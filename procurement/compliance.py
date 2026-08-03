@@ -20,6 +20,7 @@ from procurement.store.models import ComplianceResult, RequirementSet
 VERDICTS = ("pass", "fail", "deviation", "unanswered", "review")
 
 _NOISE = re.compile(r"[^a-z0-9]+")
+_WHITESPACE = re.compile(r"\s+")
 _MAX_CANDIDATES = 5
 
 
@@ -135,10 +136,13 @@ def _reading_key(value, unit, parameter: str | None):
         except units.Unconvertible:
             pass
     # Squeeze internal whitespace too, the same idiom units._fold uses for
-    # unit strings, so "IP 55" and "IP55" fold to one key. This is formatting
-    # tolerance only: it does not touch punctuation, so "±10" and "±10%" -
-    # different quantities in some parameter families - stay apart.
-    return ("txt", str(value).strip().lower().replace(" ", ""))
+    # unit strings, so "IP 55" and "IP55" fold to one key. ALL whitespace, not
+    # just the ASCII space: `pdftotext` and pypdf both emit NBSP (U+00A0) and
+    # tabs inside values, so a space-only squeeze leaves the same formatting
+    # difference splitting one reading into two. This is formatting tolerance
+    # only: it does not touch punctuation, so "±10" and "±10%" - different
+    # quantities in some parameter families - stay apart.
+    return ("txt", _WHITESPACE.sub("", str(value).lower()))
 
 
 def _readings(facts: list[dict], parameter: str | None) -> list[list[dict]]:
@@ -241,7 +245,10 @@ def evaluate(requirement, facts: list[dict], deviations: list[dict],
                                       f"accepting", group[0], flat)
                 # No negations in any group, proceed to pass
             else:
-                # Value-matching: check only first group for negations
+                # Value-matching: a required value with >1 distinct reading
+                # already returned `review` above, so there is exactly one
+                # group here and `fact` is its only member — nothing is being
+                # skipped by checking only it.
                 negations = _negations_in(requirement.value, got)
                 if negations:
                     return result("review",

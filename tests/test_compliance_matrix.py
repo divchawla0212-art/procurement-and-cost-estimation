@@ -32,7 +32,7 @@ def _requirement(clause, *, auto=True, withdrawn=False, parameter="h2s",
 
 
 def _cell(clause, vendor, verdict, *, fact_id=None, rationale="because",
-         candidate_fact_ids=()):
+          candidate_fact_ids=()):
     return ComplianceResult(
         req_id=req_id_for(_DOC, clause), vendor=vendor, verdict=verdict,
         fact_id=fact_id, doc_id="d9" if fact_id else None,

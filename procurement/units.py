@@ -63,7 +63,7 @@ _CANONICAL = {"power": "kw", "apparent_power": "kva", "pressure": "kpa",
 
 _ALIASES = {
     "°c": "degc", "℃": "degc", "degc": "degc", "deg c": "degc", "celsius": "degc", "c": "degc",
-    "°f": "degf", "degf": "degf", "deg f": "degf", "fahrenheit": "degf", "f": "degf",
+    "°f": "degf", "℉": "degf", "degf": "degf", "deg f": "degf", "fahrenheit": "degf", "f": "degf",
     "k": "k", "kelvin": "k",
     "mg/nm³": "mg/nm3", "mg/nm^3": "mg/nm3", "mg·nm⁻³": "mg/nm3",
     "mg/nm3": "mg/nm3", "mgnm3": "mg/nm3", "mg/m3": "mg/nm3",
