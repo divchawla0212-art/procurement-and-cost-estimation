@@ -113,13 +113,11 @@ def extract_tech_facts(doc_id: str, path: str, client, pdf_fallback=None,
         seen.add(key)
 
         out.append(FactRecord(
-            # Not unique when one parameter is stated twice: fact_id_for keys
-            # on (doc_id, parameter), so the two ADPOWER ratings above share an
-            # id. That collision predates chunking and is not this extractor's
-            # to fix - the id is the override/verdict address every stored
-            # snapshot already uses, and widening the key (as deviation_id_for
-            # does with its statement) would shift every id in every store.
-            fact_id=fact_id_for(doc_id, name),
+            # Keyed on the whole reading, so the two ADPOWER ratings above are
+            # separately addressable by an override and separately visible to
+            # compliance.py. See docs/superpowers/specs/
+            # 2026-08-03-fact-identity-and-evidence-selection-design.md.
+            fact_id=fact_id_for(doc_id, name, fact.value, fact.unit),
             parameter=name,
             value=fact.value,
             unit=fact.unit,

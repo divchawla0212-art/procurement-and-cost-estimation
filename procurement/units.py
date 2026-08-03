@@ -144,7 +144,7 @@ def to_number(value) -> float | None:
         return None
 
 
-def _pure_number(value) -> float | None:
+def pure_number(value) -> float | None:
     """The value only if it is *entirely* a number — "60" but not "ISO 8528".
 
     `to_number` reads a leading quantity out of prose, which is right for a
@@ -282,12 +282,12 @@ def compare(operator: str, req_value, req_unit, fact_value, fact_unit,
     if operator == "in":
         allowed = _members(req_value)
         got = str(fact_value).strip().lower()
-        numeric = _pure_number(fact_value)
+        numeric = pure_number(fact_value)
         if numeric is not None:
             # numeric membership only between values that are wholly numbers;
             # a labelled member ("ISO 8528") is matched as a label, below
             if any(n is not None and math.isclose(n, numeric, rel_tol=1e-9)
-                   for n in (_pure_number(a) for a in allowed)):
+                   for n in (pure_number(a) for a in allowed)):
                 return True, f"{fact_value} is one of {allowed}"
         return got in allowed, f"{fact_value} against allowed {allowed}"
 

@@ -234,9 +234,11 @@ def test_a_parameter_stated_twice_with_different_values_keeps_both(tmp_path):
         ("continuous_rating", 700.0, "kW"),
         ("ambient_design_temp", 58.0, "C"),
     ]
-    # and both readings of one parameter still address as one fact_id, which is
-    # the pre-existing collision this change makes visible rather than creates
-    assert facts[0].fact_id == facts[2].fact_id == fact_id_for("d1", "continuous_rating")
+    # and each reading of the parameter now addresses its own fact_id, since the
+    # whole reading participates in the key rather than just the parameter name
+    assert facts[0].fact_id == fact_id_for("d1", "continuous_rating", 525.0, "kW")
+    assert facts[2].fact_id == fact_id_for("d1", "continuous_rating", 700.0, "kW")
+    assert facts[0].fact_id != facts[2].fact_id
 
 
 def test_a_document_under_the_budget_is_asked_exactly_once(tmp_path):
@@ -249,7 +251,7 @@ def test_a_document_under_the_budget_is_asked_exactly_once(tmp_path):
 
 
 def test_fact_ids_across_a_chunk_boundary_are_what_one_call_would_produce(tmp_path):
-    # fact_id_for keys on (doc_id, parameter) and nothing ordinal, so which
+    # fact_id_for keys on the whole reading and nothing ordinal, so which
     # chunk a fact arrives in must not touch its id. If it did, every stored
     # override and every compliance verdict keyed on that id would orphan the
     # first time the budget was retuned.
@@ -265,11 +267,22 @@ def test_fact_ids_across_a_chunk_boundary_are_what_one_call_would_produce(tmp_pa
     assert len(one_call.calls) == 1
 
     assert [f.fact_id for f in split] == [f.fact_id for f in whole]
-    assert [f.fact_id for f in split] == [fact_id_for("d1", "continuous_rating"),
-                                          fact_id_for("d1", "h2s_tolerance")]
+    assert [f.fact_id for f in split] == [
+        fact_id_for("d1", "continuous_rating", 550.0, "kW"),
+        fact_id_for("d1", "h2s_tolerance", 50.0, "ppm")]
 
     # and the same fact arriving in the *other* chunk keeps its id, which is
     # the assertion a per-chunk-seeded id would fail
     swapped = MockLLMClient([{"facts": [second]}, {"facts": [first]}])
     other, _status, _notes = extract_tech_facts("d1", _rows_txt(tmp_path, 2), swapped)
     assert {f.fact_id for f in other} == {f.fact_id for f in split}
+
+
+def test_two_readings_of_one_parameter_get_distinct_ids(tmp_path):
+    client = MockLLMClient(response={"facts": [
+        {"parameter": "continuous_rating", "value": "525", "unit": "kW"},
+        {"parameter": "continuous_rating", "value": "700", "unit": "kW"},
+    ]})
+    facts, status, _notes = extract_tech_facts("d1", _txt(tmp_path), client)
+    assert status == "ok"
+    assert len({f.fact_id for f in facts}) == 2

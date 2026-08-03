@@ -2,6 +2,8 @@ import hashlib
 from typing import Any
 from pydantic import BaseModel
 
+from procurement import units
+
 
 class Override(BaseModel):
     """A human correction. Survives re-extraction; `conflict` is set when a
@@ -81,11 +83,25 @@ class Event(BaseModel):
     detail: dict = {}
 
 
-def fact_id_for(doc_id: str, parameter: str) -> str:
-    """Stable across re-extraction: same document + same parameter -> same id.
-    That is what lets a human override on technical[<id>].value survive a
-    re-run, since list order is not stable and index paths are forbidden."""
-    key = f"{doc_id}:{parameter.strip().lower()}"
+def fact_id_for(doc_id: str, parameter: str,
+                value: str | float | None, unit: str | None) -> str:
+    """Stable across re-extraction for a given (document, parameter, value, unit).
+
+    All four participate, for the reason `deviation_id_for` gives: if a later
+    extraction rewords the value the id shifts and an override orphans, which is
+    strictly better than an override silently retargeting a different reading of
+    the same parameter. A datasheet that states one parameter twice with
+    different numbers is stating two facts, and they must be addressable apart.
+
+    The value is normalised through `units.pure_number` so that 525.0 and "525"
+    are one id. The unit is folded to a stripped, lowercased spelling but never
+    converted: "525 kW" and "525000 W" are two readings as printed, and whether
+    they mean one quantity is the compliance layer's question, not the store's.
+    """
+    number = units.pure_number(value)
+    v = repr(number) if number is not None else str(value).strip().lower()
+    u = (unit or "").strip().lower()
+    key = f"{doc_id}:{parameter.strip().lower()}:{v}:{u}"
     return "f-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:10]
 
 
