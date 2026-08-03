@@ -357,6 +357,31 @@ def test_a_blank_valued_fact_is_unanswered_not_a_token_match():
     assert r.verdict == "unanswered" and r.fact_id is None
 
 
+def test_a_refusal_on_a_later_reading_is_not_hidden_by_the_first():
+    req = _stated(parameter="anchor_bolt", value=None)
+    facts = [_stated_fact("anchor_bolt", "Supplied", fact_id="f-a"),
+             _stated_fact("anchor_bolt", "N/A", fact_id="f-b")]
+    r = evaluate(req, facts, [], "ADPOWER", "now")
+    assert r.verdict == "review"
+    assert "f-b" in r.candidate_fact_ids
+
+
+def test_presence_only_with_two_clean_readings_still_passes():
+    # An enumeration is an answer, at length — not a conflict.
+    req = _stated(parameter="applicable_standard", value=None)
+    facts = [_stated_fact("applicable_standard", "ISO 8528", fact_id="f-a"),
+             _stated_fact("applicable_standard", "IEC 60034", fact_id="f-b")]
+    assert evaluate(req, facts, [], "ADPOWER", "now").verdict == "pass"
+
+
+def test_the_requirements_own_negation_is_still_not_a_refusal():
+    req = RequirementRecord(req_id="r-1", clause_ref="2.6", text="no asbestos",
+                            source_doc_id="d", checkability="stated",
+                            parameter="asbestos", value=None)
+    facts = [_stated_fact("asbestos", "No asbestos used in any component", fact_id="f-a")]
+    assert evaluate(req, facts, [], "ADPOWER", "now").verdict == "pass"
+
+
 # --- grouping facts into distinct readings ----------------------------------
 
 def test_one_reading_stays_one_reading():

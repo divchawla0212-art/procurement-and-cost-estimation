@@ -216,20 +216,31 @@ def evaluate(requirement, facts: list[dict], deviations: list[dict],
             # where a reviewer looks least. `review`, never `fail`: the words
             # may be qualifying something else entirely, and blaming a vendor
             # on a string diff is the thing this tier exists not to do.
-            negations = _negations_in(requirement.value, got)
-            if negations and requirement.value is None:
-                return result("review",
-                              f"{requirement.parameter} must be stated; vendor "
-                              f"states {got!r}, which reads as a refusal "
-                              f"({', '.join(negations)}) — read it before "
-                              f"accepting", fact, candidates)
-            if negations:
-                return result("review",
-                              f"required {requirement.parameter} = "
-                              f"{requirement.value!r}; vendor states {got!r}, "
-                              f"which carries the required tokens but also "
-                              f"{', '.join(negations)} — read it before "
-                              f"accepting", fact, candidates)
+            if requirement.value is None:
+                # Every reading, not just the first: a vendor stating a parameter
+                # twice could otherwise hide a refusal behind a compliant-looking
+                # first print, which is the negation guard's own defect restated.
+                for group in groups:
+                    negations = _negations_in(requirement.text, group[0].get("value"))
+                    if negations:
+                        flat = [f for g in groups for f in g]
+                        return result("review",
+                                      f"{requirement.parameter} must be stated; "
+                                      f"vendor states {group[0].get('value')!r}, "
+                                      f"which reads as a refusal "
+                                      f"({', '.join(negations)}) — read it before "
+                                      f"accepting", group[0], flat)
+                # No negations in any group, proceed to pass
+            else:
+                # Value-matching: check only first group for negations
+                negations = _negations_in(requirement.value, got)
+                if negations:
+                    return result("review",
+                                  f"required {requirement.parameter} = "
+                                  f"{requirement.value!r}; vendor states {got!r}, "
+                                  f"which carries the required tokens but also "
+                                  f"{', '.join(negations)} — read it before "
+                                  f"accepting", fact, candidates)
             if requirement.value is None:
                 return result("pass",
                               f"vendor states {requirement.parameter} = {got!r}",
