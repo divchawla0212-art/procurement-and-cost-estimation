@@ -151,17 +151,8 @@ def build_extraction_status(root: str, slug: str) -> ExtractionStatus:
             # both passes hit the same provider on the same text, so one
             # outage or one token-ceiling condition fails both. Excluding that
             # case here would make rollup()'s only surfaced view of secondary
-            # failures (coverage.py:145-147 strips `documents`) silently miss
-            # it. Not a term in the extracted+failed+skipped==len(documents)
-            # invariant below, so this does not disturb it.
-            # Not conditioned on the primary status: run_secondary does not
-            # depend on the primary's outcome (pipeline.py:804), and a
-            # primary-failed/secondary-failed vendor is reachable and likely —
-            # both passes hit the same provider on the same text, so one
-            # outage or one token-ceiling condition fails both. Excluding that
-            # case here would make rollup()'s only surfaced view of secondary
-            # failures (coverage.py:145-147 strips `documents`) silently miss
-            # it. Not a term in the extracted+failed+skipped==len(documents)
+            # failures (rollup() strips `documents`, below) silently miss it.
+            # Not a term in the extracted+failed+skipped==len(documents)
             # invariant below, so this does not disturb it.
             if doc.secondary_status == "failed":
                 entry.secondary_failed += 1
