@@ -1,7 +1,7 @@
 import pytest
 
-from procurement.compliance import (VERDICTS, evaluate, evaluate_project,
-                                    vocabulary, vocabulary_sha)
+from procurement.compliance import (VERDICTS, _readings, evaluate,
+                                    evaluate_project, vocabulary, vocabulary_sha)
 from procurement.project import create_project, load_project, save_project
 from procurement.store import snapshots
 from procurement.store.models import (RequirementRecord, RequirementSet,
@@ -19,8 +19,10 @@ def _req(clause="4.2.7", **kw):
     return RequirementRecord(req_id=req_id_for("d1", clause), **body)
 
 
-def _fact(parameter="h2s_tolerance", value=70.0, unit="ppm", doc_id="d9"):
-    return {"fact_id": f"f-{parameter}", "parameter": parameter, "value": value,
+def _fact(parameter="h2s_tolerance", value=70.0, unit="ppm", doc_id="d9",
+          fact_id=None):
+    return {"fact_id": fact_id if fact_id is not None else f"f-{parameter}",
+            "parameter": parameter, "value": value,
             "unit": unit, "verbatim": f"{value} {unit}", "doc_id": doc_id}
 
 
@@ -353,3 +355,66 @@ def test_a_blank_valued_fact_is_unanswered_not_a_token_match():
     r = evaluate(_stated(), [_stated_fact("generator_insulation_class", "   ")],
                  [], "KERUI", "now")
     assert r.verdict == "unanswered" and r.fact_id is None
+
+
+# --- grouping facts into distinct readings ----------------------------------
+
+def test_one_reading_stays_one_reading():
+    facts = [_fact("continuous_rating", "525", "kW")]
+    assert len(_readings(facts, "continuous_rating")) == 1
+
+
+def test_two_different_numbers_are_two_readings():
+    facts = [_fact("continuous_rating", "525", "kW"),
+             _fact("continuous_rating", "700", "kW")]
+    assert len(_readings(facts, "continuous_rating")) == 2
+
+
+def test_one_quantity_written_in_two_units_is_one_reading():
+    facts = [_fact("continuous_rating", "525", "kW"),
+             _fact("continuous_rating", "525000", "W")]
+    groups = _readings(facts, "continuous_rating")
+    assert len(groups) == 1
+    assert len(groups[0]) == 2          # both members kept, for citation
+
+
+def test_an_unconvertible_unit_falls_back_to_text_and_does_not_raise():
+    facts = [_fact("applicable_standard", "ISO 8528", None),
+             _fact("applicable_standard", "ISO 8528", None)]
+    assert len(_readings(facts, "applicable_standard")) == 1
+
+
+def test_two_standards_sharing_digits_are_not_one_reading():
+    # to_number("ISO 8528") is 8528.0, so keying on it would merge these.
+    facts = [_fact("applicable_standard", "ISO 8528", None),
+             _fact("applicable_standard", "API 8528", None)]
+    assert len(_readings(facts, "applicable_standard")) == 2
+
+
+def test_a_range_is_not_collapsed_onto_its_lower_bound():
+    # ADPOWER states ambient_design_temp as 55, 5-58 and 4-58 on one store.
+    facts = [_fact("ambient_design_temp", "55", "Deg C"),
+             _fact("ambient_design_temp", "5-58", "deg C"),
+             _fact("ambient_design_temp", "4-58", "deg C")]
+    assert len(_readings(facts, "ambient_design_temp")) == 3
+
+
+def test_only_facts_naming_the_parameter_are_grouped():
+    facts = [_fact("continuous_rating", "525", "kW"),
+             _fact("h2s_tolerance", "500", "ppm")]
+    assert len(_readings(facts, "continuous_rating")) == 1
+
+
+def test_a_fact_stating_nothing_is_not_a_reading():
+    facts = [_fact("continuous_rating", "525", "kW"),
+             _fact("continuous_rating", None), _fact("continuous_rating", "   ")]
+    assert len(_readings(facts, "continuous_rating")) == 1
+
+
+def test_groups_and_members_stay_in_document_order():
+    facts = [_fact("p", "700", "kW", fact_id="f-b"),
+             _fact("p", "525", "kW", fact_id="f-a"),
+             _fact("p", "700000", "W", fact_id="f-c")]
+    groups = _readings(facts, "p")
+    assert [g[0]["fact_id"] for g in groups] == ["f-b", "f-a"]
+    assert [m["fact_id"] for m in groups[0]] == ["f-b", "f-c"]

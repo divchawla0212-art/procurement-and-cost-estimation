@@ -117,6 +117,47 @@ def _states_something(value) -> bool:
     return value is not None and bool(_tokens(value))
 
 
+def _reading_key(value, unit, parameter: str | None):
+    """The identity of a reading for comparison purposes.
+
+    Numeric only when the value is *entirely* a number: `units.to_number` reads
+    a leading quantity out of prose, which would key "ISO 8528" as 8528 and
+    merge it with "API 8528". Unit conversion is attempted so that one
+    quantity printed in two units is one reading; an unrecognised or absent
+    unit is not an error here, it just means the text is the best identity
+    available.
+    """
+    number = units.pure_number(value)
+    if number is not None:
+        try:
+            canonical, canonical_unit = units.to_canonical(number, unit, parameter)
+            return ("num", round(canonical, 9), canonical_unit)
+        except units.Unconvertible:
+            pass
+    return ("txt", str(value).strip().lower())
+
+
+def _readings(facts: list[dict], parameter: str | None) -> list[list[dict]]:
+    """Facts stating `parameter`, grouped into distinct readings.
+
+    Groups are returned in first-appearance order and members in document
+    order, so a caller citing `group[0]` cites the first the document
+    printed. Blank evidence is filtered by `_states_something` before
+    grouping: a fact naming the parameter with no value is not a reading, and
+    counting it would manufacture a multiplicity out of nothing.
+    """
+    want = _norm(parameter)
+    groups: dict[tuple, list[dict]] = {}
+    for fact in facts:
+        if _norm(fact.get("parameter")) != want:
+            continue
+        if not _states_something(fact.get("value")):
+            continue
+        key = _reading_key(fact.get("value"), fact.get("unit"), parameter)
+        groups.setdefault(key, []).append(fact)
+    return list(groups.values())
+
+
 def evaluate(requirement, facts: list[dict], deviations: list[dict],
              vendor: str, now: str) -> ComplianceResult:
     """One cell. Verdict order is the whole design; see the module docstring
