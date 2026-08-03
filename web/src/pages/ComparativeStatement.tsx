@@ -1,13 +1,14 @@
 import { Fragment } from 'react'
 import type { JSX } from 'react'
 import type { Statement, StatementRow } from '../types'
-import { fetchStatement } from '../api'
+import { fetchStatement, statementExportUrl } from '../api'
 import { useAsync } from '../useAsync'
 import { formatMoney } from '../constants'
 import {
   Card,
   EmptyState,
   ErrorState,
+  ExportLinks,
   LoadingState,
   PageHeader,
 } from '../components/primitives'
@@ -61,6 +62,12 @@ export function ComparativeStatement(
         eyebrow="Commercial"
         title={props.projectName}
         sub="The priced offer and commercial terms per vendor, read straight from the store. Blanks are blanks — never zeros."
+        actions={
+          <ExportLinks
+            base={statementExportUrl(props.slug)}
+            csvTitle="Qty/Unit/Total collapse to the total in CSV"
+          />
+        }
       />
 
       <div

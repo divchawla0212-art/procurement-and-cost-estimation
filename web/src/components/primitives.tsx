@@ -88,6 +88,37 @@ export function Metric({
   )
 }
 
+/* -------------------------------------------------------------- ExportLinks */
+
+/**
+ * Download controls for a page's document.
+ *
+ * Plain anchors, not fetch-to-blob: `/api` is same-origin under the container
+ * and proxied by Vite in dev, so the browser performs the download itself, the
+ * server's `Content-Disposition` names the file, and the workbook is never
+ * buffered in JS memory. The cost is that a server error lands as a browser
+ * error page rather than an in-app `ErrorState` — worth it for these two,
+ * which read from a store the page has already loaded successfully.
+ */
+export function ExportLinks({
+  base,
+  csvTitle,
+}: {
+  base: string
+  csvTitle?: string
+}) {
+  return (
+    <div style={{ display: 'flex', gap: '0.5rem' }}>
+      <a className="btn btn-sm" href={`${base}?format=xlsx`} download>
+        <span aria-hidden>⤓</span> Excel
+      </a>
+      <a className="btn btn-sm" href={`${base}?format=csv`} download title={csvTitle}>
+        <span aria-hidden>⤓</span> CSV
+      </a>
+    </div>
+  )
+}
+
 /* --------------------------------------------------------------------- Card */
 
 export function Card({

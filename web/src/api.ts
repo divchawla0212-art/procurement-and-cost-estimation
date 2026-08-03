@@ -63,6 +63,19 @@ export function fetchExtractionStatus(slug: string): Promise<ExtractionStatus> {
   return getJson(`/api/projects/${encodeURIComponent(slug)}/extraction-status`)
 }
 
+// --- downloads -------------------------------------------------------------
+// URLs rather than fetchers: these are handed to an <a download>, so the
+// browser performs the request and the server's Content-Disposition names the
+// file. Nothing buffers the workbook in JS. Append `?format=xlsx|csv`.
+
+export function statementExportUrl(slug: string): string {
+  return `/api/projects/${encodeURIComponent(slug)}/statement/export`
+}
+
+export function complianceMatrixExportUrl(slug: string): string {
+  return `/api/projects/${encodeURIComponent(slug)}/compliance-matrix/export`
+}
+
 // --- setup / ingestion (mutations) ---------------------------------------
 
 export function fetchSetup(slug: string): Promise<ProjectSetup> {

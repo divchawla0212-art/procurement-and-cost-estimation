@@ -18,6 +18,9 @@ export interface MatrixCell {
   fact_id: string | null
   doc_id: string | null
   candidate_fact_ids: string[]
+  /** The file(s) behind the verdict. `doc_id` is a hash; these are filenames. */
+  doc_name: string | null
+  candidate_doc_names: string[]
 }
 
 export interface MatrixRow {

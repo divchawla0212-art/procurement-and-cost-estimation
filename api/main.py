@@ -17,15 +17,23 @@ from fastapi import (
     FastAPI,
     File,
     HTTPException,
+    Query,
     UploadFile,
 )
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
 import dotenv
 
 from procurement import project as proj
 from procurement.coverage import build_extraction_status, rollup
+from procurement.export import (
+    matrix_to_csv_str,
+    matrix_to_xlsx_bytes,
+    statement_to_csv_str,
+    statement_to_xlsx_bytes,
+)
 from procurement.matrix import GROUP_ORDER, build_matrix, rows_in_group
 from procurement.pipeline import load_dataset, run_ingestion
 from procurement.quote_select import pick_quote
@@ -152,6 +160,63 @@ def get_extraction_status(slug: str) -> dict:
 def get_statement(slug: str) -> dict:
     _load_or_404(slug)
     return build_statement(ROOT, slug).model_dump()
+
+
+# -------------------------------------------------------------- export routes
+#
+# Both are reads. They build from the store at request time and cache nothing,
+# so the file a reviewer opens is the store as it stood when they clicked —
+# never a stale artefact left over from an earlier ingestion.
+#
+# The compliance export takes no filter parameters, deliberately. The screen's
+# search, verdict chips and vendor selector are a reading aid; a downloaded
+# deliverable that silently carried them would hand someone a file of twelve
+# rows with no way to tell whether the other two hundred passed or were merely
+# filtered away, and that file backs an award decision.
+
+CSV_MIME = "text/csv; charset=utf-8"
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _download(payload: bytes, media_type: str, filename: str) -> Response:
+    return Response(
+        content=payload,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _export(fmt: str, slug: str, stem: str, build_xlsx, build_csv) -> Response:
+    if fmt == "xlsx":
+        return _download(build_xlsx(), XLSX_MIME, f"{slug}-{stem}.xlsx")
+    # utf-8-sig, for the reason the Streamlit statement view records: Excel
+    # reads a BOM-less UTF-8 CSV as cp1252, and both documents carry non-ASCII
+    # — the statement's U+00B7 tally separator, the matrix's rationale text.
+    return _download(build_csv().encode("utf-8-sig"), CSV_MIME,
+                     f"{slug}-{stem}.csv")
+
+
+# `Query(pattern=...)` rather than a hand-rolled check: an unknown format must
+# be a 422 and not quietly fall through to whichever branch is written last.
+_FORMAT = Query("xlsx", pattern="^(xlsx|csv)$")
+
+
+@app.get("/api/projects/{slug}/compliance-matrix/export")
+def export_compliance_matrix(slug: str, format: str = _FORMAT) -> Response:
+    _load_or_404(slug)
+    matrix = build_matrix(ROOT, slug)
+    return _export(format, slug, "compliance-matrix",
+                   lambda: matrix_to_xlsx_bytes(matrix),
+                   lambda: matrix_to_csv_str(matrix))
+
+
+@app.get("/api/projects/{slug}/statement/export")
+def export_statement(slug: str, format: str = _FORMAT) -> Response:
+    _load_or_404(slug)
+    statement = build_statement(ROOT, slug)
+    return _export(format, slug, "comparative-statement",
+                   lambda: statement_to_xlsx_bytes(statement),
+                   lambda: statement_to_csv_str(statement))
 
 
 # --------------------------------------------------------------- setup routes

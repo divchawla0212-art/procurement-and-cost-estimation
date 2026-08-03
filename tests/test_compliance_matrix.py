@@ -13,8 +13,9 @@ import pytest
 from procurement.matrix import build_matrix, rows_in_group
 from procurement.project import create_project, load_project, save_project
 from procurement.store import snapshots
-from procurement.store.models import (ComplianceResult, RequirementRecord,
-                                      RequirementSet, req_id_for)
+from procurement.store.models import (ComplianceResult, DocumentRecord,
+                                      RequirementRecord, RequirementSet,
+                                      VendorFacts, req_id_for)
 
 NOW = "2026-07-31T00:00:00+00:00"
 _DOC = "d1"
@@ -182,5 +183,87 @@ def test_build_matrix_never_writes(tmp_path):
     root = _store(tmp_path, requirements, [_cell("1.1", "KERUI", "pass")])
     before = snapshots.get_generation(root, "p")
     build_matrix(root, "p")
+    build_matrix(root, "p")
+    assert snapshots.get_generation(root, "p") == before
+
+
+# ------------------------------------------------- the document behind a cell
+
+def _documents(*specs):
+    """(doc_id, path) pairs -> DocumentRecords. `content_sha256` is required by
+    the model and irrelevant here."""
+    return [DocumentRecord(doc_id=d, path=p, vendor="KERUI",
+                           content_sha256=f"sha-{d}") for d, p in specs]
+
+
+def _facts(*specs):
+    """(fact_id, doc_id) pairs -> the technical facts list `load_facts` returns."""
+    return VendorFacts(vendor="KERUI", technical=[
+        {"fact_id": f, "doc_id": d, "parameter": "h2s", "value": 40,
+         "unit": "ppm"} for f, d in specs])
+
+
+def test_a_cell_names_the_document_its_verdict_was_read_from(tmp_path):
+    root = _store(tmp_path, [_requirement("1.1")],
+                  [_cell("1.1", "KERUI", "fail", fact_id="f-1")])
+    snapshots.save_documents(root, "p", _documents(
+        ("d9", "vendors/KERUI/datasheets/gen-datasheet-rev-C.pdf")))
+
+    cell = build_matrix(root, "p").rows[0].cells["KERUI"]
+    assert cell.doc_name == "gen-datasheet-rev-C.pdf"
+
+
+def test_a_cell_with_no_evidence_names_no_document(tmp_path):
+    """A judgement row and a silent `unanswered` both cite nothing. Naming a
+    document there would attribute the verdict to a file that did not produce
+    it."""
+    root = _store(tmp_path, [_requirement("1.1")],
+                  [_cell("1.1", "KERUI", "unanswered")])
+    snapshots.save_documents(root, "p", _documents(("d9", "vendors/KERUI/x.pdf")))
+
+    cell = build_matrix(root, "p").rows[0].cells["KERUI"]
+    assert cell.doc_name is None and cell.candidate_doc_names == []
+
+
+def test_an_unknown_doc_id_names_no_document_rather_than_inventing_one(tmp_path):
+    root = _store(tmp_path, [_requirement("1.1")],
+                  [_cell("1.1", "KERUI", "fail", fact_id="f-1")])
+    snapshots.save_documents(root, "p", _documents(("other", "vendors/KERUI/x.pdf")))
+
+    assert build_matrix(root, "p").rows[0].cells["KERUI"].doc_name is None
+
+
+def test_readings_from_two_documents_name_both(tmp_path):
+    """The `review` this exists for: a parameter stated twice with different
+    values. Naming only the first document hides the disagreement that made
+    the cell a review in the first place."""
+    root = _store(tmp_path, [_requirement("1.1")],
+                  [_cell("1.1", "KERUI", "review", fact_id="f-1",
+                         candidate_fact_ids=["f-1", "f-2"])])
+    snapshots.save_documents(root, "p", _documents(
+        ("d9", "vendors/KERUI/datasheet.pdf"),
+        ("d7", "vendors/KERUI/technical-offer.pdf")))
+    snapshots.save_facts(root, "p", _facts(("f-1", "d9"), ("f-2", "d7")))
+
+    cell = build_matrix(root, "p").rows[0].cells["KERUI"]
+    assert cell.candidate_doc_names == ["datasheet.pdf", "technical-offer.pdf"]
+
+
+def test_two_readings_in_one_document_name_it_once(tmp_path):
+    root = _store(tmp_path, [_requirement("1.1")],
+                  [_cell("1.1", "KERUI", "review", fact_id="f-1",
+                         candidate_fact_ids=["f-1", "f-2"])])
+    snapshots.save_documents(root, "p", _documents(("d9", "vendors/KERUI/ds.pdf")))
+    snapshots.save_facts(root, "p", _facts(("f-1", "d9"), ("f-2", "d9")))
+
+    assert build_matrix(root, "p").rows[0].cells["KERUI"].candidate_doc_names == ["ds.pdf"]
+
+
+def test_naming_documents_still_writes_nothing(tmp_path):
+    root = _store(tmp_path, [_requirement("1.1")],
+                  [_cell("1.1", "KERUI", "fail", fact_id="f-1")])
+    snapshots.save_documents(root, "p", _documents(("d9", "vendors/KERUI/x.pdf")))
+    snapshots.save_facts(root, "p", _facts(("f-1", "d9")))
+    before = snapshots.get_generation(root, "p")
     build_matrix(root, "p")
     assert snapshots.get_generation(root, "p") == before

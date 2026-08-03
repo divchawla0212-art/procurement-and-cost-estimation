@@ -1,7 +1,7 @@
 import { Fragment, useState } from 'react'
 import type { JSX } from 'react'
 import type { GroupKey, MatrixRow } from '../types'
-import { fetchComplianceMatrix } from '../api'
+import { complianceMatrixExportUrl, fetchComplianceMatrix } from '../api'
 import { useAsync } from '../useAsync'
 import { GROUP_LABEL, VERDICT_LABEL, VERDICTS, bound, pct } from '../constants'
 import {
@@ -9,6 +9,7 @@ import {
   CoverageInstrument,
   EmptyState,
   ErrorState,
+  ExportLinks,
   LoadingState,
   Metric,
   PageHeader,
@@ -164,6 +165,12 @@ export function ComplianceMatrix(props: ComplianceMatrixProps): JSX.Element {
         eyebrow="Compliance"
         title={props.projectName}
         sub="Every stored verdict, grouped by the action it needs. Rationale is shown verbatim."
+        actions={
+          <ExportLinks
+            base={complianceMatrixExportUrl(props.slug)}
+            csvTitle="Grid only — Excel adds a Detail sheet with rationale and evidence"
+          />
+        }
       />
 
       <Card title="Coverage">
@@ -264,6 +271,16 @@ export function ComplianceMatrix(props: ComplianceMatrixProps): JSX.Element {
           ))}
         </select>
       </div>
+
+      {/* Shown only while a filter is active — that is the only moment the
+          download could be misread. A file of twelve rows must not leave the
+          reviewer guessing whether the rest passed or were filtered away. */}
+      {(query || verdicts.size > 0 || vendor) && (
+        <p className="muted" style={{ margin: '0.5rem 0 0', fontSize: '0.8rem' }}>
+          Filters change what is listed below, not what is downloaded — the
+          export is always the full matrix.
+        </p>
+      )}
 
       {view === 'worklist' ? (
         <div className="worklist">

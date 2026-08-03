@@ -5,7 +5,7 @@ logic worth testing: it decides layout, not meaning.
 """
 import streamlit as st
 
-from procurement.matrix import build_matrix, rows_in_group
+from procurement.matrix import bound as _bound, build_matrix, rows_in_group
 
 _GROUP_LABEL = {"not_matched": "Not matched",
                 "needs_human": "Needs a human",
@@ -13,18 +13,6 @@ _GROUP_LABEL = {"not_matched": "Not matched",
 
 _VERDICT_MARK = {"pass": "✅", "fail": "❌", "deviation": "⚠️",
                  "unanswered": "❓", "review": "👤"}
-
-
-def _bound(row) -> str:
-    """The requirement's checkable bound, or its clause text."""
-    if row.checkability == "stated":
-        return (f"{row.parameter} = {row.value}" if row.value is not None
-                else f"{row.parameter} (must be stated)")
-    if row.checkability != "auto":
-        return row.text
-    value = row.value if not isinstance(row.value, list) else "..".join(
-        str(v) for v in row.value)
-    return f"{row.parameter} {row.operator} {value} {row.unit or ''}".strip()
 
 
 def _render_coverage(coverage) -> None:
