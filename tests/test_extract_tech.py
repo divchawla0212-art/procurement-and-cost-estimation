@@ -155,14 +155,39 @@ def test_one_failing_chunk_fails_the_whole_extraction(tmp_path):
 
 def test_a_fact_repeated_across_chunks_is_stored_once(tmp_path):
     # a header row reprinted at the top of two chunks yields the same fact
-    # twice, and two records sharing one fact_id make an id-addressed override
-    # ambiguous about which row it corrects
+    # twice; only an exact repeat is an echo
     same = {"facts": [{"parameter": "h2s_tolerance", "value": 50.0, "unit": "ppm"}]}
     client = MockLLMClient([same, same, same])
     facts, status, _notes = extract_tech_facts("d1", _rows_txt(tmp_path, 3), client)
     assert status == "ok"
     assert len(client.calls) == 3           # genuinely three chunks, not one
     assert len(facts) == 1
+
+
+def test_a_parameter_stated_twice_with_different_values_keeps_both(tmp_path):
+    # the other side of the dedup, and the one that decides an award: ADPOWER's
+    # live datasheet prints continuous_rating at both 525 kW and 700 kW. Keying
+    # the dedup on the parameter alone would store 525 and silently drop 700,
+    # leaving compliance.py to compare against whichever the model printed
+    # first. A differing unit alone is the same case - "58 Deg C" and "58 C"
+    # are two statements, and neither is code's to reconcile.
+    client = MockLLMClient([
+        {"facts": [{"parameter": "continuous_rating", "value": 525.0, "unit": "kW"},
+                   {"parameter": "ambient_design_temp", "value": 58.0, "unit": "Deg C"}]},
+        {"facts": [{"parameter": "continuous_rating", "value": 700.0, "unit": "kW"},
+                   {"parameter": "ambient_design_temp", "value": 58.0, "unit": "C"}]},
+    ])
+    facts, status, _notes = extract_tech_facts("d1", _rows_txt(tmp_path, 2), client)
+    assert status == "ok" and len(client.calls) == 2
+    assert [(f.parameter, f.value, f.unit) for f in facts] == [
+        ("continuous_rating", 525.0, "kW"),
+        ("ambient_design_temp", 58.0, "Deg C"),
+        ("continuous_rating", 700.0, "kW"),
+        ("ambient_design_temp", 58.0, "C"),
+    ]
+    # and both readings of one parameter still address as one fact_id, which is
+    # the pre-existing collision this change makes visible rather than creates
+    assert facts[0].fact_id == facts[2].fact_id == fact_id_for("d1", "continuous_rating")
 
 
 def test_a_document_under_the_budget_is_asked_exactly_once(tmp_path):

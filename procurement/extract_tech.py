@@ -88,7 +88,7 @@ def extract_tech_facts(doc_id: str, path: str, client, pdf_fallback=None,
         return [], "failed", f"extraction error: {exc}"
 
     out: list[FactRecord] = []
-    seen: set[str] = set()
+    seen: set[tuple] = set()
     for raw_item in raw_items:
         try:
             fact = _TechFact.model_validate(raw_item)
@@ -101,17 +101,26 @@ def extract_tech_facts(doc_id: str, path: str, client, pdf_fallback=None,
             continue          # a fact with no parameter name cannot be checked
 
         # A header row reprinted at the top of two chunks yields the same fact
-        # twice. fact_id_for keys on (doc_id, parameter) alone - nothing
-        # ordinal - so both copies carry one id, and two records sharing an id
-        # leave an id-addressed override ambiguous about which row it corrects.
-        # First occurrence wins, so the merged order stays document order.
-        fact_id = fact_id_for(doc_id, name)
-        if fact_id in seen:
+        # twice. The whole fact is the key, not just its parameter: a datasheet
+        # that genuinely states one parameter twice with different numbers -
+        # ADPOWER prints continuous_rating at both 525 kW and 700 kW, and
+        # ambient_design_temp four different ways - is stating two facts, and
+        # dropping the second would hand compliance.py whichever the model
+        # happened to print first. Only an exact repeat is an echo. First
+        # occurrence wins, so the merged order stays document order.
+        key = (name.lower(), fact.value, fact.unit)
+        if key in seen:
             continue
-        seen.add(fact_id)
+        seen.add(key)
 
         out.append(FactRecord(
-            fact_id=fact_id,
+            # Not unique when one parameter is stated twice: fact_id_for keys
+            # on (doc_id, parameter), so the two ADPOWER ratings above share an
+            # id. That collision predates chunking and is not this extractor's
+            # to fix - the id is the override/verdict address every stored
+            # snapshot already uses, and widening the key (as deviation_id_for
+            # does with its statement) would shift every id in every store.
+            fact_id=fact_id_for(doc_id, name),
             parameter=name,
             value=fact.value,
             unit=fact.unit,
