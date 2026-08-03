@@ -9,7 +9,6 @@ looks machine-checkable but is missing any part of its bound is stored as
 compare against and blame a vendor for.
 """
 import logging
-import os
 import re
 from pathlib import Path
 from pydantic import BaseModel
@@ -17,6 +16,7 @@ from pydantic import BaseModel
 # The splitting rule now serves the technical extractor too, so it lives in one
 # place. Kept under this module's original private name because the rule is an
 # implementation detail here, not part of this module's interface.
+from procurement.chunking import ask_each_chunk, budget_from_env
 from procurement.chunking import chunk_on_lines as _chunks
 from procurement.loaders import read_text
 from procurement.store.models import RequirementRecord, req_id_for
@@ -30,8 +30,9 @@ _PROMPT = (Path(__file__).parents[1] / "shared" / "llm" / "prompts"
 # The output JSON echoes every clause verbatim, so it is larger than the input.
 # The live 25,176-char MR overflowed the 8192-token ceiling in one call and
 # came back empty. Budget is over INPUT chars; tune with the env var if a
-# corpus needs it.
-REQUIREMENTS_CHUNK_CHARS = int(os.getenv("REQUIREMENTS_CHUNK_CHARS") or 8000)
+# corpus needs it - budget_from_env floors what the env var may set it to, so a
+# typo cannot turn the budget into one paid call per line.
+REQUIREMENTS_CHUNK_CHARS = budget_from_env("REQUIREMENTS_CHUNK_CHARS", 8000)
 
 _NOISE = re.compile(r"[^a-z0-9]+")
 
@@ -89,11 +90,12 @@ def extract_requirements(doc_id: str, path: str, client, pdf_fallback=None,
         if text is None:
             text = read_text(path, llm_fallback=pdf_fallback)
         prompt = _PROMPT.read_text(encoding="utf-8")
-        raw_items: list = []
-        for chunk in _chunks(text, REQUIREMENTS_CHUNK_CHARS):
-            raw = client.classify_structure(prompt, _RequirementList, chunk)
-            # An omitted optional array is an empty chunk, not a failed one.
-            raw_items.extend(raw.get("requirements") or [])
+        # Retries a chunk once before letting it fail, for the same reason the
+        # technical extractor does: the merge below is all-or-nothing, so a
+        # long MR's failure probability scales with its chunk count.
+        raw_items = ask_each_chunk(client, prompt, _RequirementList,
+                                   _chunks(text, REQUIREMENTS_CHUNK_CHARS),
+                                   "requirements")
     except Exception as exc:
         # All-or-nothing. A partial merge is stored as a complete success, and
         # the pipeline then replaces this document's requirements with it -

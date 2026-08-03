@@ -4,11 +4,10 @@ The model reports what a document states; it never converts units, totals
 anything, or judges compliance. Comparison happens in phase 3, in Python.
 """
 import logging
-import os
 from pathlib import Path
 from pydantic import BaseModel
 
-from procurement.chunking import chunk_on_lines
+from procurement.chunking import ask_each_chunk, budget_from_env, chunk_on_lines
 from procurement.loaders import read_text
 from procurement.store.models import FactRecord, fact_id_for
 
@@ -30,8 +29,9 @@ _PROMPT = (Path(__file__).parents[1] / "shared" / "llm" / "prompts"
 # 12,000 input chars costs about 12000/212 * 70 = 3,960 output tokens at the
 # corpus's worst measured density: under half the 8192 ceiling, leaving room
 # for a document twice as dense as anything here. Tune with the env var if a
-# corpus needs it.
-TECH_CHUNK_CHARS = int(os.getenv("TECH_CHUNK_CHARS") or 12000)
+# corpus needs it - budget_from_env floors what the env var may set it to, so a
+# typo cannot turn the budget into one paid call per line.
+TECH_CHUNK_CHARS = budget_from_env("TECH_CHUNK_CHARS", 12000)
 
 
 class _TechFact(BaseModel):
@@ -69,14 +69,13 @@ def extract_tech_facts(doc_id: str, path: str, client, pdf_fallback=None,
             vocabulary = ("\n\nThe buyer will check these parameters. Report them "
                           "when the document states them:\n"
                           + "\n".join(f"- {p}" for p in parameters))
-        raw_items: list = []
-        for chunk in chunk_on_lines(text, TECH_CHUNK_CHARS):
-            raw = client.classify_structure(prompt, _TechFactList,
-                                            chunk + vocabulary)
-            # A tool call may legitimately omit an optional array. "The model
-            # returned no facts" is an empty chunk, not a failed one; treating
-            # it as a failure would make the document a permanent per-run charge.
-            raw_items.extend(raw.get("facts") or [])
+        # ask_each_chunk retries a chunk once before letting it fail: the merge
+        # below is all-or-nothing, so per-document failure probability scales
+        # with chunk count, and one degenerate response on chunk 4 of 7 cost
+        # KERUI's commented datasheet all 110 of its facts.
+        raw_items = ask_each_chunk(client, prompt, _TechFactList,
+                                   chunk_on_lines(text, TECH_CHUNK_CHARS),
+                                   "facts", suffix=vocabulary)
     except Exception as exc:
         # All-or-nothing. The pipeline replaces this document's stored facts
         # with the fresh set whenever status is "ok", so storing 3 chunks of 5

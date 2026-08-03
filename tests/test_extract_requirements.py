@@ -1,7 +1,9 @@
+import importlib
 import os
 
 import pytest
 
+from procurement.chunking import CHUNK_ATTEMPTS
 from procurement.extract_requirements import (REQUIREMENTS_PROMPT_VERSION,
                                               extract_requirements, _chunks)
 from procurement.store.models import RequirementSet, req_id_for
@@ -271,6 +273,33 @@ def test_chunking_is_deterministic():
     assert _chunks(text, 500) == _chunks(text, 500)
 
 
+@pytest.mark.parametrize("module_name, name, default", [
+    ("procurement.extract_tech", "TECH_CHUNK_CHARS", 12000),
+    ("procurement.extract_requirements", "REQUIREMENTS_CHUNK_CHARS", 8000),
+])
+def test_a_typo_in_a_chunk_budget_cannot_cost_one_call_per_line(
+        monkeypatch, module_name, name, default):
+    # `int(os.getenv(...) or N)` accepted 0, negatives and any too-small
+    # number, and chunk_on_lines emits at least one line per chunk whatever the
+    # budget - so `TECH_CHUNK_CHARS=0` was one paid LLM call per line of a
+    # 20,000-line proposal. Parametrized over both extractors on purpose: the
+    # floor has to be the same rule in both places, not two copies of one.
+    module = importlib.import_module(module_name)
+    try:
+        for typo in ("0", "-12000", "12", "twelve thousand"):
+            monkeypatch.setenv(name, typo)
+            importlib.reload(module)
+            assert getattr(module, name) == default
+        # and a genuine retune is still honoured
+        monkeypatch.setenv(name, "20000")
+        importlib.reload(module)
+        assert getattr(module, name) == 20000
+    finally:
+        monkeypatch.delenv(name, raising=False)
+        importlib.reload(module)
+        assert getattr(module, name) == default
+
+
 def test_every_chunk_is_asked_and_the_results_merge(tmp_path):
     src = tmp_path / "mr.txt"
     # 700 lines guarantees 3 chunks under the default 8000-char budget (the
@@ -293,18 +322,52 @@ def test_one_failing_chunk_fails_the_whole_extraction(tmp_path):
     src.write_text("\n".join(f"clause {i} body text here" for i in range(400)),
                    encoding="utf-8")
 
-    class SecondChunkFails(MockLLMClient):
+    class SecondChunkAlwaysFails(MockLLMClient):
+        """`>= 2`, not `== 2`: the retry ask_each_chunk now makes would clear a
+        stub that failed only once, and this test is about the all-or-nothing
+        merge, not about the retry."""
+
         def classify_structure(self, prompt, output_schema, context_text, images=None):
             super().classify_structure(prompt, output_schema, context_text, images)
-            if len(self.calls) == 2:
+            if len(self.calls) >= 2:
                 raise RuntimeError("provider unavailable")
             return {"requirements": [{"clause_ref": "1.1", "text": "first"}]}
 
-    records, status, notes = extract_requirements(
-        "d1", str(src), SecondChunkFails({}))
+    client = SecondChunkAlwaysFails({})
+    records, status, notes = extract_requirements("d1", str(src), client)
     # a partial merge would delete the clauses the missing chunks carry
     assert (records, status) == ([], "failed")
     assert "provider unavailable" in notes
+    # and the retry is bounded: chunk 1 answered, chunk 2 asked twice and no more
+    assert len(client.calls) == 1 + CHUNK_ATTEMPTS
+
+
+def test_a_chunk_that_fails_once_is_retried_rather_than_losing_the_mr(tmp_path):
+    # The requirements extractor merges all-or-nothing too, so the same
+    # bounded retry guards it: one degenerate response on chunk 2 of 3 would
+    # otherwise cost every clause the MR states.
+    src = tmp_path / "mr.txt"
+    src.write_text("\n".join(f"clause {i} body text here" for i in range(700)),
+                   encoding="utf-8")
+
+    class SecondChunkFlakesOnce(MockLLMClient):
+        def __init__(self, response):
+            super().__init__(response)
+            self.raised = False
+
+        def classify_structure(self, prompt, output_schema, context_text, images=None):
+            super().classify_structure(prompt, output_schema, context_text, images)
+            if len(self.calls) == 2 and not self.raised:
+                self.raised = True
+                raise RuntimeError("provider unavailable")
+            return {"requirements": [{"clause_ref": f"{len(self.calls)}.0",
+                                      "text": f"clause {len(self.calls)}"}]}
+
+    client = SecondChunkFlakesOnce({})
+    records, status, notes = extract_requirements("d1", str(src), client)
+    assert (status, notes) == ("ok", None)
+    assert [r.clause_ref for r in records] == ["1.0", "3.0", "4.0"]
+    assert len(client.calls) == 4       # three chunks, one asked twice
 
 
 def test_a_clause_repeated_across_chunks_is_stored_once(tmp_path):
