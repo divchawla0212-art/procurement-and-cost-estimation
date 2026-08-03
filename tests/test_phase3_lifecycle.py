@@ -38,6 +38,7 @@ class MatrixClient(VocabClient):
         self.requirement_operator = None       # None -> the stub's own operator
         self.requirements_response = None      # None -> the default two clauses
         self.amendment_clause = "4.2.7"
+        self.fact_parameter = None             # None -> requirement_parameter
         self.fact_value = 70
         self.fact_unit = "ppm"
 
@@ -60,10 +61,25 @@ class MatrixClient(VocabClient):
             # the vendor answers the parameter the requirement asks about,
             # unless a row deliberately makes it unanswerable
             for entry in response["facts"]:
-                entry["parameter"] = self.requirement_parameter
+                entry["parameter"] = self.fact_parameter or self.requirement_parameter
                 entry["value"] = self.fact_value
                 entry["unit"] = self.fact_unit
         return response
+
+
+def _silent_on_the_parameter():
+    """A client whose vendor documents state some other parameter.
+
+    Deleting KERUI's only datasheet leaves them a quotation-only vendor, and
+    Task 7b has such a vendor's quotation feed the technical extractor too - so
+    "the cited datasheet is gone" no longer implies "nothing of this vendor's
+    is read technically". The rows that need an unanswered cell get it from the
+    vendor not stating the parameter, which is what `unanswered` means, rather
+    than from no extractor reading them at all.
+    """
+    client = MatrixClient()
+    client.fact_parameter = "continuous_rating"
+    return client
 
 
 def _write_rfq(tmp_path, name, body="4.2.7 H2S at least 50 ppm"):
@@ -404,7 +420,7 @@ def test_row14_deleting_the_cited_datasheet_makes_the_cell_unanswered(tmp_path):
     assert cited and cited[0].verdict == "pass"
 
     os.remove(os.path.join(root, "p", "vendors", "KERUI", _DATASHEET))
-    run_ingestion(root, "p", MatrixClient())
+    run_ingestion(root, "p", _silent_on_the_parameter())
 
     stored = {f["fact_id"] for f in
               (snapshots.load_facts(root, "p", "KERUI").technical or [])}
@@ -639,7 +655,7 @@ def test_row25_a_vanished_fact_counts_as_silence_not_as_our_reach(tmp_path):
     assert (before.unanswered_silent, before.unanswered_refused) == (0, 0)
 
     os.remove(os.path.join(root, "p", "vendors", "KERUI", _DATASHEET))
-    run_ingestion(root, "p", MatrixClient())
+    run_ingestion(root, "p", _silent_on_the_parameter())
 
     after = build_matrix(root, "p").coverage
     assert after.by_verdict.get("unanswered") == 1

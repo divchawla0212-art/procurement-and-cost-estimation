@@ -58,6 +58,22 @@ VENDOR_ROUTE = {
     "mom": "datasheet",
 }
 
+# A *second* extractor a routed document also feeds, when the vendor's own
+# document set leaves the first one insufficient. A vendor whose entire
+# submission is one techno-commercial proposal otherwise contributes commercial
+# facts only and is checkable against no requirement at all — the phase-4
+# motivating defect (a marked-up spec nothing read) one route over, and the one
+# case Task 2 could not fix by widening VENDOR_ROUTE, because `quotation` was
+# already routed: its single route produces the wrong *kind* of fact.
+#
+# A separate table rather than plural VENDOR_ROUTE values: VENDOR_ROUTE is
+# public and read as a doc_class -> route map (Task 8's coverage.py reports the
+# route beside the class), and a secondary route is a different thing anyway —
+# conditional on the vendor's other documents, where the primary is not. Keyed
+# by route, not by doc_class, so an inferred quotation gets the same treatment
+# as a classified one; _vendor_route is the one place that knows which is which.
+SECONDARY_VENDOR_ROUTE = {"quotation": "datasheet"}
+
 # The RFQ side routes by its own table: the same doc_class means something
 # different on the client's side of the tender. A `datasheet` here is the
 # client's blank datasheet — a statement of what is required, not of what a
@@ -79,7 +95,8 @@ def _rel_path(pdir: str, path: str) -> str:
 
 def _prune_orphan_facts(root: str, slug: str, run_id: str, vendors: list[str],
                         documents: list[DocumentRecord],
-                        inferred_quotes: set[str]) -> None:
+                        inferred_quotes: set[str],
+                        secondary_routes: dict[str, str]) -> None:
     """Drop facts belonging to documents that are no longer extractable.
 
     Lineage stops an obsolete revision from being *re-extracted*; it does not
@@ -112,8 +129,11 @@ def _prune_orphan_facts(root: str, slug: str, run_id: str, vendors: list[str],
         # with no recognised quotation, inferred as one; routing leaves
         # doc_class untouched, so that case cannot be read back off the
         # document alone and _vendor_route is the one place that knows.
-        route = _vendor_route(doc, inferred_quotes)
-        if route is not None:
+        # _vendor_routes, plural, for the same reason one field over: a
+        # quotation that also feeds the technical extractor is live under both
+        # routes, and stops being live under the second one - facts and all -
+        # the run a datasheet of that vendor's arrives.
+        for route in _vendor_routes(doc, inferred_quotes, secondary_routes):
             live_by_route.setdefault((doc.vendor, route), set()).add(doc.doc_id)
 
     for vendor in vendors:
@@ -247,6 +267,66 @@ def _vendor_route(doc: DocumentRecord, inferred_quotes: set[str]) -> str | None:
     if doc.doc_id in inferred_quotes:
         return "quotation"
     return VENDOR_ROUTE.get(doc.doc_class)
+
+
+def _vendor_routes(doc: DocumentRecord, inferred_quotes: set[str],
+                   secondary_routes: dict[str, str]) -> list[str]:
+    """Every extractor this document feeds, primary route first.
+
+    The single answer to "which routes does this document reach", consulted by
+    the vendor loop's dispatch and by _prune_orphan_facts alike. 80adec0 was a
+    real defect that existed precisely because the prune's notion of "live" and
+    the extractor's notion of "routed" were computed in two places and drifted;
+    a document that reaches two extractors is exactly the shape that would let
+    that happen again, so there is one place, and `secondary_routes` is
+    computed once per run and handed to both.
+    """
+    route = _vendor_route(doc, inferred_quotes)
+    if route is None:
+        return []
+    secondary = secondary_routes.get(doc.doc_id)
+    return [route] if secondary is None else [route, secondary]
+
+
+def _secondary_routes(docs: list[DocumentRecord], inferred_quotes: set[str],
+                      quote_rel_by_vendor: dict[str, str]) -> dict[str, str]:
+    """doc_id -> the additional extractor that document feeds, this run.
+
+    A vendor's quotation also feeds the technical extractor when no other live
+    document of theirs reaches it. Bounded by need rather than applied blanket:
+    routing every quotation through the technical extractor as well would
+    roughly double the quotation-class calls of every vendor in every run, to
+    re-read parameters that the vendor's datasheets already state better. The
+    condition is empty for a vendor who submitted a datasheet.
+
+    Decided from doc_class, lineage and quotation selection alone — never from
+    how a run *went*. Asking whether the datasheet happened to be readable this
+    time would make routing vary with a transient provider outage, and the
+    prune (which runs after extraction) would then disagree with the dispatch
+    (which ran before it) about what a document feeds.
+
+    Withdrawable by construction: it is recomputed from the live document set
+    every run, so a vendor who later submits a datasheet stops having their
+    quotation read technically, and the facts it contributed are then orphans
+    that _prune_orphan_facts removes.
+    """
+    live_by_vendor: dict[str, list[DocumentRecord]] = {}
+    for doc in docs:
+        if doc.vendor and doc.superseded_by is None:
+            live_by_vendor.setdefault(doc.vendor, []).append(doc)
+
+    out: dict[str, str] = {}
+    for vendor, live in live_by_vendor.items():
+        routes = {d.doc_id: _vendor_route(d, inferred_quotes) for d in live}
+        for doc in live:
+            secondary = SECONDARY_VENDOR_ROUTE.get(routes[doc.doc_id])
+            if secondary is None or secondary in routes.values():
+                continue
+            # Only the vendor's selected quotation reaches an extractor at all;
+            # a second one is skipped, and a skipped document feeds nothing.
+            if quote_rel_by_vendor.get(vendor) == doc.path:
+                out[doc.doc_id] = secondary
+    return out
 
 
 def _rfq_route(doc: DocumentRecord) -> str:
@@ -476,6 +556,13 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
             detail={"doc_id": doc.doc_id, "path": rel,
                     "doc_class": doc.doc_class}))
 
+    # The one structure that answers "which extractors does this document
+    # feed": computed here, from the live document set and the selection above,
+    # and handed to both the dispatch below and _prune_orphan_facts, so the two
+    # cannot form separate opinions about it (80adec0's defect shape).
+    secondary_routes = _secondary_routes(fresh_docs, inferred_quotes,
+                                         quote_rel_by_vendor)
+
     # Order quotations first within each vendor: facts_view["commercial"] is
     # None until a vendor's quotation has been extracted, and a field path
     # that does not resolve is flagged conflict=True. Processing a datasheet
@@ -511,8 +598,11 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
             # extracted as one whatever the classifier called it. doc_class
             # itself is left alone: documents.json must keep reporting what the
             # classifier actually decided, not what routing did with it.
-            route = _vendor_route(doc, inferred_quotes)
+            routes = _vendor_routes(doc, inferred_quotes, secondary_routes)
+            route = routes[0] if routes else None
+            secondary = routes[1] if len(routes) > 1 else None
             expected_version = PROMPT_VERSION_BY_CLASS.get(route)
+            secondary_version = PROMPT_VERSION_BY_CLASS.get(secondary)
 
             skip_reason = None
             if doc.superseded_by is not None:
@@ -543,7 +633,19 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
                          and prior.extraction_status == "ok"
                          and (route != "datasheet"
                               or prior.vocabulary_sha == vocab_sha))
-            if unchanged and not force:
+            # The secondary pass caches on its own key. Both passes read the
+            # same bytes, but they ask different prompts of them, so a
+            # vocabulary edit must re-ask the technical pass without re-asking
+            # the quotation one — and a quotation prompt bump the reverse.
+            secondary_unchanged = (prior is not None
+                                   and prior.content_sha256 == doc.content_sha256
+                                   and prior.secondary_prompt_version == secondary_version
+                                   and prior.secondary_status == "ok"
+                                   and prior.vocabulary_sha == vocab_sha)
+            run_primary = force or not unchanged
+            run_secondary = (secondary is not None
+                             and (force or not secondary_unchanged))
+            if not run_primary and not run_secondary:
                 # Carry the cached extraction forward onto the *fresh* record
                 # rather than appending `prior` verbatim. Passes 1 and 2 wrote
                 # this run's classification and lineage onto `doc`; appending
@@ -558,9 +660,20 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
                 doc.extractor = prior.extractor
                 doc.prompt_version = prior.prompt_version
                 doc.text_source = prior.text_source
-                # carried forward or the bump never persists, and every
-                # datasheet re-extracts on every run forever — C2a exactly
-                doc.vocabulary_sha = prior.vocabulary_sha
+                # Carried forward or the bump never persists, and every
+                # datasheet re-extracts on every run forever — C2a exactly.
+                # Only while the document still reaches the technical
+                # extractor, though: carrying a technical cache key onto a
+                # document whose secondary route has been withdrawn (and whose
+                # facts _prune_orphan_facts is about to delete) would make the
+                # route's eventual return a cache *hit*, and the vendor would
+                # go silently factless for good.
+                if route == "datasheet" or secondary is not None:
+                    doc.vocabulary_sha = prior.vocabulary_sha
+                if secondary is not None:
+                    doc.secondary_status = prior.secondary_status
+                    doc.secondary_notes = prior.secondary_notes
+                    doc.secondary_prompt_version = prior.secondary_prompt_version
                 documents.append(doc)
                 extracted += 1
                 events.append_event(root, slug, Event(
@@ -600,8 +713,21 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
             prior_facts = snapshots.load_facts(root, slug, doc.vendor)
             base = prior_facts or VendorFacts(vendor=doc.vendor)
             status = "ok"
+            commercial_dump = base.commercial
+            quotation_doc_id = base.quotation_doc_id
+            technical = list(base.technical)
+            deviations = list(base.deviations)
 
-            if route == "quotation":
+            if not run_primary:
+                # Only the secondary pass is stale, so the primary's cached
+                # record — and the facts it stored — carry forward untouched.
+                status = prior.extraction_status
+                doc.extraction_status = prior.extraction_status
+                doc.notes = prior.notes
+                doc.extracted_at = prior.extracted_at
+                doc.extractor = prior.extractor
+                doc.prompt_version = prior.prompt_version
+            elif route == "quotation":
                 bid = extract_bid(doc.vendor, [full], client,
                                   pdf_fallback=pdf_fallback, text=text)
                 status = bid.extraction_status
@@ -615,8 +741,6 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
                 # link at a document that produced nothing, which would then
                 # prune good prices
                 quotation_doc_id = doc.doc_id if status == "ok" else base.quotation_doc_id
-                technical = list(base.technical)
-                deviations = list(base.deviations)
             elif route == "datasheet":
                 facts, status, notes = extract_tech_facts(
                     doc.doc_id, full, client, pdf_fallback=pdf_fallback,
@@ -627,13 +751,8 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
                     # replace only this document's facts; other datasheets survive
                     technical = [f for f in base.technical if f.get("doc_id") != doc.doc_id]
                     technical += [f.model_dump() for f in facts]
-                else:
-                    # a failed re-extraction must not erase this document's
-                    # previously-good, already-stored facts
-                    technical = list(base.technical)
-                commercial_dump = base.commercial
-                deviations = list(base.deviations)
-                quotation_doc_id = base.quotation_doc_id
+                # on failure a re-extraction must not erase this document's
+                # previously-good, already-stored facts
             else:   # deviation
                 items, status, notes = extract_deviations(doc.doc_id, full, client,
                                                           pdf_fallback=pdf_fallback,
@@ -642,21 +761,48 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
                 if status == "ok":
                     deviations = [d for d in base.deviations if d.get("doc_id") != doc.doc_id]
                     deviations += [d.model_dump() for d in items]
-                else:
-                    # same guard as the datasheet branch: a failed re-extraction
-                    # must not erase this document's previously-good deviations
-                    deviations = list(base.deviations)
-                commercial_dump = base.commercial
-                technical = list(base.technical)
-                quotation_doc_id = base.quotation_doc_id
+                # same guard as the datasheet branch: a failed re-extraction
+                # must not erase this document's previously-good deviations
 
-            doc.extraction_status = status
-            doc.extracted_at = _now()
-            doc.extractor = f"llm:{expected_version}"
-            doc.prompt_version = expected_version
+            if run_primary:
+                doc.extraction_status = status
+                doc.extracted_at = _now()
+                doc.extractor = f"llm:{expected_version}"
+                doc.prompt_version = expected_version
+
+            if run_secondary:
+                # The additional pass, on text this iteration has already read.
+                # Its outcome is recorded on its own fields: a failure here must
+                # not blank the primary result, and marking the whole document
+                # `failed` would do exactly that to the primary's cache entry.
+                facts, secondary_status, secondary_notes = extract_tech_facts(
+                    doc.doc_id, full, client, pdf_fallback=pdf_fallback,
+                    parameters=parameters, text=text)
+                doc.vocabulary_sha = vocab_sha
+                doc.secondary_prompt_version = secondary_version
+                doc.secondary_status = secondary_status
+                doc.secondary_notes = secondary_notes
+                if secondary_status == "ok":
+                    technical = [f for f in technical if f.get("doc_id") != doc.doc_id]
+                    technical += [f.model_dump() for f in facts]
+                events.append_event(root, slug, Event(
+                    at=_now(), run_id=run_id, actor="pipeline",
+                    action="document.extracted_secondary", target=doc.doc_id,
+                    detail={"status": secondary_status, "route": secondary,
+                            "doc_class": doc.doc_class}))
+            elif secondary is not None:
+                doc.vocabulary_sha = prior.vocabulary_sha
+                doc.secondary_prompt_version = prior.secondary_prompt_version
+                doc.secondary_status = prior.secondary_status
+                doc.secondary_notes = prior.secondary_notes
+
             documents.append(doc)
-            extracted += 1 if status == "ok" else 0
-            failed += 0 if status == "ok" else 1
+            # One document, one outcome: a document whose secondary pass failed
+            # is a document this run did not fully read, and the run is
+            # `done_with_failures` for it even though its primary pass stands.
+            document_ok = status == "ok" and doc.secondary_status in (None, "ok")
+            extracted += 1 if document_ok else 0
+            failed += 0 if document_ok else 1
 
             facts_view = {"commercial": commercial_dump,
                           "technical": technical,
@@ -692,7 +838,7 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
                         detail={"field_path": o.field_path}))
 
         _prune_orphan_facts(root, slug, run_id, project.vendors, documents,
-                            inferred_quotes)
+                            inferred_quotes, secondary_routes)
 
         # A vendor removed from the project must not keep haunting the
         # comparison: documents.json is replaced wholesale every run, but

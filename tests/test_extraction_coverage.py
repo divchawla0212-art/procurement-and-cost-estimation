@@ -44,6 +44,7 @@ _MR_REV1 = "ADN-AEC-ME-SPC-026 MR Gas Genset(Rev1).txt"
 _SECOND_SPEC = "ADN-AEC-ME-SPC-027 MR Gas Genset B.txt"
 _MOM = "00 MOM 20241111 ASTRA.txt"
 _QUOTATION = "Quotation.txt"
+_PROPOSAL = "Techno Commercial Proposal.txt"    # a quotation by filename rule
 _DATASHEET = "01 DataSheet Gas Generator.txt"
 _DATASHEET_REV1 = "01 DataSheet Gas Generator(Rev1).txt"
 _DATASHEET_BODY = "H2S up to 70 ppm"                   # written by _project
@@ -420,7 +421,17 @@ def test_row9_a_vendor_whose_only_document_stops_routing_keeps_its_column(
     # be asserting over run 1's answer.
     _write_vendor(tmp_path, "MKON", _DATASHEET, "a body this build cannot place")
     monkeypatch.setattr(pipeline, "classify_document", _unclassified_under("/MKON/"))
-    run_ingestion(root, "p", CoverageClient())
+    second = CoverageClient()
+    # Silence is now harder to reach, and deliberately so. The declined
+    # document is still promoted to MKON's quotation - nothing else of theirs
+    # could serve - and Task 7b has a vendor's quotation feed the technical
+    # extractor when no other live document of theirs does. So this run does
+    # read the document technically, and MKON goes silent for the reason INV-E
+    # is actually about: it states nothing checkable. Before Task 7b the row
+    # got its silence from no extractor reading the document at all, which for
+    # a one-document vendor is the coverage hole, not the invariant.
+    second.omit_facts_containing = "a body this build cannot place"
+    run_ingestion(root, "p", second)
 
     results = snapshots.load_compliance(root, "p")
     assert {r.vendor for r in results} == {"KERUI", "MKON"}
@@ -535,6 +546,45 @@ def test_row9_a_document_inferred_as_the_quotation_gives_up_its_technical_facts(
     # more, and its stored `verbatim` quotes text nothing re-reads
     assert all(f["doc_id"] != promoted.doc_id for f in facts.technical)
     assert facts.technical == kept              # and only that document's went
+
+
+def test_row21_a_quotation_only_vendor_gives_up_its_facts_when_a_datasheet_arrives(
+        tmp_path):
+    # INV-B, as Task 7b extends it. A vendor whose only live document is a
+    # quotation has it feed the technical extractor too; a vendor with a
+    # datasheet does not. The route is therefore *withdrawable*, and a
+    # withdrawn route's facts must be pruned rather than left sitting in the
+    # store, refreshed by nothing and still quoting a `verbatim` no extractor
+    # re-reads. One run cannot see this: run 1 has nothing to lose yet.
+    root = _project(tmp_path)
+    _write_vendor(tmp_path, "AESL", _PROPOSAL, "our techno commercial proposal")
+    _set_vendors(root, ["KERUI", "AESL"])
+    first = CoverageClient()
+    run_ingestion(root, "p", first)
+
+    proposal = _doc(root, _PROPOSAL)
+    facts = _facts(root, "AESL")
+    assert proposal.doc_class == "quotation"        # routing never rewrites it
+    assert {f["doc_id"] for f in facts.technical} == {proposal.doc_id}
+    assert facts.quotation_doc_id == proposal.doc_id
+    assert facts.commercial["base_price"] == 1000.0
+
+    _write_vendor(tmp_path, "AESL", _DATASHEET, "H2S up to 65 ppm")
+    second = CoverageClient()
+    second.fact_value = 65
+    run_ingestion(root, "p", second)
+
+    datasheet = next(d for d in _docs(root)
+                     if d.vendor == "AESL" and d.path.endswith(_DATASHEET))
+    after = _facts(root, "AESL")
+    assert {f["doc_id"] for f in after.technical} == {datasheet.doc_id}
+    assert [f["value"] for f in after.technical] == [65]
+    assert "facts.pruned" in [e.action for e in events.read_events(root, "p")]
+    # the primary route is untouched by the secondary one being withdrawn: the
+    # quotation is still the vendor's quotation, still cached, still theirs
+    assert second.calls.count("bid") == 0
+    assert after.quotation_doc_id == proposal.doc_id
+    assert after.commercial["base_price"] == 1000.0
 
 
 # --- INV-A: an unreadable document is `failed`, and `failed` counts as live

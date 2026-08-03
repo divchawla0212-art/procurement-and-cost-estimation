@@ -1,5 +1,6 @@
 import io
 import zipfile
+from procurement import pipeline
 from procurement.project import create_project, unpack_vendor_zip
 from procurement.pipeline import run_ingestion, PROMPT_VERSION_BY_CLASS
 from procurement.classify import CLASSIFY_PROMPT_VERSION
@@ -342,6 +343,152 @@ def test_the_quotation_is_still_the_only_source_of_commercial_terms(tmp_path):
     quote = next(d for d in snapshots.load_documents(root, "p")
                  if d.path.endswith("ADP-13158-2024-935.txt"))
     assert facts.quotation_doc_id == quote.doc_id
+
+
+_PROPOSAL = "Techno Commercial proposal AESL-GTC-60808 - REV00.txt"
+_PROPOSAL_BODY = b"Base price 1840000 USD. Continuous rating 550 kW at site."
+
+
+def _quotation_only_project(tmp_path, body=_PROPOSAL_BODY + _PAD):
+    """One vendor, one document, and that document a quotation.
+
+    AESL's actual submission in the live corpus, and the shape the secondary
+    route exists for: nothing else the vendor sent reaches the technical
+    extractor, so without it they are checkable against no requirement at all.
+    """
+    root = str(tmp_path)
+    create_project(root, "P", target_currency="USD")
+    z = tmp_path / "v.zip"
+    z.write_bytes(_zip({f"AESL/{_PROPOSAL}": body}))
+    unpack_vendor_zip(root, "p", str(z))
+    return root
+
+
+def _only_doc(root, vendor="AESL"):
+    return next(d for d in snapshots.load_documents(root, "p") if d.vendor == vendor)
+
+
+def test_a_quotation_only_vendor_contributes_technical_facts(tmp_path):
+    root = _quotation_only_project(tmp_path)
+    client = RoutingClient()
+    run_ingestion(root, "p", client)
+
+    doc = _only_doc(root)
+    facts = snapshots.load_facts(root, "p", "AESL")
+    # the fix: the proposal's technical content is read by something
+    assert {f["doc_id"] for f in facts.technical} == {doc.doc_id}
+    # and the three guarantees it must not break - the technical pass is
+    # additional, never a replacement
+    assert doc.doc_class == "quotation"          # routing never rewrites it
+    assert facts.quotation_doc_id == doc.doc_id  # still the selected quotation
+    assert facts.commercial["base_price"] == 1000.0
+    assert doc.extraction_status == "ok"
+
+
+def test_a_vendor_with_a_datasheet_does_not_double_extract_its_quotation(tmp_path):
+    root = _project(tmp_path)          # KERUI: a quotation and two datasheets
+    client = RoutingClient()
+    run_ingestion(root, "p", client)
+
+    quote = next(d for d in snapshots.load_documents(root, "p")
+                 if d.path.endswith("Quotation of Gas Generator.txt"))
+    facts = snapshots.load_facts(root, "p", "KERUI")
+    assert quote.doc_id not in {f["doc_id"] for f in facts.technical}
+    # asserted on the calls, not only on the stored facts: the secondary route
+    # is bounded by need, so the point is that the model is never asked about
+    # this document's parameters - not that its answer is thrown away.
+    tech_calls = [c for c in client.calls if "facts" in c["prompt"]]
+    assert len(tech_calls) == 2                  # the two datasheets, no more
+    assert not any("base price 1000" in c["context_text"] for c in tech_calls)
+
+
+def test_a_datasheet_arriving_later_withdraws_the_quotations_technical_facts(tmp_path):
+    root = _quotation_only_project(tmp_path)
+    run_ingestion(root, "p", RoutingClient())
+    quote = _only_doc(root)
+    assert {f["doc_id"] for f in snapshots.load_facts(root, "p", "AESL").technical} \
+        == {quote.doc_id}
+
+    (tmp_path / "p" / "vendors" / "AESL"
+     / "01 DataSheet Gas Generator.txt").write_bytes(b"Continuous rating 550 kW" + _PAD)
+    run_ingestion(root, "p", RoutingClient())
+
+    datasheet = next(d for d in snapshots.load_documents(root, "p")
+                     if d.path.endswith("01 DataSheet Gas Generator.txt"))
+    facts = snapshots.load_facts(root, "p", "AESL")
+    # the condition stopped holding, so the facts the quotation contributed are
+    # pruned - not merely left unrefreshed by an extractor nothing re-runs
+    assert {f["doc_id"] for f in facts.technical} == {datasheet.doc_id}
+    # the quotation is still the quotation, and its commercial terms stand
+    assert facts.quotation_doc_id == quote.doc_id
+    assert facts.commercial["base_price"] == 1000.0
+
+
+def test_the_two_passes_of_one_document_cache_independently(tmp_path, monkeypatch):
+    # Both passes read the same bytes, so one cache key cannot serve them: a
+    # technical prompt bump has to re-ask the technical pass without re-asking
+    # (and re-paying for) the quotation one, and each has to persist what it
+    # was answered under or the bump re-fires on every run forever.
+    root = _quotation_only_project(tmp_path)
+    run_ingestion(root, "p", RoutingClient())
+    second = RoutingClient()
+    run_ingestion(root, "p", second)
+    assert second.calls == []                # both passes cached
+
+    monkeypatch.setitem(pipeline.PROMPT_VERSION_BY_CLASS, "datasheet", "tech_facts_v2")
+    third = RoutingClient()
+    run_ingestion(root, "p", third)
+    assert ["facts" in c["prompt"] for c in third.calls] == [True]
+
+    doc = _only_doc(root)
+    facts = snapshots.load_facts(root, "p", "AESL")
+    assert doc.prompt_version == "bid_extract_v1"          # the primary stands
+    assert doc.secondary_prompt_version == "tech_facts_v2"
+    assert facts.commercial["base_price"] == 1000.0
+    assert {f["doc_id"] for f in facts.technical} == {doc.doc_id}
+
+    fourth = RoutingClient()
+    run_ingestion(root, "p", fourth)
+    assert fourth.calls == [], "the bumped version did not persist"
+
+
+def test_a_failed_secondary_pass_keeps_the_primary_result_and_records_why(tmp_path):
+    root = _quotation_only_project(tmp_path)
+    run_ingestion(root, "p", FailingOnSchema("facts"))
+
+    doc = _only_doc(root)
+    facts = snapshots.load_facts(root, "p", "AESL")
+    # the quotation was read and stored despite the technical pass failing
+    assert doc.extraction_status == "ok"
+    assert facts.commercial["base_price"] == 1000.0
+    assert facts.quotation_doc_id == doc.doc_id
+    # and the failure is recorded rather than swallowed
+    assert doc.secondary_status == "failed"
+    assert "provider unavailable" in doc.secondary_notes
+    assert facts.technical == []
+
+    # the failure is not cached as an answer: the next run re-asks the
+    # technical pass, and only it
+    second = RoutingClient()
+    run_ingestion(root, "p", second)
+    assert ["facts" in c["prompt"] for c in second.calls] == [True]
+    assert snapshots.load_facts(root, "p", "AESL").technical
+
+
+def test_a_quotation_below_the_text_guard_gets_no_secondary_route(tmp_path):
+    # Task 1's guard fires ahead of every extraction, primary or secondary: an
+    # empty string is never handed to a prompt, and the document is `failed`
+    # with its reason recorded rather than `skipped`.
+    root = _quotation_only_project(tmp_path, body=b"scanned proposal")
+    client = RoutingClient()
+    run_ingestion(root, "p", client)
+
+    doc = _only_doc(root)
+    assert doc.extraction_status == "failed"
+    assert "no readable text" in doc.notes
+    assert doc.text_source
+    assert not any("facts" in c["prompt"] for c in client.calls)
+    assert snapshots.load_facts(root, "p", "AESL") is None
 
 
 def test_a_document_that_raises_on_read_is_failed_not_crashed(tmp_path):

@@ -33,10 +33,23 @@ class DocumentRecord(BaseModel):
     extractor: str | None = None
     prompt_version: str | None = None
     # Fingerprint of the `auto` requirement vocabulary this document's facts
-    # were extracted under. Part of the datasheet cache key: the vocabulary is
+    # were extracted under. Part of the technical cache key: the vocabulary is
     # an input to the tech_facts_v1 prompt, so a requirement edit that changes
-    # it must re-ask the datasheets exactly once. None for every other class.
+    # it must re-ask the datasheets exactly once. None for every document that
+    # does not reach the technical extractor, by either route.
     vocabulary_sha: str | None = None
+    # A vendor document can feed a *second* extractor when its vendor's
+    # document set leaves the first one insufficient — see
+    # SECONDARY_VENDOR_ROUTE in pipeline.py, where a quotation also feeds the
+    # technical extractor for a vendor no datasheet of whose reaches it. That
+    # pass is cached, succeeds and fails on its own: both passes read the same
+    # bytes but ask different prompts, so one status and one prompt version
+    # cannot describe both. Folding a failed technical pass into
+    # `extraction_status` would evict the good quotation extraction from the
+    # cache and re-ask it, at cost, on every run thereafter.
+    secondary_status: str | None = None          # ok | failed; None: no second route
+    secondary_notes: str | None = None
+    secondary_prompt_version: str | None = None
 
 
 class VendorFacts(BaseModel):

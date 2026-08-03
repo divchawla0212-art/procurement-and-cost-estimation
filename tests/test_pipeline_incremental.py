@@ -62,7 +62,11 @@ def test_first_run_extracts_one_document_per_vendor(tmp_path):
     root = _project(tmp_path)
     client = _client()
     run_ingestion(root, "p", client)
-    assert len(client.calls) == 2                 # the quote only, not the BOM
+    # Two quotations, plus one technical pass: MKON's only document is their
+    # quotation, so it feeds the technical extractor as well (Task 7b's
+    # secondary route). KERUI's does not - their BOM already routes there,
+    # whether or not this run manages to read it.
+    assert len(client.calls) == 3
     docs = {d.path: d for d in snapshots.load_documents(root, "p")}
     assert sum(1 for d in docs.values() if d.extraction_status == "ok") == 2
     # BOM.txt is now routed (VENDOR_ROUTE sends "bom" to the technical
@@ -94,7 +98,7 @@ def test_force_reextracts_everything(tmp_path):
     run_ingestion(root, "p", _client())
     second = _client()
     run_ingestion(root, "p", second, force=True)
-    assert len(second.calls) == 2
+    assert len(second.calls) == 3      # both passes of both routes, as run 1
 
 
 def test_facts_are_stored_per_vendor(tmp_path):
