@@ -55,7 +55,55 @@ export interface ProjectDetail {
   requirement_count: number
   coverage: Coverage
   group_counts: Record<GroupKey, number>
+  extraction: VendorExtractionRollup[]
 }
+
+// Mirrors procurement/coverage.py's DocumentStatus exactly. A document can be
+// read by two extractors: `secondary_route`/`secondary_status`/`secondary_notes`
+// carry the outcome of a *second* pass (Task 7b: an insufficiently-documented
+// vendor's quotation is also fed to the technical extractor). `status` alone
+// cannot say "primary ok, secondary failed" at once, so these are separate
+// fields rather than folded into `status`/`notes`.
+export interface DocumentStatus {
+  doc_id: string
+  filename: string
+  path: string
+  doc_class: string
+  route: string | null
+  status: 'ok' | 'failed' | 'skipped' | 'pending'
+  notes: string | null
+  text_source: string | null
+  fact_count: number
+  is_quotation: boolean
+  superseded_by: string | null
+  secondary_route: string | null
+  secondary_status: 'ok' | 'failed' | null
+  secondary_notes: string | null
+}
+
+// Mirrors procurement/coverage.py's VendorExtraction exactly.
+export interface VendorExtraction {
+  vendor: string
+  documents: DocumentStatus[]
+  extracted: number
+  failed: number
+  skipped: number
+  fact_count: number
+  has_commercial: boolean
+  unanswered: number
+  // Documents whose primary pass is `ok` but whose secondary pass is
+  // `failed` — counted separately from `failed` because the primary
+  // extraction really did succeed.
+  secondary_failed: number
+}
+
+export interface ExtractionStatus {
+  vendors: VendorExtraction[]
+  totals: Record<string, number>
+}
+
+// the /summary roll-up: the same record minus the document list
+export type VendorExtractionRollup = Omit<VendorExtraction, 'documents'>
 
 export interface ProviderOption {
   id: string

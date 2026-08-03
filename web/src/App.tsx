@@ -5,15 +5,17 @@ import { useAsync } from './useAsync'
 import { Dashboard } from './pages/Dashboard'
 import { ComplianceMatrix } from './pages/ComplianceMatrix'
 import { ComparativeStatement } from './pages/ComparativeStatement'
+import { ExtractionStatus } from './pages/ExtractionStatus'
 import { Setup } from './pages/Setup'
 
-type View = 'dashboard' | 'setup' | 'matrix' | 'statement'
+type View = 'dashboard' | 'setup' | 'matrix' | 'statement' | 'extraction'
 
 const NAV: { view: View; index: string; label: string; needsProject: boolean }[] = [
   { view: 'dashboard', index: '00', label: 'Dashboard', needsProject: false },
   { view: 'setup', index: '01', label: 'Set up & ingest', needsProject: false },
   { view: 'matrix', index: '02', label: 'Compliance matrix', needsProject: true },
   { view: 'statement', index: '03', label: 'Comparative statement', needsProject: true },
+  { view: 'extraction', index: '04', label: 'Extraction status', needsProject: true },
 ]
 
 export default function App() {
@@ -166,6 +168,9 @@ export default function App() {
             )}
             {view === 'statement' && active && (
               <ComparativeStatement slug={active.slug} projectName={active.name} />
+            )}
+            {view === 'extraction' && active && (
+              <ExtractionStatus slug={active.slug} projectName={active.name} />
             )}
           </div>
         </main>

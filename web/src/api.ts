@@ -1,5 +1,6 @@
 import type {
   ComplianceMatrix,
+  ExtractionStatus,
   ProjectDetail,
   ProjectSetup,
   ProjectSummary,
@@ -56,6 +57,10 @@ export function fetchComplianceMatrix(slug: string): Promise<ComplianceMatrix> {
 
 export function fetchStatement(slug: string): Promise<Statement> {
   return getJson(`/api/projects/${encodeURIComponent(slug)}/statement`)
+}
+
+export function fetchExtractionStatus(slug: string): Promise<ExtractionStatus> {
+  return getJson(`/api/projects/${encodeURIComponent(slug)}/extraction-status`)
 }
 
 // --- setup / ingestion (mutations) ---------------------------------------

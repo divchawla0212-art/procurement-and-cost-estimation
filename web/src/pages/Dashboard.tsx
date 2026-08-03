@@ -132,6 +132,25 @@ function ProjectCard({
           ))}
         </div>
       )}
+
+      {data?.extraction && data.extraction.length > 0 && (
+        <div className="meta" aria-label="Extraction status">
+          {data.extraction.map((v) => {
+            // the single most useful signal on the page: a vendor with zero
+            // technical facts, or one where a second read of a document
+            // silently failed, both change an award decision.
+            const flagged = v.fact_count === 0 || v.secondary_failed > 0
+            return (
+              <span key={v.vendor} className={flagged ? 'warn' : undefined}>
+                {v.vendor} {v.extracted}/{v.extracted + v.failed + v.skipped} read
+                {v.fact_count === 0 && ' · no facts'}
+                {v.secondary_failed > 0 &&
+                  ` · ${v.secondary_failed} second pass failed`}
+              </span>
+            )
+          })}
+        </div>
+      )}
     </button>
   )
 }
