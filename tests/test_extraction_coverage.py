@@ -26,6 +26,7 @@ import os
 import pytest
 
 from procurement import pipeline
+from procurement.chunking import CHUNK_ATTEMPTS
 from procurement.classify import classify_document
 from procurement.compliance import vocabulary_sha
 from procurement.extract_requirements import REQUIREMENTS_PROMPT_VERSION
@@ -80,7 +81,13 @@ class CoverageClient(RfqClient):
         # --- requirements
         self.requirements_response = None      # None -> the base two clauses
         self.requirements_by_chunk = None      # one response per chunk
-        self.fail_requirements_chunk = None    # 1-based chunk to raise on
+        # 1-based ask to start raising on, and every ask after it. Not "the
+        # nth ask" alone: ask_each_chunk retries a failed chunk, so a knob that
+        # fired once would be cleared by the retry and would silently test the
+        # retry instead of the all-or-nothing merge. The first failure aborts
+        # the whole extraction anyway, so "from here on" and "this chunk" are
+        # the same thing in effect.
+        self.fail_requirements_chunk = None
         self._requirements_calls = 0
         # --- facts. The vendor answers the parameter the requirement asks
         # about unless a row deliberately makes it unanswerable.
@@ -96,7 +103,8 @@ class CoverageClient(RfqClient):
                                               context_text, images)
         if "requirements" in fields:
             self._requirements_calls += 1
-            if self._requirements_calls == self.fail_requirements_chunk:
+            if (self.fail_requirements_chunk is not None
+                    and self._requirements_calls >= self.fail_requirements_chunk):
                 raise RuntimeError("requirements provider unavailable")
             if self.requirements_by_chunk is not None:
                 index = min(self._requirements_calls - 1,
@@ -399,7 +407,11 @@ def test_row8_a_permanently_failing_document_keeps_its_reason_every_run(tmp_path
     run_ingestion(root, "p", second)
 
     again = _doc(root, _DATASHEET)
-    assert second.calls.count("facts") == 1      # only the failure is re-asked
+    # only the failure is re-asked - its five neighbours are cache hits. Twice,
+    # not once: the document is one chunk, and ask_each_chunk retries a failed
+    # chunk before giving up on it. A permanent failure still costs a bounded
+    # CHUNK_ATTEMPTS asks and no more.
+    assert second.calls.count("facts") == CHUNK_ATTEMPTS
     assert again.extraction_status == "failed"
     assert "provider unavailable" in again.notes
     assert _facts(root).technical == after_one
@@ -605,9 +617,20 @@ def test_row12_a_text_layer_disappearing_does_not_delete_the_facts(tmp_path):
     assert doc.extraction_status == "failed"       # `failed`, never `skipped`
     assert "no readable text" in doc.notes
     assert doc.text_source == "text:1chars"
-    assert second.calls.count("facts") == 0, "the guard fires before the model"
+    # The guard fires before the model, so this document was never asked. The
+    # one facts call is the quotation's secondary pass, which opens precisely
+    # because nothing of this vendor's now *reaches* the technical extractor -
+    # a document that contributed nothing must not withdraw the route.
+    assert second.calls.count("facts") == 1
+    after = _facts(root).technical
     # `failed` counts as live in _prune_orphan_facts, so the good facts survive
-    assert _facts(root).technical == before
+    assert all(fact in after for fact in before)
+    # and the vendor is not left factless behind a file nothing could read:
+    # the quotation's secondary route opens the moment no document of theirs
+    # reaches the technical extractor
+    quote = _doc(root, _QUOTATION)
+    assert quote.secondary_status == "ok"
+    assert any(fact["doc_id"] == quote.doc_id for fact in after)
     for record in _docs(root):
         if record.vendor and record.extraction_status in ("ok", "failed"):
             assert record.text_source, f"{record.path} has no text_source"
@@ -665,7 +688,9 @@ def test_row14_a_failing_chunk_leaves_the_stored_requirement_set_whole(tmp_path)
     second.fail_requirements_chunk = 2
     run_ingestion(root, "p", second)
 
-    assert second.calls.count("requirements") == 2   # stopped at the failure
+    # stopped at the failure: chunk 1 answered, chunk 2 asked CHUNK_ATTEMPTS
+    # times and no more, and chunks 3 and 4 never asked at all
+    assert second.calls.count("requirements") == 1 + CHUNK_ATTEMPTS
     assert _reqs(root).model_dump() == before        # nothing partial, nothing lost
     doc = _doc(root, _MR)
     assert doc.extraction_status == "failed"

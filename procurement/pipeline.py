@@ -121,6 +121,39 @@ def _rel_path(pdir: str, path: str) -> str:
     return os.path.relpath(path, pdir).replace(os.sep, "/")
 
 
+def _read_and_guard(path: str, doc: DocumentRecord, pdf_fallback=None) -> str:
+    """Read one document's text and apply the no-readable-text guard.
+
+    Returns the text, and records the outcome on `doc`: `text_source` always,
+    and on failure `extraction_status = "failed"` with the reason in `notes`.
+
+    `failed`, never `skipped`: both prune passes treat skipped as dead and
+    would delete requirements, amendments or facts a good earlier run stored,
+    the first time `pdftotext` is missing from the PATH.
+
+    One helper rather than a copy per pass. The RFQ loop and the vendor loop
+    carried the same twenty-five lines and had already drifted apart. What each
+    caller *does* with a failure stays at the call site, though - only the
+    vendor loop appends to its `documents` list, and only it has a per-document
+    facts write to protect - so this returns rather than deciding.
+    """
+    try:
+        text, text_source = read_text_with_source(path, llm_fallback=pdf_fallback)
+    except Exception as exc:
+        text, text_source = "", "unreadable"
+        doc.extraction_status = "failed"
+        doc.notes = f"unreadable document: {exc}"
+    doc.text_source = f"{text_source}:{len(text)}chars"
+
+    if (doc.extraction_status != "failed"
+            and len(text.strip()) < MIN_EXTRACTABLE_CHARS):
+        doc.extraction_status = "failed"
+        doc.notes = (f"no readable text layer "
+                     f"({len(text.strip())} chars via {text_source}); "
+                     "scanned or drawing-only document")
+    return text
+
+
 def _prune_orphan_facts(root: str, slug: str, run_id: str, vendors: list[str],
                         documents: list[DocumentRecord],
                         inferred_quotes: set[str],
@@ -316,27 +349,94 @@ def _vendor_routes(doc: DocumentRecord, inferred_quotes: set[str],
     return [route] if secondary is None else [route, secondary]
 
 
+def _reaching_documents(pdir: str, docs: list[DocumentRecord],
+                        prior_docs: dict[str, DocumentRecord],
+                        inferred_quotes: set[str],
+                        quote_rel_by_vendor: dict[str, str],
+                        pdf_fallback=None, force: bool = False
+                        ) -> tuple[dict[str, str], set[str]]:
+    """(text by doc_id, the doc_ids that reach an extractor) for the vendor pass.
+
+    Hoisted above `_secondary_routes` because "does this vendor have another
+    document that reaches the technical extractor" cannot be answered from
+    routing alone: `drawing` and `other` route to `datasheet`, and the live
+    corpus's drawings yield 1-42 characters, so a document that trips the
+    MIN_EXTRACTABLE_CHARS guard is *routed* to an extractor it never reaches.
+    Counting it withdrew the quotation's secondary route and pinned the vendor
+    at zero technical facts — the phase's motivating defect, one door over,
+    with the phase's own fix disabled by a file that contributed nothing.
+
+    Readability is a property of the document's text, not of how the run went,
+    so this keeps `_secondary_routes` decided before extraction: the structure
+    is computed once, here, and handed to the dispatch and to
+    `_prune_orphan_facts` alike, exactly as `secondary_routes` itself is. The
+    two therefore cannot form separate opinions within one run, which is the
+    property 80adec0 lost.
+
+    Documents no route claims — superseded, unclassified, an unselected second
+    quotation — are neither read nor counted, matching the vendor loop's own
+    skip conditions, all three of which are decided before this point.
+
+    A document whose extraction is already cached `ok` on identical bytes is
+    counted without being re-read: it reached its extractor on an earlier run
+    with exactly this content, so the read would only re-learn that — and for
+    every scanned document the paid `llm:` transcription fallback rescued, it
+    would re-learn it at cost, on every run, forever.
+    """
+    texts: dict[str, str] = {}
+    reaching: set[str] = set()
+    for doc in docs:
+        if doc.vendor is None or doc.superseded_by is not None:
+            continue
+        route = _vendor_route(doc, inferred_quotes)
+        if route is None:
+            continue
+        if route == "quotation" and quote_rel_by_vendor.get(doc.vendor) != doc.path:
+            continue
+
+        prior = prior_docs.get(doc.doc_id)
+        if (not force and prior is not None
+                and prior.content_sha256 == doc.content_sha256
+                and prior.extraction_status == "ok"):
+            reaching.add(doc.doc_id)
+            continue
+
+        texts[doc.doc_id] = _read_and_guard(os.path.join(pdir, doc.path), doc,
+                                            pdf_fallback)
+        if doc.extraction_status != "failed":
+            reaching.add(doc.doc_id)
+    return texts, reaching
+
+
 def _secondary_routes(docs: list[DocumentRecord], inferred_quotes: set[str],
-                      quote_rel_by_vendor: dict[str, str]) -> dict[str, str]:
+                      quote_rel_by_vendor: dict[str, str],
+                      reaching: set[str]) -> dict[str, str]:
     """doc_id -> the additional extractor that document feeds, this run.
 
     A vendor's quotation also feeds the technical extractor when no other live
-    document of theirs reaches it. Bounded by need rather than applied blanket:
-    routing every quotation through the technical extractor as well would
-    roughly double the quotation-class calls of every vendor in every run, to
-    re-read parameters that the vendor's datasheets already state better. The
-    condition is empty for a vendor who submitted a datasheet.
+    document of theirs *reaches* it. Bounded by need rather than applied
+    blanket: routing every quotation through the technical extractor as well
+    would roughly double the quotation-class calls of every vendor in every
+    run, to re-read parameters that the vendor's datasheets already state
+    better. The condition is empty for a vendor who submitted a readable
+    datasheet.
 
-    Decided from doc_class, lineage and quotation selection alone — never from
-    how a run *went*. Asking whether the datasheet happened to be readable this
-    time would make routing vary with a transient provider outage, and the
-    prune (which runs after extraction) would then disagree with the dispatch
-    (which ran before it) about what a document feeds.
+    Reaches, not "is routed to": routing is decided from doc_class alone, so a
+    scanned drawing that no extractor will ever be handed still counts as a
+    datasheet under it. `reaching` is _reaching_documents' answer, computed
+    once per run from the document set and its text.
+
+    Decided from doc_class, lineage, quotation selection and readability alone
+    — never from how a run *went*. Asking whether the datasheet's extraction
+    happened to succeed this time would make routing vary with a transient
+    provider outage, and the prune (which runs after extraction) would then
+    disagree with the dispatch (which ran before it) about what a document
+    feeds.
 
     Withdrawable by construction: it is recomputed from the live document set
-    every run, so a vendor who later submits a datasheet stops having their
-    quotation read technically, and the facts it contributed are then orphans
-    that _prune_orphan_facts removes.
+    every run, so a vendor who later submits a readable datasheet stops having
+    their quotation read technically, and the facts it contributed are then
+    orphans that _prune_orphan_facts removes.
     """
     live_by_vendor: dict[str, list[DocumentRecord]] = {}
     for doc in docs:
@@ -346,9 +446,10 @@ def _secondary_routes(docs: list[DocumentRecord], inferred_quotes: set[str],
     out: dict[str, str] = {}
     for vendor, live in live_by_vendor.items():
         routes = {d.doc_id: _vendor_route(d, inferred_quotes) for d in live}
+        reached = {route for doc_id, route in routes.items() if doc_id in reaching}
         for doc in live:
             secondary = SECONDARY_VENDOR_ROUTE.get(routes[doc.doc_id])
-            if secondary is None or secondary in routes.values():
+            if secondary is None or secondary in reached:
                 continue
             # Only the vendor's selected quotation reaches an extractor at all;
             # a second one is skipped, and a skipped document feeds nothing.
@@ -433,25 +534,10 @@ def _run_rfq_pass(root: str, slug: str, client,
             continue
 
         full = os.path.join(pdir, doc.path)
-        try:
-            text, text_source = read_text_with_source(
-                full, llm_fallback=pdf_fallback)
-        except Exception as exc:
-            text, text_source = "", "unreadable"
-            doc.extraction_status = "failed"
-            doc.notes = f"unreadable document: {exc}"
-        doc.text_source = f"{text_source}:{len(text)}chars"
-
-        if (doc.extraction_status != "failed"
-                and len(text.strip()) < MIN_EXTRACTABLE_CHARS):
-            # `failed`, never `skipped`: the live-set check below (and
-            # _prune_orphan_facts' vendor-side counterpart) treats skipped as
-            # dead and would delete requirements/amendments a good earlier run
-            # stored, the first time `pdftotext` is missing from the PATH.
-            doc.extraction_status = "failed"
-            doc.notes = (f"no readable text layer "
-                         f"({len(text.strip())} chars via {text_source}); "
-                         "scanned or drawing-only document")
+        # The read and its guard are shared with the vendor pass; the RFQ side
+        # keeps its own handling of a failure, which appends no document (the
+        # inventory list is returned whole) and prunes against `live_spec`.
+        text = _read_and_guard(full, doc, pdf_fallback)
         if doc.extraction_status == "failed":
             failed += 1
             events.append_event(root, slug, Event(
@@ -584,12 +670,22 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
             detail={"doc_id": doc.doc_id, "path": rel,
                     "doc_class": doc.doc_class}))
 
+    # Which documents actually reach an extractor — text and readability, for
+    # every live vendor document a route claims. Hoisted above the routing
+    # below because a document that trips the no-readable-text guard is routed
+    # to an extractor it never reaches, and counting it withdrew the one fix
+    # this phase shipped for an under-documented vendor.
+    doc_texts, reaching = _reaching_documents(
+        pdir, fresh_docs, prior_docs, inferred_quotes, quote_rel_by_vendor,
+        pdf_fallback=pdf_fallback, force=force)
+
     # The one structure that answers "which extractors does this document
-    # feed": computed here, from the live document set and the selection above,
-    # and handed to both the dispatch below and _prune_orphan_facts, so the two
-    # cannot form separate opinions about it (80adec0's defect shape).
+    # feed": computed here, from the live document set, the selection above and
+    # the readability beside it, and handed to both the dispatch below and
+    # _prune_orphan_facts, so the two cannot form separate opinions about it
+    # (80adec0's defect shape).
     secondary_routes = _secondary_routes(fresh_docs, inferred_quotes,
-                                         quote_rel_by_vendor)
+                                         quote_rel_by_vendor, reaching)
 
     # Order quotations first within each vendor: facts_view["commercial"] is
     # None until a vendor's quotation has been extracted, and a field path
@@ -714,24 +810,14 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
                 continue
 
             full = os.path.join(pdir, doc.path)
-            try:
-                text, text_source = read_text_with_source(
-                    full, llm_fallback=pdf_fallback)
-            except Exception as exc:
-                text, text_source = "", "unreadable"
-                doc.extraction_status = "failed"
-                doc.notes = f"unreadable document: {exc}"
-            doc.text_source = f"{text_source}:{len(text)}chars"
-
-            if (doc.extraction_status != "failed"
-                    and len(text.strip()) < MIN_EXTRACTABLE_CHARS):
-                # `failed`, never `skipped`: _prune_orphan_facts treats skipped
-                # as dead and would delete the facts a good earlier run stored,
-                # the first time `pdftotext` is missing from the PATH.
-                doc.extraction_status = "failed"
-                doc.notes = (f"no readable text layer "
-                             f"({len(text.strip())} chars via {text_source}); "
-                             "scanned or drawing-only document")
+            # Read once per run, above, so routing could see which documents
+            # reach an extractor. The lazy read is the one case that pass
+            # skipped: a document whose primary extraction is cached `ok` on
+            # unchanged bytes, whose secondary pass is nonetheless stale and
+            # needs the text now.
+            text = doc_texts.get(doc.doc_id)
+            if text is None:
+                text = _read_and_guard(full, doc, pdf_fallback)
             if doc.extraction_status == "failed":
                 documents.append(doc)
                 failed += 1

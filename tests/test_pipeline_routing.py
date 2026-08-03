@@ -283,8 +283,17 @@ def test_a_document_with_no_readable_text_is_failed_with_a_reason(tmp_path):
     assert "no readable text" in scanned.notes
     assert scanned.text_source is not None
 
-    # the guard fires before the model is asked, so no facts prompt was sent
-    assert not any("facts" in c.get("prompt", "") for c in client.calls)
+    # The guard fires before the model is asked, so neither unreadable document
+    # was ever handed to a prompt. The one facts prompt sent is the quotation's
+    # secondary pass: no document of this vendor *reaches* the technical
+    # extractor, and a file that contributed nothing must not withdraw the one
+    # route that gives an under-documented vendor any technical fact at all.
+    facts_calls = [c for c in client.calls if "facts" in c.get("prompt", "")]
+    assert len(facts_calls) == 1
+    assert "base price 1000" in facts_calls[0]["context_text"]
+    assert not any("drawing, no real text" in c.get("context_text", "")
+                   for c in client.calls)
+    assert snapshots.load_facts(root, "p", "KERUI").technical
 
 
 def test_every_extracted_document_records_its_text_source(tmp_path):
@@ -421,6 +430,61 @@ def test_a_datasheet_arriving_later_withdraws_the_quotations_technical_facts(tmp
     assert {f["doc_id"] for f in facts.technical} == {datasheet.doc_id}
     # the quotation is still the quotation, and its commercial terms stand
     assert facts.quotation_doc_id == quote.doc_id
+    assert facts.commercial["base_price"] == 1000.0
+
+
+def test_an_unreadable_datasheet_does_not_withdraw_the_quotations_technical_route(tmp_path):
+    # Routing is decided from doc_class, so a scanned drawing is *routed* to
+    # the technical extractor while reaching no extractor at all: the live
+    # corpus's drawings yield 1-42 characters natively, and five of KERUI's
+    # seven were rescued only by the paid, fallible `llm:` transcription
+    # fallback. Counting such a file as the vendor's technical source withdrew
+    # the quotation's secondary route and pinned the vendor at zero facts - the
+    # phase's motivating defect one door over, with the phase's own fix
+    # disabled by a document that contributed nothing.
+    root = _quotation_only_project(tmp_path)
+    (tmp_path / "p" / "vendors" / "AESL"
+     / "15 LAYOUT - KGW550GF-T.txt").write_bytes(b"scanned drawing")
+    client = RoutingClient()
+    run_ingestion(root, "p", client)
+
+    docs = {d.path.rsplit("/", 1)[-1]: d for d in snapshots.load_documents(root, "p")}
+    drawing = docs["15 LAYOUT - KGW550GF-T.txt"]
+    assert drawing.doc_class == "drawing"                  # routed to datasheet
+    assert drawing.extraction_status == "failed"           # but never reaching it
+    quote = docs[_PROPOSAL]
+    assert quote.secondary_status == "ok"
+
+    # and the facts stand after the run rather than being pruned inside it:
+    # _prune_orphan_facts is handed the same secondary_routes the dispatch
+    # used, so the two still agree about what this document feeds
+    facts = snapshots.load_facts(root, "p", "AESL")
+    assert {f["doc_id"] for f in facts.technical} == {quote.doc_id}
+
+
+def test_the_route_is_withdrawn_once_that_datasheet_becomes_readable(tmp_path):
+    # The other direction, and the reason the condition may not be softened to
+    # "has no datasheet at all": once a document genuinely reaches the
+    # technical extractor the quotation stops being read technically, and the
+    # facts it contributed are pruned rather than left to be refreshed by
+    # nothing.
+    root = _quotation_only_project(tmp_path)
+    drawing = (tmp_path / "p" / "vendors" / "AESL" / "15 LAYOUT - KGW550GF-T.txt")
+    drawing.write_bytes(b"scanned drawing")
+    run_ingestion(root, "p", RoutingClient())
+    quote = next(d for d in snapshots.load_documents(root, "p")
+                 if d.path.endswith(_PROPOSAL))
+    assert {f["doc_id"] for f in snapshots.load_facts(root, "p", "AESL").technical} \
+        == {quote.doc_id}
+
+    drawing.write_bytes(b"Continuous rating 550 kW" + _PAD)   # transcribed at last
+    run_ingestion(root, "p", RoutingClient())
+
+    docs = {d.path.rsplit("/", 1)[-1]: d for d in snapshots.load_documents(root, "p")}
+    assert docs["15 LAYOUT - KGW550GF-T.txt"].extraction_status == "ok"
+    facts = snapshots.load_facts(root, "p", "AESL")
+    assert {f["doc_id"] for f in facts.technical} == \
+        {docs["15 LAYOUT - KGW550GF-T.txt"].doc_id}
     assert facts.commercial["base_price"] == 1000.0
 
 
@@ -578,9 +642,17 @@ def test_a_document_that_raises_on_read_is_failed_not_crashed(tmp_path):
     assert doc.extraction_status == "failed"
     assert doc.notes and "unreadable document" in doc.notes
     assert doc.text_source == "unreadable:0chars"
-    # the guard fires before the model is asked, so no facts prompt was sent
-    assert not any("facts" in c.get("prompt", "") for c in client.calls)
+    # The guard fires before the model is asked, so the .doc itself was never
+    # handed to a prompt. The single facts prompt is the quotation's secondary
+    # pass: the .doc is *routed* to the technical extractor but never reaches
+    # it, and a document that contributed nothing must not withdraw the route
+    # that is this vendor's only source of a technical fact.
+    facts_calls = [c for c in client.calls if "facts" in c.get("prompt", "")]
+    assert len(facts_calls) == 1
+    assert "base price 1000" in facts_calls[0]["context_text"]
     # the run itself must not have aborted: the quotation beside it still
     # reached the extractor and succeeded
     quote = docs["Quotation of Gas Generator.txt"]
     assert quote.extraction_status == "ok"
+    assert quote.secondary_status == "ok"
+    assert snapshots.load_facts(root, "p", "KERUI").technical

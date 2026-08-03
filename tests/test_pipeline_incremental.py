@@ -62,11 +62,13 @@ def test_first_run_extracts_one_document_per_vendor(tmp_path):
     root = _project(tmp_path)
     client = _client()
     run_ingestion(root, "p", client)
-    # Two quotations, plus one technical pass: MKON's only document is their
-    # quotation, so it feeds the technical extractor as well (Task 7b's
-    # secondary route). KERUI's does not - their BOM already routes there,
-    # whether or not this run manages to read it.
-    assert len(client.calls) == 3
+    # Two quotations, plus a technical pass on each: neither vendor has a
+    # document that *reaches* the technical extractor, so both quotations pick
+    # up the secondary route. KERUI's BOM is routed there by its class, but its
+    # unpadded body fails the no-readable-text guard, so it never arrives - and
+    # a document that contributed nothing must not withdraw the one route that
+    # gives an under-documented vendor any technical fact at all.
+    assert len(client.calls) == 4
     docs = {d.path: d for d in snapshots.load_documents(root, "p")}
     assert sum(1 for d in docs.values() if d.extraction_status == "ok") == 2
     # BOM.txt is now routed (VENDOR_ROUTE sends "bom" to the technical
@@ -90,7 +92,9 @@ def test_touching_one_document_reextracts_exactly_that_one(tmp_path):
     (tmp_path / "p" / "vendors" / "KERUI" / "Quotation.txt").write_bytes(b"base price 2000" + _PAD)
     second = _client()
     run_ingestion(root, "p", second)
-    assert len(second.calls) == 1
+    # both passes of that one document: its bytes changed, so the quotation
+    # cache and the secondary technical cache are stale together
+    assert len(second.calls) == 2
 
 
 def test_force_reextracts_everything(tmp_path):
@@ -98,7 +102,7 @@ def test_force_reextracts_everything(tmp_path):
     run_ingestion(root, "p", _client())
     second = _client()
     run_ingestion(root, "p", second, force=True)
-    assert len(second.calls) == 3      # both passes of both routes, as run 1
+    assert len(second.calls) == 4      # both passes of both quotations, as run 1
 
 
 def test_facts_are_stored_per_vendor(tmp_path):
