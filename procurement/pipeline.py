@@ -616,7 +616,8 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
     project = load_project(root, slug)
     run_id = events.new_run_id()
     events.append_event(root, slug, Event(at=_now(), run_id=run_id, actor="pipeline",
-                                          action="run.started"))
+                                          action="run.started",
+                                          detail={"client": type(client).__name__}))
 
     prior_docs = {d.doc_id: d for d in snapshots.load_documents(root, slug)}
     fresh_docs = inventory_documents(root, slug)

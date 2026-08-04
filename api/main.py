@@ -256,11 +256,12 @@ def _provider_state() -> dict:
     The first three keys describe the default, not any selection — the front end
     and tests both depend on that meaning being unchanged.
     """
-    provider = os.getenv("LLM_PROVIDER", "mock").lower()
+    raw = os.getenv("LLM_PROVIDER")
+    provider = raw.strip().lower() if raw and raw.strip() else None
     return {
         "provider": provider,
-        "needs_key": PROVIDER_KEYS.get(provider),
-        "ready": _provider_ready(provider),
+        "needs_key": PROVIDER_KEYS.get(provider) if provider else None,
+        "ready": _provider_ready(provider) if provider else False,
         "catalog": [
             {"id": name, "needs_key": key, "ready": _provider_ready(name)}
             for name, key in PROVIDER_KEYS.items()
@@ -391,7 +392,16 @@ def ingest(slug: str, payload: dict | None = Body(default=None)) -> dict:
     # try below.
     requested = (payload or {}).get("provider")
     provider = str(requested).strip().lower() if requested else None
-    effective = provider or os.getenv("LLM_PROVIDER", "mock").lower()
+    effective = provider or (os.getenv("LLM_PROVIDER") or "").strip().lower() or None
+    if effective is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No extraction provider is configured. Set LLM_PROVIDER in the API "
+                f"environment (one of: {', '.join(PROVIDER_KEYS)}) and restart it, "
+                "or name a provider in this request."
+            ),
+        )
     if effective not in PROVIDER_KEYS:
         raise HTTPException(
             status_code=400,

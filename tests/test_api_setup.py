@@ -308,6 +308,15 @@ def test_provider_choice_does_not_leak_into_the_environment(tmp_path, monkeypatc
     The rejected design mutated `os.environ` from the request handler, which
     would have redirected every other user's run. With `LLM_PROVIDER` unset,
     *any* write of the requested name into the environment is visible.
+
+    BUG-004: the run-2 assertion originally expected a *200*, on the theory
+    that a leaked `mock` from run 1 would be the only way to tell — but that
+    only worked because `ingest` itself defaulted an omitted provider to
+    `mock` when `LLM_PROVIDER` was unset. That default was the bug: it let an
+    unconfigured deployment ingest and store fabricated facts. With the
+    fallback removed, run 2 (no provider, `LLM_PROVIDER` unset) correctly
+    gets a 400 — which still proves the point, since a leaked `mock` from run
+    1 would have made it a 200.
     """
     client = _client(tmp_path, monkeypatch)
     monkeypatch.delenv("LLM_PROVIDER", raising=False)
@@ -318,7 +327,7 @@ def test_provider_choice_does_not_leak_into_the_environment(tmp_path, monkeypatc
     assert client.post("/api/projects/p/ingest", json={"provider": "mock"}).status_code == 200
     assert os.environ.get("LLM_PROVIDER") == before
 
-    assert client.post("/api/projects/p/ingest").status_code == 200
+    assert client.post("/api/projects/p/ingest").status_code == 400
     assert os.environ.get("LLM_PROVIDER") == before
 
 
@@ -386,6 +395,96 @@ def test_empty_provider_string_uses_the_default(tmp_path, monkeypatch):
 
     assert client.post("/api/projects/p/ingest", json={"provider": ""}).status_code == 200
     assert requested == [None]
+
+
+# ------------------------------------- BUG-004: no implicit mock fallback
+#
+# `_provider_state` and `ingest` both used to read
+# `os.getenv("LLM_PROVIDER", "mock")`. Because `mock` needs no key,
+# `_provider_ready("mock")` was always `True`, so a deployment with no
+# configuration at all silently ingested against the mock client and wrote
+# fabricated facts into the store, indistinguishable from a real extraction.
+# These tests drive a client with `LLM_PROVIDER` and every provider key
+# unset — the exact state of a freshly started container — and assert the
+# absent provider is surfaced, not defaulted.
+
+
+def _unconfigured_client(tmp_path, monkeypatch) -> TestClient:
+    monkeypatch.setenv("PROCUREMENT_PROJECTS_ROOT", str(tmp_path))
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    for key in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
+    import api.main as api_main
+    monkeypatch.setattr(api_main, "ROOT", str(tmp_path))
+    return TestClient(api_main.app)
+
+
+def test_ingest_without_provider_is_400_and_leaves_store_untouched(tmp_path, monkeypatch):
+    from procurement.store import layout
+
+    client = _unconfigured_client(tmp_path, monkeypatch)
+    _project_with_vendor(client)
+
+    docs_path = layout.documents_path(str(tmp_path), "p")
+    events_file = layout.events_path(str(tmp_path), "p")
+    docs_before = layout.read_json(docs_path)
+    events_before = (
+        open(events_file, "r", encoding="utf-8").read()
+        if os.path.exists(events_file) else None
+    )
+    before = client.get("/api/projects/p/setup").json()
+
+    res = client.post("/api/projects/p/ingest", json={})
+
+    assert res.status_code == 400
+    assert "LLM_PROVIDER" in res.json()["detail"]
+
+    after = client.get("/api/projects/p/setup").json()
+    assert after["generation"] == before["generation"]
+    assert after["has_results"] == before["has_results"]
+    assert layout.read_json(docs_path) == docs_before
+    events_after = (
+        open(events_file, "r", encoding="utf-8").read()
+        if os.path.exists(events_file) else None
+    )
+    assert events_after == events_before
+
+
+def test_provider_state_reports_null_when_unset(tmp_path, monkeypatch):
+    client = _unconfigured_client(tmp_path, monkeypatch)
+    client.post("/api/projects", json={"name": "P"})
+
+    provider = client.get("/api/projects/p/setup").json()["provider"]
+
+    assert provider["provider"] is None
+    assert provider["needs_key"] is None
+    assert provider["ready"] is False
+    assert [entry["id"] for entry in provider["catalog"]] == [
+        "anthropic", "openai", "gemini", "bedrock", "mock",
+    ]
+
+
+def test_explicit_mock_still_ingests(tmp_path, monkeypatch):
+    client = _unconfigured_client(tmp_path, monkeypatch)
+    _project_with_vendor(client)
+
+    res = client.post("/api/projects/p/ingest", json={"provider": "mock"})
+
+    assert res.status_code == 200
+
+
+def test_run_started_event_names_the_client_class(tmp_path, monkeypatch):
+    from procurement.store import events as store_events
+
+    client = _client(tmp_path, monkeypatch)  # LLM_PROVIDER=mock
+    _project_with_vendor(client)
+
+    assert client.post("/api/projects/p/ingest").status_code == 200
+
+    evs = store_events.read_events(str(tmp_path), "p")
+    started = [e for e in evs if e.action == "run.started"]
+    assert started
+    assert started[-1].detail.get("client") == "MockLLMClient"
 
 
 def test_api_loads_the_dotenv_file_itself(monkeypatch):
