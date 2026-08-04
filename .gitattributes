@@ -1,0 +1,4 @@
+# Shell scripts run inside Linux containers. core.autocrlf=true on a Windows
+# checkout would give them CRLF line endings, which breaks the shebang line
+# ("exec /usr/local/bin/entrypoint.sh: no such file or directory").
+*.sh text eol=lf

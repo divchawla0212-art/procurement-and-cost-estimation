@@ -53,6 +53,32 @@ The container mounts the `projects` volume at `/data/projects`. That volume is
 the authoritative snapshot store (see [`CLAUDE.md`](CLAUDE.md)); it survives
 `docker compose down` and is destroyed only by `down -v`.
 
+If the host reserves port 8000 — Windows hands wide ranges to WinNAT, and
+`netsh interface ipv4 show excludedportrange protocol=tcp` will show 8000 and
+8080 inside one — the bind fails with no process holding the port. Pick another
+host port; the container port never changes:
+
+```bash
+PROCUREMENT_HOST_PORT=8300 docker compose up --build
+```
+
+### The bundled sample project
+
+The image ships `gas-14`, an ingested three-vendor project, so a fresh install
+has something to review before anyone uploads a tender. It lives read-only at
+`/app/samples` and is copied into the store volume by the entrypoint
+([`docker/entrypoint.sh`](docker/entrypoint.sh)) on start.
+
+- An existing project of the same slug is **never** overwritten — the seed logs
+  that it left the store alone. Once copied, the sample is an ordinary project:
+  editable, and yours to delete.
+- `SEED_SAMPLE_PROJECTS=0` brings the container up with an empty store.
+- `projects/` is gitignored, so a clean clone has no `projects/gas-14` to copy.
+  Build such a checkout with `docker build --build-arg SAMPLE=none .`; BuildKit
+  then never evaluates the stage that reads the directory. Note that the sample
+  carries real vendor quotations, so an image built with it should be treated as
+  confidential and not pushed to a public registry.
+
 Provider keys come from `.env` at run time and are never baked into an image —
 `.env` is listed in `.dockerignore`. With no key present the API reports
 `provider.ready = false` and ingestion is refused rather than silently faked.
