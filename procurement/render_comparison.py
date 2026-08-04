@@ -105,8 +105,8 @@ def comparison_to_page(comparison: Comparison) -> str:
     """The same table as a standalone file, for download.
 
     Self-contained on purpose: the downloaded sheet gets circulated, and a
-    stylesheet reference back to the portal would render it unreadable on any
-    machine that cannot reach it.
+    stylesheet reference back to the web app would render it unreadable on
+    any machine that cannot reach it.
     """
     return "\n".join([
         "<!doctype html>", '<html lang="en"><head><meta charset="utf-8">',

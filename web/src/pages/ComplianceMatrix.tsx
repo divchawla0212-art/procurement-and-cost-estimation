@@ -123,24 +123,18 @@ export function ComplianceMatrix(props: ComplianceMatrixProps): JSX.Element {
 
   if (rows.length === 0) {
     return (
-      <>
-        {partialRunBanner}
-        <EmptyState glyph="⟲" title="No matrix yet">
-          There are no stored requirements to compare. Run ingestion in the
-          Streamlit portal to build the compliance matrix; this screen is
-          read-only.
-        </EmptyState>
-      </>
+      <EmptyState glyph="⟲" title="No matrix yet">
+        There are no stored requirements to compare. Run ingestion from{' '}
+        <b>01 Set up &amp; ingest</b> to build the compliance matrix; this
+        screen is read-only.
+      </EmptyState>
     )
   }
   if (vendors.length === 0) {
     return (
-      <>
-        {partialRunBanner}
-        <EmptyState title="No vendors">
-          The project has no vendors, so there is nothing to compare.
-        </EmptyState>
-      </>
+      <EmptyState title="No vendors">
+        The project has no vendors, so there is nothing to compare.
+      </EmptyState>
     )
   }
 

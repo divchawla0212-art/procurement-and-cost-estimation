@@ -57,13 +57,10 @@ export function ComparativeStatement(
 
   if (data.vendors.length === 0) {
     return (
-      <>
-        {partialRunBanner}
-        <EmptyState title="Nothing to compare yet">
-          Add a vendor and run ingestion in the Streamlit portal to build the
-          statement.
-        </EmptyState>
-      </>
+      <EmptyState title="Nothing to compare yet">
+        Add a vendor and run ingestion from <b>01 Set up &amp; ingest</b> to
+        build the statement.
+      </EmptyState>
     )
   }
 

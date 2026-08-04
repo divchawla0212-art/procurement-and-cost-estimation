@@ -1013,10 +1013,11 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
 def load_dataset(root: str, slug: str) -> dict | None:
     """Assemble the UI-facing view from the store.
 
-    Migrates on read as well as on ingestion: the portal calls this on every
-    render, and a project whose results only exist in a legacy dataset.json
-    would otherwise show nothing until the user paid for a full re-extraction.
-    The migration is idempotent and a no-op once the store is populated.
+    Migrates on read as well as on ingestion: the API calls this on every
+    project-summary request, and a project whose results only exist in a
+    legacy dataset.json would otherwise show nothing until the user paid for
+    a full re-extraction. The migration is idempotent and a no-op once the
+    store is populated.
     """
     migrate.migrate_dataset_json(root, slug)
     vendors = snapshots.list_fact_vendors(root, slug)
