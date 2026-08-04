@@ -19,6 +19,7 @@ import {
 export interface ComplianceMatrixProps {
   slug: string
   projectName: string
+  status: string
 }
 
 const GROUP_ORDER: GroupKey[] = ['not_matched', 'needs_human', 'matched']
@@ -107,20 +108,39 @@ export function ComplianceMatrix(props: ComplianceMatrixProps): JSX.Element {
 
   const { vendors, rows, coverage, groups } = data
 
+  // BUG-001 (BUGS_TRACKER.md), design spec §1.1: `done_with_failures` admits
+  // the user rather than blocking the screen, but says so — it does not name
+  // the failed documents, since that means fetching `/extraction-status` from
+  // a screen that does not otherwise need it. `04 Extraction status` is one
+  // click away and already reports exactly which documents failed.
+  const partialRunBanner =
+    props.status === 'done_with_failures' ? (
+      <div className="banner banner--warn" style={{ marginBottom: '1.2rem' }}>
+        Some documents failed extraction, so this matrix may be incomplete.
+        See <b>04 Extraction status</b> for which ones.
+      </div>
+    ) : null
+
   if (rows.length === 0) {
     return (
-      <EmptyState glyph="⟲" title="No matrix yet">
-        There are no stored requirements to compare. Run ingestion in the
-        Streamlit portal to build the compliance matrix; this screen is
-        read-only.
-      </EmptyState>
+      <>
+        {partialRunBanner}
+        <EmptyState glyph="⟲" title="No matrix yet">
+          There are no stored requirements to compare. Run ingestion in the
+          Streamlit portal to build the compliance matrix; this screen is
+          read-only.
+        </EmptyState>
+      </>
     )
   }
   if (vendors.length === 0) {
     return (
-      <EmptyState title="No vendors">
-        The project has no vendors, so there is nothing to compare.
-      </EmptyState>
+      <>
+        {partialRunBanner}
+        <EmptyState title="No vendors">
+          The project has no vendors, so there is nothing to compare.
+        </EmptyState>
+      </>
     )
   }
 
@@ -172,6 +192,8 @@ export function ComplianceMatrix(props: ComplianceMatrixProps): JSX.Element {
           />
         }
       />
+
+      {partialRunBanner}
 
       <Card title="Coverage">
         <CoverageInstrument coverage={coverage} />

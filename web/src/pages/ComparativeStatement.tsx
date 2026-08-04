@@ -16,6 +16,7 @@ import {
 export interface ComparativeStatementProps {
   slug: string
   projectName: string
+  status: string
 }
 
 /** Rows carrying the awarded totals — bolded and shaded as the eye's anchor. */
@@ -41,12 +42,28 @@ export function ComparativeStatement(
   if (error) return <ErrorState message={error} />
   if (!data) return <ErrorState message="No statement returned." />
 
+  // BUG-001 (BUGS_TRACKER.md), design spec §1.1: `done_with_failures` admits
+  // the user rather than blocking the screen, but says so — it does not name
+  // the failed documents, since that means fetching `/extraction-status` from
+  // a screen that does not otherwise need it. `04 Extraction status` is one
+  // click away and already reports exactly which documents failed.
+  const partialRunBanner =
+    props.status === 'done_with_failures' ? (
+      <div className="banner banner--warn" style={{ marginBottom: '1.2rem' }}>
+        Some documents failed extraction, so this statement may be
+        incomplete. See <b>04 Extraction status</b> for which ones.
+      </div>
+    ) : null
+
   if (data.vendors.length === 0) {
     return (
-      <EmptyState title="Nothing to compare yet">
-        Add a vendor and run ingestion in the Streamlit portal to build the
-        statement.
-      </EmptyState>
+      <>
+        {partialRunBanner}
+        <EmptyState title="Nothing to compare yet">
+          Add a vendor and run ingestion in the Streamlit portal to build the
+          statement.
+        </EmptyState>
+      </>
     )
   }
 
@@ -69,6 +86,8 @@ export function ComparativeStatement(
           />
         }
       />
+
+      {partialRunBanner}
 
       <div
         style={{

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { fetchProjects } from './api'
 import type { ProjectSummary } from './types'
 import { useAsync } from './useAsync'
+import { reviewReachable } from './nav'
 import { Dashboard } from './pages/Dashboard'
 import { ComplianceMatrix } from './pages/ComplianceMatrix'
 import { ComparativeStatement } from './pages/ComparativeStatement'
@@ -10,12 +11,23 @@ import { Setup } from './pages/Setup'
 
 type View = 'dashboard' | 'setup' | 'matrix' | 'statement' | 'extraction'
 
-const NAV: { view: View; index: string; label: string; needsProject: boolean }[] = [
-  { view: 'dashboard', index: '00', label: 'Dashboard', needsProject: false },
-  { view: 'setup', index: '01', label: 'Set up & ingest', needsProject: false },
-  { view: 'matrix', index: '02', label: 'Compliance matrix', needsProject: true },
-  { view: 'statement', index: '03', label: 'Comparative statement', needsProject: true },
-  { view: 'extraction', index: '04', label: 'Extraction status', needsProject: true },
+// `needsReview` marks the two screens that read a stored extraction (BUG-001,
+// BUGS_TRACKER.md): they need not just a selected project but one whose
+// status passes `reviewReachable`. `04 Extraction status` stays `needsProject`
+// only — it is the screen that reports why 02/03 are unreachable, so it must
+// stay open regardless of status.
+const NAV: {
+  view: View
+  index: string
+  label: string
+  needsProject: boolean
+  needsReview: boolean
+}[] = [
+  { view: 'dashboard', index: '00', label: 'Dashboard', needsProject: false, needsReview: false },
+  { view: 'setup', index: '01', label: 'Set up & ingest', needsProject: false, needsReview: false },
+  { view: 'matrix', index: '02', label: 'Compliance matrix', needsProject: true, needsReview: true },
+  { view: 'statement', index: '03', label: 'Comparative statement', needsProject: true, needsReview: true },
+  { view: 'extraction', index: '04', label: 'Extraction status', needsProject: true, needsReview: false },
 ]
 
 export default function App() {
@@ -39,7 +51,8 @@ export default function App() {
 
   function open(nextSlug: string) {
     setSlug(nextSlug)
-    setView('matrix')
+    const project = projects?.find((p) => p.slug === nextSlug)
+    setView(reviewReachable(project?.status) ? 'matrix' : 'setup')
   }
 
   function startNew() {
@@ -90,7 +103,9 @@ export default function App() {
           <div className="rail-label">Screens</div>
           <ul className="rail-nav">
             {NAV.map((item) => {
-              const disabled = item.needsProject && !slug
+              const disabled =
+                (item.needsProject && !slug) ||
+                (item.needsReview && !reviewReachable(active?.status))
               return (
                 <li key={item.view}>
                   <button
@@ -164,10 +179,18 @@ export default function App() {
               />
             )}
             {view === 'matrix' && active && (
-              <ComplianceMatrix slug={active.slug} projectName={active.name} />
+              <ComplianceMatrix
+                slug={active.slug}
+                projectName={active.name}
+                status={active.status}
+              />
             )}
             {view === 'statement' && active && (
-              <ComparativeStatement slug={active.slug} projectName={active.name} />
+              <ComparativeStatement
+                slug={active.slug}
+                projectName={active.name}
+                status={active.status}
+              />
             )}
             {view === 'extraction' && active && (
               <ExtractionStatus slug={active.slug} projectName={active.name} />

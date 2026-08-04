@@ -1,13 +1,36 @@
-// Harness smoke test for Task 3 (front-end test runner setup).
-//
-// This is NOT a test of real nav logic — `nav.ts` does not exist yet.
-// Its only job is to prove `npm test` actually runs Vitest, once, and exits
-// non-zero on failure. Task 4 owns `src/nav.ts` and replaces this file's
-// contents with real tests against it.
 import { describe, expect, it } from 'vitest'
+import { reviewReachable } from './nav'
 
-describe('harness smoke test (placeholder for Task 4)', () => {
-  it('runs a trivial assertion under vitest', () => {
-    expect(1 + 1).toBe(2)
+describe('reviewReachable', () => {
+  it('admits a project whose run finished clean', () => {
+    expect(reviewReachable('done')).toBe(true)
+  })
+
+  it('admits a project whose run finished with some documents failed', () => {
+    expect(reviewReachable('done_with_failures')).toBe(true)
+  })
+
+  it('rejects a project with no run yet', () => {
+    expect(reviewReachable('new')).toBe(false)
+  })
+
+  it('rejects a project whose run extracted nothing', () => {
+    expect(reviewReachable('failed')).toBe(false)
+  })
+
+  it('rejects null', () => {
+    expect(reviewReachable(null)).toBe(false)
+  })
+
+  it('rejects undefined', () => {
+    expect(reviewReachable(undefined)).toBe(false)
+  })
+
+  it('rejects the empty string', () => {
+    expect(reviewReachable('')).toBe(false)
+  })
+
+  it('rejects an unrecognised status, defaulting to the honest screen', () => {
+    expect(reviewReachable('archived')).toBe(false)
   })
 })
