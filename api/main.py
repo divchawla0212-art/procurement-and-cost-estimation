@@ -393,9 +393,20 @@ def ingest(slug: str, payload: dict | None = Body(default=None)) -> dict:
     requested = (payload or {}).get("provider")
     provider = str(requested).strip().lower() if requested else None
     effective = provider or (os.getenv("LLM_PROVIDER") or "").strip().lower() or None
+
     # Defaults to False: a client that predates this field (or omits it) keeps
     # today's cache-respecting behaviour exactly (design spec §1.2, guard 1).
-    force = bool((payload or {}).get("force", False))
+    # A *present* value must be an actual boolean — this is the switch that
+    # re-spends the full LLM cost of the project, so a truthy-coerced typo
+    # like {"force": "false"} silently becoming a forced run would be exactly
+    # the "hard to hit by accident" guarantee failing by surprise.
+    _body = payload or {}
+    if "force" in _body and not isinstance(_body["force"], bool):
+        raise HTTPException(
+            status_code=422,
+            detail="`force` must be a boolean.",
+        )
+    force = bool(_body.get("force", False))
     if effective is None:
         raise HTTPException(
             status_code=400,

@@ -543,6 +543,25 @@ def test_ingest_omitting_force_defaults_to_the_cache(tmp_path, monkeypatch):
     assert all(e.action == "document.skipped" for e in doc_events)
 
 
+def test_ingest_rejects_a_non_boolean_force(tmp_path, monkeypatch):
+    """`force` is the widest-blast-radius write in the system, so a truthy-
+    coerced typo like the *string* "false" must not silently become a real
+    forced run. `bool("false")` is `True` in Python — the exact accident this
+    guards against."""
+    client = _client(tmp_path, monkeypatch)
+    _project_with_vendor(client)
+    assert client.post("/api/projects/p/ingest").status_code == 200
+    before = client.get("/api/projects/p/setup").json()
+
+    res = client.post("/api/projects/p/ingest", json={"force": "false"})
+
+    assert res.status_code == 422
+    assert "force" in res.json()["detail"]
+    after = client.get("/api/projects/p/setup").json()
+    assert after["generation"] == before["generation"]
+    assert after["has_results"] == before["has_results"]
+
+
 def test_run_started_event_names_the_client_class(tmp_path, monkeypatch):
     from procurement.store import events as store_events
 

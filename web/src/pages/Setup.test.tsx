@@ -4,7 +4,7 @@
 // covers Task 1's leftover: Setup.tsx must render a null `provider` (BUG-004,
 // no LLM_PROVIDER configured) as "no provider configured" rather than
 // crashing or rendering a blank/"null" label.
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import { Setup } from './Setup'
 import type { ProjectSetup } from '../types'
@@ -19,6 +19,15 @@ vi.mock('../api', async (importOriginal) => {
 })
 
 import { fetchSetup, runIngestion } from '../api'
+
+// No `clearMocks` in vitest.config.ts, so without this, `runIngestion`'s call
+// history (and any lingering mockResolvedValue) carries over between tests in
+// this file: a `.not.toHaveBeenCalled()` assertion would pass only by dint of
+// running first, and a `.toHaveBeenCalledWith(...)` assertion would match the
+// *accumulated* history rather than the click this test made.
+beforeEach(() => {
+  vi.clearAllMocks()
+})
 
 const baseSetup: ProjectSetup = {
   slug: 'p',

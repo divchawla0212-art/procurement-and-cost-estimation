@@ -726,7 +726,7 @@ function IngestStep({
             onClick={runForced}
             title="Re-extracts every document from scratch, ignoring the cache."
           >
-            {running ? 'Running ingestion…' : 'Force full re-extraction'}
+            {running ? 'Re-extracting…' : 'Force full re-extraction'}
           </button>
         )}
         {setup.has_results && (

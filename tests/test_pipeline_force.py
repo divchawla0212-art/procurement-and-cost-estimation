@@ -21,7 +21,8 @@ from procurement.pipeline import run_ingestion
 from procurement.project import load_project, save_project
 from procurement.store import events, snapshots
 
-from tests.test_pipeline_lifecycle import RoutingClient, _docs, _project, _write
+from tests.test_pipeline_lifecycle import (RoutingClient, _docs, _PAD,
+                                           _project, _write)
 
 
 # --------------------------------------------------------------------------
@@ -33,6 +34,19 @@ def test_row1_nothing_changed_forced_rerun_reextracts_every_live_document(tmp_pa
         "KERUI/Quotation.txt": b"base price 1000",
         "KERUI/01 DataSheet A.txt": b"Continuous rating 550 kW",
     })
+    # A requirements/ document too: `force` is consulted a second time, in
+    # `_run_rfq_pass`'s own `unchanged` check (pipeline.py's RFQ pass), which
+    # governs requirements/amendments feeding the compliance vocabulary. A
+    # vendor-only fixture would leave that half of the bypass completely
+    # unexercised by this row. "SPC-" matches classify_by_rules' "spec" rule,
+    # so no LLM doc_class call is needed and RoutingClient's default
+    # (quotation-shaped) response is fine here: extract_requirements treats a
+    # response with no "requirements" key as zero clauses, status "ok" - which
+    # still logs `document.extracted`, exactly what this row checks for.
+    rdir = tmp_path / "p" / "requirements"
+    rdir.mkdir(parents=True, exist_ok=True)
+    (rdir / "SPC-001 Requirements.txt").write_bytes(b"4.2.7 H2S at least 50 ppm" + _PAD)
+
     run_ingestion(root, "p", RoutingClient())
     events_before = len(events.read_events(root, "p"))
 
@@ -41,8 +55,10 @@ def test_row1_nothing_changed_forced_rerun_reextracts_every_live_document(tmp_pa
     run2 = events.read_events(root, "p")[events_before:]
     doc_events = {e.target: e.action for e in run2
                   if e.action in ("document.extracted", "document.skipped")}
+    # No vendor filter: a live RFQ document (vendor is None) must be checked
+    # here too, or the RFQ half of the bypass goes untested by this row.
     live_doc_ids = {d.doc_id for d in snapshots.load_documents(root, "p")
-                    if d.vendor is not None and d.superseded_by is None}
+                    if d.superseded_by is None}
     assert live_doc_ids, "fixture sanity: there is something to check"
     for doc_id in live_doc_ids:
         assert doc_events.get(doc_id) == "document.extracted", \
@@ -113,6 +129,7 @@ def test_row4_a_deleted_document_leaves_no_fact_and_no_record_under_force(tmp_pa
     run_ingestion(root, "p", RoutingClient(), force=True)
 
     technical = snapshots.load_facts(root, "p", "KERUI").technical
+    assert technical, "fixture sanity: the surviving datasheet must have facts"
     assert all(f.get("doc_id") != deleted_id for f in technical), \
         "no stored fact may cite the deleted doc_id"
     assert deleted_id not in {d.doc_id for d in snapshots.load_documents(root, "p")}, \
@@ -187,10 +204,12 @@ def test_row7_a_failed_forced_reextraction_keeps_prior_good_facts_and_records_wh
     before = snapshots.load_facts(root, "p", "KERUI").technical
     assert before, "fixture sanity: run 1 must have stored a technical fact"
 
-    # Bytes changed too, so the cache would have been stale even unforced -
-    # this row is about the failure/preservation guard, not about whether
-    # force was what triggered the re-attempt (row 1 already covers that).
-    _write(tmp_path, "KERUI", "01 DataSheet A.txt", b"Continuous rating 600 kW")
+    # Bytes untouched, deliberately: only `force` can trigger the re-attempt
+    # here. Without it the unchanged fast path carries `extraction_status ==
+    # "ok"` forward from cache and the failing client is never even called -
+    # that is what makes this row test the failure path *under force*, rather
+    # than restating test_pipeline_lifecycle.py's unforced failure-preservation
+    # test with a no-op argument appended.
     run_ingestion(root, "p", RoutingClient(fail_kind="facts"), force=True)
 
     after = snapshots.load_facts(root, "p", "KERUI")
