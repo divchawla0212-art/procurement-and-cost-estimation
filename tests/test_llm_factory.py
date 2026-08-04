@@ -12,8 +12,9 @@ def test_unset_provider_raises(monkeypatch):
         get_client()
 
 
-def test_empty_string_provider_counts_as_unset(monkeypatch):
-    monkeypatch.setenv("LLM_PROVIDER", "   ")
+@pytest.mark.parametrize("blank", ["", "   "], ids=["empty", "whitespace"])
+def test_blank_provider_counts_as_unset(monkeypatch, blank):
+    monkeypatch.setenv("LLM_PROVIDER", blank)
     with pytest.raises(ValueError, match="No LLM_PROVIDER is configured"):
         get_client()
 
