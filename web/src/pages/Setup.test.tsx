@@ -1,0 +1,130 @@
+// BUG-002 (BUGS_TRACKER.md): a forced re-extraction is reachable from the UI
+// only as a separate, secondary action, shown solely once there are results
+// to force over, and confirmed before it fires (design spec §1.2). This also
+// covers Task 1's leftover: Setup.tsx must render a null `provider` (BUG-004,
+// no LLM_PROVIDER configured) as "no provider configured" rather than
+// crashing or rendering a blank/"null" label.
+import { describe, expect, it, vi } from 'vitest'
+import { render, screen, waitFor } from '@testing-library/react'
+import { Setup } from './Setup'
+import type { ProjectSetup } from '../types'
+
+vi.mock('../api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../api')>()
+  return {
+    ...actual,
+    fetchSetup: vi.fn(),
+    runIngestion: vi.fn(),
+  }
+})
+
+import { fetchSetup, runIngestion } from '../api'
+
+const baseSetup: ProjectSetup = {
+  slug: 'p',
+  name: 'P',
+  target_currency: 'USD',
+  requirements_file: 'spec.pdf',
+  vendors: [{ name: 'ACME', file_count: 1, quote: 'quote.txt' }],
+  fx_rates: {},
+  status: 'done',
+  generation: 1,
+  has_results: true,
+  provider: {
+    provider: 'mock',
+    needs_key: null,
+    ready: true,
+    catalog: [
+      { id: 'anthropic', needs_key: 'ANTHROPIC_API_KEY', ready: false },
+      { id: 'mock', needs_key: null, ready: true },
+    ],
+  },
+}
+
+const noopProps = {
+  onNew: () => {},
+  reload: () => {},
+  onOpen: () => {},
+}
+
+async function renderSetup(setup: ProjectSetup) {
+  vi.mocked(fetchSetup).mockResolvedValue(setup)
+  render(<Setup slug="p" onCreated={() => {}} {...noopProps} />)
+  await waitFor(() => {
+    expect(
+      screen.getByRole('button', { name: 'Run ingestion' }),
+    ).toBeInTheDocument()
+  })
+}
+
+describe('null provider render (BUG-004 leftover)', () => {
+  it('renders "No provider configured" instead of blank or crashing', async () => {
+    await renderSetup({
+      ...baseSetup,
+      has_results: false,
+      provider: { ...baseSetup.provider, provider: null, ready: false },
+    })
+
+    expect(
+      screen.getByText('No provider configured. Choose one below.'),
+    ).toBeInTheDocument()
+  })
+})
+
+describe('the force bypass button (BUG-002)', () => {
+  it('is not shown before the first run has produced results', async () => {
+    await renderSetup({ ...baseSetup, has_results: false, status: 'new' })
+
+    expect(
+      screen.queryByRole('button', { name: /Force full re-extraction/i }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('is shown, separate from Run ingestion, once results exist', async () => {
+    await renderSetup(baseSetup)
+
+    const runButton = screen.getByRole('button', { name: 'Run ingestion' })
+    const forceButton = screen.getByRole(
+      'button',
+      { name: /Force full re-extraction/i },
+    )
+    expect(runButton).toBeInTheDocument()
+    expect(forceButton).toBeInTheDocument()
+    expect(forceButton).not.toBe(runButton)
+  })
+
+  it('confirms before firing, and does not call the API if the user declines', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    await renderSetup(baseSetup)
+
+    screen.getByRole('button', { name: /Force full re-extraction/i }).click()
+
+    expect(confirmSpy).toHaveBeenCalled()
+    expect(runIngestion).not.toHaveBeenCalled()
+    confirmSpy.mockRestore()
+  })
+
+  it('calls runIngestion with force=true once the user confirms', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    vi.mocked(runIngestion).mockResolvedValue(baseSetup)
+    await renderSetup(baseSetup)
+
+    screen.getByRole('button', { name: /Force full re-extraction/i }).click()
+
+    await waitFor(() => {
+      expect(runIngestion).toHaveBeenCalledWith('p', 'mock', true)
+    })
+    confirmSpy.mockRestore()
+  })
+
+  it('the plain Run ingestion button never passes force', async () => {
+    vi.mocked(runIngestion).mockResolvedValue(baseSetup)
+    await renderSetup(baseSetup)
+
+    screen.getByRole('button', { name: 'Run ingestion' }).click()
+
+    await waitFor(() => {
+      expect(runIngestion).toHaveBeenCalledWith('p', 'mock')
+    })
+  })
+})

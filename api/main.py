@@ -393,6 +393,9 @@ def ingest(slug: str, payload: dict | None = Body(default=None)) -> dict:
     requested = (payload or {}).get("provider")
     provider = str(requested).strip().lower() if requested else None
     effective = provider or (os.getenv("LLM_PROVIDER") or "").strip().lower() or None
+    # Defaults to False: a client that predates this field (or omits it) keeps
+    # today's cache-respecting behaviour exactly (design spec §1.2, guard 1).
+    force = bool((payload or {}).get("force", False))
     if effective is None:
         raise HTTPException(
             status_code=400,
@@ -431,7 +434,8 @@ def ingest(slug: str, payload: dict | None = Body(default=None)) -> dict:
 
         pdf_fallback = transcribe_pdf
     try:
-        run_ingestion(ROOT, slug, get_client(provider), pdf_fallback=pdf_fallback)
+        run_ingestion(ROOT, slug, get_client(provider), pdf_fallback=pdf_fallback,
+                     force=force)
     except Exception as exc:  # surface extraction failures to the UI verbatim
         raise HTTPException(status_code=502, detail=f"Ingestion failed: {exc}") from exc
     return _setup_state(proj.load_project(ROOT, slug))

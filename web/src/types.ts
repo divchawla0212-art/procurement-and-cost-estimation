@@ -140,7 +140,10 @@ export interface ProviderOption {
 }
 
 export interface ProviderState {
-  provider: string
+  // null when no LLM_PROVIDER is set in the API environment (BUG-004): there
+  // is no implicit default any more, so an unconfigured deployment must be
+  // representable as "nothing is selected", not coerced into a string.
+  provider: string | null
   needs_key: string | null
   ready: boolean
   catalog: ProviderOption[]

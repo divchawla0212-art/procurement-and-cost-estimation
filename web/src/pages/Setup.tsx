@@ -538,7 +538,18 @@ function FxStep({
 
 /* ------------------------------------------------------- step 4: ingestion */
 
-function ProviderBanner({ option }: { option: ProviderOption }): JSX.Element {
+function ProviderBanner({
+  option,
+}: {
+  option: ProviderOption | null
+}): JSX.Element {
+  if (option === null) {
+    return (
+      <div className="banner banner--warn">
+        No provider configured. Choose one below.
+      </div>
+    )
+  }
   if (option.ready) {
     return (
       <div className="banner banner--ok">
@@ -569,29 +580,57 @@ function IngestStep({
 }): JSX.Element {
   const [running, setRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [provider, setProvider] = useState(setup.provider.provider)
+  // '' is the "nothing selected yet" sentinel for the controlled <select>: a
+  // native select's value can't be null. It only arises when the server has
+  // no default (BUG-004: LLM_PROVIDER unset) and the reviewer hasn't picked
+  // one either.
+  const [provider, setProvider] = useState(setup.provider.provider ?? '')
 
   // A cached bundle talking to an older API during a rolling deploy would get
   // no `catalog` at all; falling back to [] keeps step 4 rendering instead of
   // white-screening on `.find`.
   const catalog = setup.provider.catalog ?? []
   const inCatalog = catalog.some((entry) => entry.id === provider)
-  const selected =
+  const selected: ProviderOption | null =
     catalog.find((entry) => entry.id === provider) ??
-    { id: provider, needs_key: setup.provider.needs_key, ready: setup.provider.ready }
+    (provider === ''
+      ? null
+      : { id: provider, needs_key: setup.provider.needs_key, ready: setup.provider.ready })
 
   const anthropic = catalog.find((entry) => entry.id === 'anthropic')
   const scannedPdfsUnsupported =
-    selected.id !== 'anthropic' && anthropic !== undefined && !anthropic.ready
+    selected !== null && selected.id !== 'anthropic' &&
+    anthropic !== undefined && !anthropic.ready
 
   const noVendors = setup.vendors.length === 0
-  const canRun = !noVendors && selected.ready && !running
+  const canRun = !noVendors && selected !== null && selected.ready && !running
 
   async function run() {
     setRunning(true)
     setError(null)
     try {
-      await runIngestion(slug, provider)
+      await runIngestion(slug, provider || undefined)
+      onDone()
+    } catch (err) {
+      setError((err as Error).message)
+      setRunning(false)
+    }
+  }
+
+  // Guard 3 (design spec §1.2): a forced run re-spends the full LLM cost of
+  // the project, so it confirms before firing and names the cost. Guard 2 —
+  // a separate, secondary action shown only once there are results to force
+  // over — is enforced at the call site below (`setup.has_results`).
+  async function runForced() {
+    const ok = window.confirm(
+      'This re-extracts every vendor document from scratch, ignoring the ' +
+      'cache, and re-spends the full LLM cost of the project. Continue?',
+    )
+    if (!ok) return
+    setRunning(true)
+    setError(null)
+    try {
+      await runIngestion(slug, provider || undefined, true)
       onDone()
     } catch (err) {
       setError((err as Error).message)
@@ -628,8 +667,16 @@ function IngestStep({
         >
           {/* A selection outside the catalog — an off-catalog LLM_PROVIDER —
               matches no option, so the browser would render the control blank
-              and it would read as broken. Show what it is actually set to. */}
-          {!inCatalog && (
+              and it would read as broken. Show what it is actually set to.
+              '' is the separate "nothing configured, nothing chosen" case
+              (BUG-004): the placeholder names that state honestly instead of
+              rendering an empty label. */}
+          {!inCatalog && provider === '' && (
+            <option value="" disabled>
+              No provider configured
+            </option>
+          )}
+          {!inCatalog && provider !== '' && (
             <option value={provider} disabled>
               {provider} — not a known provider
             </option>
@@ -668,6 +715,20 @@ function IngestStep({
         >
           {running ? 'Running ingestion…' : 'Run ingestion'}
         </button>
+        {/* BUG-002: a distinct, secondary action from `Run ingestion`, shown
+            only once there are results to force over (guard 2) and confirmed
+            before it fires (guard 3) - see runForced above. Before the first
+            run there is nothing cached to bypass. */}
+        {setup.has_results && (
+          <button
+            className="btn btn-ghost"
+            disabled={!canRun}
+            onClick={runForced}
+            title="Re-extracts every document from scratch, ignoring the cache."
+          >
+            {running ? 'Running ingestion…' : 'Force full re-extraction'}
+          </button>
+        )}
         {setup.has_results && (
           <button className="btn btn-ink" onClick={() => onOpen(slug)}>
             Review compliance matrix

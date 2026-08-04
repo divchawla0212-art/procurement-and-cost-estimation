@@ -473,6 +473,76 @@ def test_explicit_mock_still_ingests(tmp_path, monkeypatch):
     assert res.status_code == 200
 
 
+# ------------------------------------- BUG-002: the force bypass, reached
+#
+# `run_ingestion(force=True)` already bypasses the per-document extraction
+# cache; the whole defect was that nothing in the API payload could set it.
+# These drive two ingestion runs each and assert on the *second* run's
+# `document.extracted` / `document.skipped` events, per task-5-brief.md
+# Step 1.
+
+
+def test_ingest_force_reextracts_a_document_whose_cache_key_is_unchanged(
+    tmp_path, monkeypatch
+):
+    from procurement.store import events as store_events
+
+    client = _client(tmp_path, monkeypatch)
+    _project_with_vendor(client)
+    assert client.post("/api/projects/p/ingest").status_code == 200
+
+    events_before = len(store_events.read_events(str(tmp_path), "p"))
+    res = client.post("/api/projects/p/ingest", json={"force": True})
+    assert res.status_code == 200
+
+    run2 = store_events.read_events(str(tmp_path), "p")[events_before:]
+    doc_events = [e for e in run2
+                  if e.action in ("document.extracted", "document.skipped")]
+    assert doc_events, "run 2 produced no per-document extraction events"
+    assert all(e.action == "document.extracted" for e in doc_events), \
+        "force=True must re-extract, not skip, a document whose bytes and " \
+        "prompt version are otherwise unchanged"
+
+
+def test_ingest_without_force_still_skips_unchanged_documents(tmp_path, monkeypatch):
+    from procurement.store import events as store_events
+
+    client = _client(tmp_path, monkeypatch)
+    _project_with_vendor(client)
+    assert client.post("/api/projects/p/ingest").status_code == 200
+
+    events_before = len(store_events.read_events(str(tmp_path), "p"))
+    res = client.post("/api/projects/p/ingest", json={"force": False})
+    assert res.status_code == 200
+
+    run2 = store_events.read_events(str(tmp_path), "p")[events_before:]
+    doc_events = [e for e in run2
+                  if e.action in ("document.extracted", "document.skipped")]
+    assert doc_events
+    assert all(e.action == "document.skipped" for e in doc_events), \
+        "an explicit force=False must behave exactly like today: a cache hit"
+
+
+def test_ingest_omitting_force_defaults_to_the_cache(tmp_path, monkeypatch):
+    """The payload field defaults to false: an existing client that has never
+    heard of `force` must keep today's behaviour exactly (design spec §1.2)."""
+    from procurement.store import events as store_events
+
+    client = _client(tmp_path, monkeypatch)
+    _project_with_vendor(client)
+    assert client.post("/api/projects/p/ingest").status_code == 200
+
+    events_before = len(store_events.read_events(str(tmp_path), "p"))
+    res = client.post("/api/projects/p/ingest", json={})
+    assert res.status_code == 200
+
+    run2 = store_events.read_events(str(tmp_path), "p")[events_before:]
+    doc_events = [e for e in run2
+                  if e.action in ("document.extracted", "document.skipped")]
+    assert doc_events
+    assert all(e.action == "document.skipped" for e in doc_events)
+
+
 def test_run_started_event_names_the_client_class(tmp_path, monkeypatch):
     from procurement.store import events as store_events
 
