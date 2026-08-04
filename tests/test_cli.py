@@ -31,3 +31,13 @@ def test_main_returns_zero(tmp_path, monkeypatch):
     make(str(tmp_path / "COSTING mini Electrical.xlsx"))
     code = main(["ingest", str(tmp_path), "--out", str(tmp_path / "o.json")])
     assert code == 0
+
+
+def test_main_without_llm_provider_fails_readably(tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    make(str(tmp_path / "COSTING mini Electrical.xlsx"))
+    code = main(["ingest", str(tmp_path), "--out", str(tmp_path / "o.json")])
+
+    assert code != 0
+    captured = capsys.readouterr()
+    assert "LLM_PROVIDER" in captured.out + captured.err

@@ -1,5 +1,6 @@
 import argparse
 import json
+import sys
 from shared.llm.factory import get_client
 from cost_estimation.config.loader import load_config
 from cost_estimation.ingestion.extractor import ingest_directory
@@ -27,7 +28,11 @@ def main(argv: list[str] | None = None) -> int:
     ing.add_argument("--out", default="cost_dataset.json")
     args = parser.parse_args(argv)
     if args.command == "ingest":
-        ds = run_ingest(args.root, args.out)
+        try:
+            ds = run_ingest(args.root, args.out)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
         print(f"Ingested {len(ds.work_packages)} work packages -> {args.out}")
         return 0
     return 1

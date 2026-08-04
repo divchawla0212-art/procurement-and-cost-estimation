@@ -6,9 +6,21 @@ from shared.llm.bedrock_client import BedrockClient
 from shared.llm.openai_client import OpenAIClient
 
 
-def test_default_is_mock(monkeypatch):
+def test_unset_provider_raises(monkeypatch):
     monkeypatch.delenv("LLM_PROVIDER", raising=False)
-    assert isinstance(get_client(), MockLLMClient)
+    with pytest.raises(ValueError, match="No LLM_PROVIDER is configured"):
+        get_client()
+
+
+def test_empty_string_provider_counts_as_unset(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "   ")
+    with pytest.raises(ValueError, match="No LLM_PROVIDER is configured"):
+        get_client()
+
+
+def test_explicit_mock_still_works_with_provider_unset(monkeypatch):
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    assert isinstance(get_client("mock"), MockLLMClient)
 
 
 def test_selects_bedrock(monkeypatch):
