@@ -44,8 +44,10 @@ def renormalize(root: str, slug: str) -> int:
     # Compute everything first. `transaction` bumps `generation` on any body
     # that completes, written or not, and Task 4 calls this from the read
     # path -- opening a transaction before knowing whether anything changed
-    # would advance `generation` on every page load, forever.
-    pending = []
+    # would advance `generation` on every page load, forever. This pass only
+    # decides WHETHER to open a transaction; its result is a candidate list
+    # of vendor names, not the values to write -- see the recompute below.
+    candidates = []
     for vendor in snapshots.list_fact_vendors(root, slug):
         facts = snapshots.load_facts(root, slug, vendor)
         if facts is None or not facts.commercial:
@@ -54,20 +56,35 @@ def renormalize(root: str, slug: str) -> int:
             VendorBid.model_validate(facts.commercial),
             project.target_currency, project.fx_rates).model_dump()
         if fresh != facts.normalized:
-            facts.normalized = fresh
-            pending.append(facts)
+            candidates.append(vendor)
 
-    if not pending:
+    if not candidates:
         return 0
 
+    changed = 0
     with snapshots.transaction(root, slug):
-        for facts in pending:
-            snapshots.save_facts(root, slug, facts)
+        for vendor in candidates:
+            # Recompute inside the lock, from the facts and the project as
+            # they are NOW. The pre-pass only decided candidacy; writing the
+            # value it saw back over facts a concurrent run has since
+            # changed is BUG-010.
+            with snapshots.update_facts(root, slug, vendor) as facts:
+                if not facts.commercial:
+                    continue               # candidacy evaporated
+                current_project = load_project(root, slug)
+                fresh = normalize_bid(
+                    VendorBid.model_validate(facts.commercial),
+                    current_project.target_currency,
+                    current_project.fx_rates).model_dump()
+                if fresh == facts.normalized:
+                    continue               # candidacy evaporated; not a change
+                facts.normalized = fresh   # the only field this function writes
+                changed += 1
 
     events.append_event(root, slug, Event(
         at=_now(), run_id=events.new_run_id(), actor="renormalize",
-        action="fx.renormalized", detail={"vendors": len(pending)}))
-    return len(pending)
+        action="fx.renormalized", detail={"vendors": changed}))
+    return changed
 
 
 def migrate_normalization(root: str, slug: str) -> bool:

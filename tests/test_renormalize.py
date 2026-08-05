@@ -1,14 +1,25 @@
 import io
 import zipfile
+from contextlib import contextmanager
 
 from procurement.project import create_project, load_project, save_project, unpack_vendor_zip
 from procurement.pipeline import load_dataset, run_ingestion
+from procurement.store.models import VendorFacts
+import procurement.renormalize as renormalize_module
 from procurement.renormalize import migrate_normalization, renormalize
 from procurement.store import events, layout, snapshots
 from shared.llm.mock_client import MockLLMClient
 
 _PAD = (b" This synthetic fixture body is padded with filler prose so its "
         b"character count clears the pipeline's minimum-extractable-text guard.")
+
+
+def _project(root, name, *, target_currency="USD", fx_rates=None):
+    project = create_project(root, name, target_currency=target_currency)
+    if fx_rates is not None:
+        project.fx_rates = fx_rates
+        save_project(root, project)
+    return project
 
 
 def _eur_project(tmp_path):
@@ -174,3 +185,57 @@ def test_reading_a_project_repeatedly_does_not_advance_generation(tmp_path):
         load_dataset(root, "p")
 
     assert load_project(root, "p").generation == settled
+
+
+def test_renormalize_writes_only_normalized(tmp_path):
+    root = str(tmp_path)
+    _project(root, "p", target_currency="USD", fx_rates={"EUR": 1.08})
+    snapshots.save_facts(root, "p", VendorFacts(
+        vendor="K",
+        commercial={"vendor": "K", "currency": "EUR", "base_price": 1000.0,
+                    "freight_included": True},
+        technical=[{"doc_id": "d1", "parameter": "flow"}],
+        technical_feedback="a reviewer's note",
+        quotation_doc_id="d1"))
+
+    assert renormalize(root, "p") == 1
+
+    stored = snapshots.load_facts(root, "p", "K")
+    assert abs(stored.normalized["normalized_total"] - 1080.0) < 0.01
+    assert stored.technical_feedback == "a reviewer's note"
+    assert stored.technical == [{"doc_id": "d1", "parameter": "flow"}]
+    assert stored.quotation_doc_id == "d1"
+
+
+def test_renormalize_recomputes_from_facts_read_inside_the_lock(tmp_path, monkeypatch):
+    """The pre-pass is a candidate list, not the value to write. If the stored
+    commercial changes between the pre-pass and the write, the value written
+    must follow the NEW commercial, not the one the pre-pass saw."""
+    root = str(tmp_path)
+    _project(root, "p", target_currency="USD", fx_rates={"EUR": 1.0})
+    snapshots.save_facts(root, "p", VendorFacts(
+        vendor="K", commercial={"vendor": "K", "currency": "EUR",
+                                "base_price": 1000.0, "freight_included": True}))
+
+    real_update = snapshots.update_facts
+    swapped = []
+
+    @contextmanager
+    def swap_then_update(root_, slug_, vendor_, **kw):
+        if not swapped:
+            swapped.append(True)
+            # a concurrent run stores a different price, then we take the lock
+            snapshots.save_facts(root_, slug_, VendorFacts(
+                vendor=vendor_, commercial={"vendor": vendor_, "currency": "EUR",
+                                            "base_price": 2000.0,
+                                            "freight_included": True}))
+        with real_update(root_, slug_, vendor_, **kw) as f:
+            yield f
+
+    monkeypatch.setattr(snapshots, "update_facts", swap_then_update)
+    monkeypatch.setattr(renormalize_module.snapshots, "update_facts", swap_then_update)
+    renormalize(root, "p")
+
+    stored = snapshots.load_facts(root, "p", "K")
+    assert abs(stored.normalized["normalized_total"] - 2000.0) < 0.01, \
+        "wrote a total derived from the commercial the pre-pass saw"
