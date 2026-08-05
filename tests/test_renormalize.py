@@ -2,9 +2,9 @@ import io
 import zipfile
 
 from procurement.project import create_project, load_project, save_project, unpack_vendor_zip
-from procurement.pipeline import run_ingestion
-from procurement.renormalize import renormalize
-from procurement.store import events, snapshots
+from procurement.pipeline import load_dataset, run_ingestion
+from procurement.renormalize import migrate_normalization, renormalize
+from procurement.store import events, layout, snapshots
 from shared.llm.mock_client import MockLLMClient
 
 _PAD = (b" This synthetic fixture body is padded with filler prose so its "
@@ -120,3 +120,57 @@ def test_renormalize_skips_a_vendor_with_no_commercial_facts(tmp_path):
     assert renormalize(root, "p") == 0
     # skipped, not zeroed: a failed extraction never blanks stored data
     assert snapshots.load_facts(root, "p", "EUROVEND").commercial is None
+
+
+def test_a_new_project_is_stamped_at_the_current_store_version(tmp_path):
+    root = str(tmp_path)
+    create_project(root, "P", target_currency="USD")
+    assert load_project(root, "p").store_version == layout.STORE_VERSION
+
+
+def test_migration_renormalizes_a_project_left_at_an_older_version(tmp_path):
+    root = _eur_project(tmp_path)
+    run_ingestion(root, "p", _client())
+    # a store written before this change: a rate configured, but the stored
+    # total still computed under the 1.0 assumption
+    _set_rate(root, {"EUR": 1.08})
+    facts = snapshots.load_facts(root, "p", "EUROVEND")
+    facts.normalized = {"vendor": "EUROVEND", "normalized_currency": "USD",
+                        "normalized_total": 1000.0, "adjustments": [],
+                        "extraction_status": "ok"}
+    snapshots.save_facts(root, "p", facts)
+    project = load_project(root, "p")
+    project.store_version = 1
+    save_project(root, project)
+
+    assert migrate_normalization(root, "p") is True
+
+    facts = snapshots.load_facts(root, "p", "EUROVEND")
+    assert abs(facts.normalized["normalized_total"] - 1080.0) <= 0.01
+    assert load_project(root, "p").store_version == layout.STORE_VERSION
+
+
+def test_migration_is_idempotent(tmp_path):
+    root = _eur_project(tmp_path)
+    run_ingestion(root, "p", _client())
+    project = load_project(root, "p")
+    project.store_version = 1
+    save_project(root, project)
+
+    assert migrate_normalization(root, "p") is True
+    generation = load_project(root, "p").generation
+    assert migrate_normalization(root, "p") is False
+    assert load_project(root, "p").generation == generation
+
+
+def test_reading_a_project_repeatedly_does_not_advance_generation(tmp_path):
+    """The read-path hazard. Nothing else in the suite would catch this."""
+    root = _eur_project(tmp_path)
+    run_ingestion(root, "p", _client())
+    load_dataset(root, "p")
+    settled = load_project(root, "p").generation
+
+    for _ in range(3):
+        load_dataset(root, "p")
+
+    assert load_project(root, "p").generation == settled

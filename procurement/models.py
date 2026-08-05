@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 from shared.provenance import ProvenanceRef
+from procurement.store import layout
 
 
 class OptionalItem(BaseModel):
@@ -83,6 +84,6 @@ class Project(BaseModel):
     fx_rates: dict[str, float] = {}
     vendors: list[str] = []
     requirements_file: str | None = None
-    store_version: int = 1
+    store_version: int = layout.STORE_VERSION
     generation: int = 0
     status: str = "new"

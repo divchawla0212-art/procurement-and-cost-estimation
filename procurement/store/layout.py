@@ -9,7 +9,7 @@ import os
 import time
 import uuid
 
-STORE_VERSION = 1
+STORE_VERSION = 2
 
 
 def project_dir(root: str, slug: str) -> str:

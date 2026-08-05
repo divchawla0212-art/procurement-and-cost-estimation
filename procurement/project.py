@@ -41,6 +41,7 @@ def create_project(root: str, name: str, target_currency: str = "USD") -> Projec
         name=name, slug=slug,
         created_at=datetime.now(timezone.utc).isoformat(),
         target_currency=target_currency,
+        store_version=layout.STORE_VERSION,
     )
     save_project(root, project)
     return project

@@ -17,8 +17,8 @@ from datetime import datetime, timezone
 
 from procurement.models import VendorBid
 from procurement.normalize import normalize_bid
-from procurement.project import load_project
-from procurement.store import events, snapshots
+from procurement.project import load_project, save_project
+from procurement.store import events, layout, snapshots
 from procurement.store.models import Event
 
 
@@ -68,3 +68,25 @@ def renormalize(root: str, slug: str) -> int:
         at=_now(), run_id=events.new_run_id(), actor="renormalize",
         action="fx.renormalized", detail={"vendors": len(pending)}))
     return len(pending)
+
+
+def migrate_normalization(root: str, slug: str) -> bool:
+    """One-shot: bring a pre-BUG-005 store's normalized totals up to date.
+
+    Idempotent, and safe to retry after a partial run -- every value is
+    derived from `commercial` facts this never modifies. Called from the read
+    path (`pipeline._live_fact_vendors`), so completion is keyed on the
+    `store_version` stamp written after `renormalize` returns, not on any
+    inference from disk state: `snapshots.transaction` is not a rollback, so a
+    half-finished migration must be retried rather than declared done.
+    """
+    project = load_project(root, slug)
+    if project.store_version >= layout.STORE_VERSION:
+        return False
+
+    renormalize(root, slug)        # opens no transaction when nothing changes
+
+    project = load_project(root, slug)     # reload: renormalize may have bumped
+    project.store_version = layout.STORE_VERSION
+    save_project(root, project)
+    return True

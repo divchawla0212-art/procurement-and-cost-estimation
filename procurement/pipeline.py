@@ -7,6 +7,7 @@ from procurement.normalize import normalize_bid
 from procurement.compare import build_comparison
 from procurement.quote_select import pick_quote
 from procurement.models import VendorBid, NormalizedBid
+from procurement import renormalize as renormalize_mod
 from procurement.store import events, layout, migrate, snapshots
 from procurement.store.models import (Amendment, DocumentRecord, Event,
                                       RequirementRecord, RequirementSet,
@@ -1025,6 +1026,7 @@ def _live_fact_vendors(root: str, slug: str) -> list[str]:
     populated.
     """
     migrate.migrate_dataset_json(root, slug)
+    renormalize_mod.migrate_normalization(root, slug)
     vendors = snapshots.list_fact_vendors(root, slug)
     if not vendors:
         return []

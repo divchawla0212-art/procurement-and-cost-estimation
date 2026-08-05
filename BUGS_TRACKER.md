@@ -32,6 +32,7 @@ A bug is only `Closed` once two things are true:
 
 | ID | Severity | Area | Summary | Reported | Status |
 |---|---|---|---|---|---|
+| BUG-009 | S3 | api, procurement/project | Every `project.json` writer is an unguarded read-modify-write: a `PUT /fx-rates` that returned 200 is silently discarded by a run finishing in the same window | 2026-08-05 | Open |
 | BUG-007 | S3 | web / api / procurement/pipeline | After a run ends `done_with_failures`, the only retry controls are project-wide — nothing re-extracts one document, or one vendor's documents | 2026-08-05 | Open |
 | BUG-006 | S3 | web / api | Extraction reports no live progress: a 12-minute run shows one static banner, while the per-document events that would fill it are already being written to disk | 2026-08-05 | Open |
 | BUG-005 | S1 | procurement/normalize | A project ships with no FX rates, and an unconfigured currency is silently converted at 1.0 — a EUR bid is ranked as if €1 = $1 | 2026-08-05 | Open |
@@ -1132,3 +1133,125 @@ stagger):*
   The original E1 probe was re-run on Linux inside the shipped image after the
   fix: **0 of 25 rounds landed a mixed or corrupt file (was 25 of 25), no
   writer raised, and no temp file was left behind.**
+
+---
+
+## BUG-009 — A `PUT /fx-rates` that returned 200 is discarded by a run finishing in the same window
+
+- **Severity:** S3
+- **Area:** `api/main.py`, `procurement/project.py`, `procurement/store/snapshots.py`
+- **Status:** Open
+- **Reported:** 2026-08-05
+- **Reporter:** found while closing BUG-008 — noted there as untested, then tested
+
+### What happens
+
+BUG-008 serialised ingest against ingest. It did nothing about every *other*
+writer of `project.json`, and there are five, each an unguarded
+read-modify-write of the whole file:
+
+| where | reads then writes |
+|---|---|
+| `api/main.py:347` | `requirements_file` |
+| `api/main.py:389` | `fx_rates` |
+| `procurement/project.py:110` | `vendors` |
+| `procurement/pipeline.py:999-1002` | `status`, at the end of a run |
+| `procurement/store/snapshots.py:19-23` | `generation`, once per transaction |
+
+`save_project` writes the entire document (`procurement/project.py:28-33`), so
+whichever writer saves last wins the whole file — including the fields it read
+before the other writer changed them.
+
+The reachable case: a reviewer sets FX rates while an ingestion run is
+finishing. `run_ingestion` reloads the project at `pipeline.py:999`, sets
+`status`, and saves at `1002`. An FX-rate write that lands between that reload
+and that save is acknowledged with **200**, is visible on disk immediately, and
+is then overwritten by the run's save — which is holding the `fx_rates` it read
+a moment earlier.
+
+Nothing reports the loss. The endpoint already returned success, and
+`_setup_state` (`api/main.py:393`) reads back the state *before* the run's save
+lands, so the response the user sees contains the rates they just set.
+
+### What should happen
+
+A write to `project.json` should not silently discard a concurrent one. Either
+every mutation of a project takes the same per-slug lock BUG-008 introduced for
+runs, or `save_project` stops being a whole-document overwrite and each caller
+writes only the field it owns.
+
+**Open design question, to settle before implementing:** which of those two.
+Extending the lock is small and consistent with BUG-008, but it makes an
+ordinary settings `PUT` block for the length of a 13-minute run — or fail with
+a 409, which for a settings screen is a worse experience than for a duplicate
+ingest. Field-level writes avoid blocking entirely and are the more correct
+model for a document several actors legitimately edit, but they change the
+shape of every `save_project` caller and need care around `generation`, which
+is the one field that must stay a true read-modify-write. This tracker entry
+does not decide it.
+
+### Reproduce
+
+**Reproduces:** deterministically when the window is hit; the window is narrow,
+so hitting it by chance is timing-dependent (see Notes).
+
+*Forced — the run held just before its `save_project`, an FX write allowed to
+complete in the gap, then released. Same result on both platforms:*
+
+```
+B  forced: fx write inside the run's read-modify-write gap
+  fx_rates immediately after the PUT: {'EUR': 1.08}      <- PUT returned 200
+  fx_rates after the run finished  : {}                  <- silently discarded
+  LOST
+```
+
+*Natural — `PUT /fx-rates` issued repeatedly throughout a forced run, then the
+last 200-acknowledged rate compared against what is on disk:*
+
+```
+A  natural: fx-rates hammered throughout a run
+  win32  batch 1:  4/10 trials lost an acknowledged write
+  win32  batch 2:  0/10
+  linux  batch 1:  0/10
+```
+
+### Environment
+
+- Branch / commit: `fix-tracked-bugs-001-004` @ `3d4d5f7`
+- Measured on `win32 / python 3.12.3` and `linux / python 3.12.13` (the shipped
+  image)
+- Provider: `mock`, with latency injected into `classify_structure` so the run
+  is long enough for a concurrent request to land
+- Data: synthetic, 16 documents across 4 vendors
+
+### Notes
+
+- **2026-08-05** — Severity S3, and the reason is a fix that already landed: a
+  lost FX rate no longer produces a wrong ranking. Since BUG-005's normalize
+  change (`3dc1e5f`), a currency with no usable rate returns
+  `normalized_total = None` with `normalization_status = "no_fx_rate"` rather
+  than converting at 1.0 — verified directly. So the failure surfaces as a
+  vendor that will not convert, which is visible, instead of a vendor that
+  looks cheapest. **Re-triage to S1 if** that refusal is ever softened back
+  into a default rate: the same lost write would then silently reverse an
+  award ranking, which is exactly BUG-005.
+- **2026-08-05** — The natural rate is genuinely variable — 4/10 in one batch
+  and 0/10 in two others on the same machines, under hammering far more
+  aggressive than a human. Reported as a range rather than a single number
+  because picking either end would misrepresent it. The forced test is the
+  reliable evidence; the natural one only establishes that the window is
+  reachable without contrivance.
+- **2026-08-05** — `fx_rates` is the field a user is most likely to edit
+  mid-run, but nothing about the mechanism is specific to it. `vendors` and
+  `requirements_file` are lost the same way by the same window; they are
+  simply less likely to be written while a run finishes.
+- **2026-08-05** — Windows only, and not the same defect: a *reader* of
+  `project.json` can raise `PermissionError` while a writer is replacing it,
+  observed in this probe's output. POSIX `rename(2)` makes that impossible, so
+  it does not affect the Linux deployment. Worth its own entry if the
+  workstation ever becomes a supported target for concurrent use.
+- **2026-08-05** — No fix attempted. `renormalize` (`procurement/renormalize.py`)
+  writes per-vendor `facts.json` from the fx-rates path, and `run_ingestion`
+  writes the same files, so the same class of stale write exists there too —
+  loading facts, computing, then saving over whatever the run wrote in between.
+  That was **not** tested here and should be, as part of whichever fix lands.
