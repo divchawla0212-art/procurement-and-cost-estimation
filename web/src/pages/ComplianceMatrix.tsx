@@ -113,11 +113,27 @@ export function ComplianceMatrix(props: ComplianceMatrixProps): JSX.Element {
   // the failed documents, since that means fetching `/extraction-status` from
   // a screen that does not otherwise need it. `04 Extraction status` is one
   // click away and already reports exactly which documents failed.
+  //
+  // `status === 'failed'` is reachable here too (I2, final-review report):
+  // this screen only mounts once `has_results` is true (see `nav.ts`), and
+  // CLAUDE.md's store invariant — "a failed extraction never blanks
+  // previously-good stored data" — means a project whose most recent run
+  // failed outright can still hold an earlier run's complete extraction.
+  // That is a materially different situation from `done_with_failures` (some
+  // documents in *this* run failed): here the whole latest run produced
+  // nothing, and everything on screen is from an earlier run. Worth its own
+  // wording rather than reusing the partial-run banner's text.
   const partialRunBanner =
     props.status === 'done_with_failures' ? (
       <div className="banner banner--warn" style={{ marginBottom: '1.2rem' }}>
         Some documents failed extraction, so this matrix may be incomplete.
         See <b>04 Extraction status</b> for which ones.
+      </div>
+    ) : props.status === 'failed' ? (
+      <div className="banner banner--warn" style={{ marginBottom: '1.2rem' }}>
+        The most recent ingestion run failed to extract anything. You are
+        viewing results from an earlier successful run. See{' '}
+        <b>04 Extraction status</b> for what happened.
       </div>
     ) : null
 

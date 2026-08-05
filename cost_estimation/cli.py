@@ -7,8 +7,9 @@ from cost_estimation.ingestion.extractor import ingest_directory
 from cost_estimation.models.schema import CostDataset
 
 
-def run_ingest(root: str, out_path: str) -> CostDataset:
-    client = get_client()
+def run_ingest(root: str, out_path: str, client=None) -> CostDataset:
+    if client is None:
+        client = get_client()
     config = load_config()
     dataset = ingest_directory(root, client, config)
     with open(out_path, "w", encoding="utf-8") as fh:
@@ -28,11 +29,20 @@ def main(argv: list[str] | None = None) -> int:
     ing.add_argument("--out", default="cost_dataset.json")
     args = parser.parse_args(argv)
     if args.command == "ingest":
+        # Narrowed deliberately to just provider resolution (M4, final-review
+        # report): `get_client()` is the one call BUG-004 made this CLI
+        # newly require (a bare call that now raises `ValueError` when
+        # `LLM_PROVIDER` is unset), and a config or provider error there is a
+        # readable one-line CLI failure, not a bug. A `ValueError` raised
+        # later — from config loading or extraction inside `run_ingest` — is
+        # a different kind of failure and must keep its traceback instead of
+        # being swallowed into the same "error: ..." line.
         try:
-            ds = run_ingest(args.root, args.out)
+            client = get_client()
         except ValueError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
+        ds = run_ingest(args.root, args.out, client=client)
         print(f"Ingested {len(ds.work_packages)} work packages -> {args.out}")
         return 0
     return 1

@@ -13,9 +13,10 @@ type View = 'dashboard' | 'setup' | 'matrix' | 'statement' | 'extraction'
 
 // `needsReview` marks the two screens that read a stored extraction (BUG-001,
 // BUGS_TRACKER.md): they need not just a selected project but one whose
-// status passes `reviewReachable`. `04 Extraction status` stays `needsProject`
-// only — it is the screen that reports why 02/03 are unreachable, so it must
-// stay open regardless of status.
+// `has_results` passes `reviewReachable` (I2, final-review report —
+// `status` alone is not the right gate: see `nav.ts`). `04 Extraction
+// status` stays `needsProject` only — it is the screen that reports why
+// 02/03 are unreachable, so it must stay open regardless of status.
 const NAV: {
   view: View
   index: string
@@ -52,7 +53,26 @@ export default function App() {
   function open(nextSlug: string) {
     setSlug(nextSlug)
     const project = projects?.find((p) => p.slug === nextSlug)
-    setView(reviewReachable(project?.status) ? 'matrix' : 'setup')
+    setView(reviewReachable(project?.has_results) ? 'matrix' : 'setup')
+  }
+
+  // I1 (final-review report): the rail's project switcher used to call
+  // `setSlug` directly and never touch `view`, so switching away from a
+  // `done` project while sitting on `02`/`03` left that screen mounted —
+  // refetching for the newly selected project even though its nav button
+  // just greyed out. `open()` already computes the right destination for a
+  // freshly *opened* project; this reuses the same rule, but only overrides
+  // `view` when the current screen actually needs review and the new
+  // project can't supply it — a switch onto the dashboard, setup or
+  // extraction-status screen (none of which need a completed review) must
+  // not be yanked around.
+  function selectProject(nextSlug: string | null) {
+    setSlug(nextSlug)
+    const project = nextSlug ? projects?.find((p) => p.slug === nextSlug) ?? null : null
+    setView((v) => {
+      const item = NAV.find((n) => n.view === v)
+      return item?.needsReview && !reviewReachable(project?.has_results) ? 'setup' : v
+    })
   }
 
   function startNew() {
@@ -86,7 +106,7 @@ export default function App() {
             <select
               id="project-switch"
               value={slug ?? ''}
-              onChange={(e) => setSlug(e.target.value || null)}
+              onChange={(e) => selectProject(e.target.value || null)}
               disabled={!projects || projects.length === 0}
             >
               {(!projects || projects.length === 0) && (
@@ -105,7 +125,7 @@ export default function App() {
             {NAV.map((item) => {
               const disabled =
                 (item.needsProject && !slug) ||
-                (item.needsReview && !reviewReachable(active?.status))
+                (item.needsReview && !reviewReachable(active?.has_results))
               return (
                 <li key={item.view}>
                   <button

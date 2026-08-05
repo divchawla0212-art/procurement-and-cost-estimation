@@ -68,3 +68,30 @@ describe('done_with_failures banner placement (Task 4 review)', () => {
     expect(screen.getByText(bannerText)).toBeInTheDocument()
   })
 })
+
+describe('failed-run banner (I2, final-review report)', () => {
+  // See the matching describe block in ComplianceMatrix.test.tsx: this
+  // screen only mounts once `has_results` is true, so `status: 'failed'`
+  // here means the latest run failed outright but an earlier run's
+  // extraction is still in the store.
+  const failedBannerText = /most recent ingestion run failed to extract anything/i
+
+  it('is shown on the populated render for a failed run with prior results', async () => {
+    await renderStatement(
+      {
+        project: 'p',
+        currency: 'USD',
+        generation: 1,
+        vendors: ['ACME'],
+        revisions: { ACME: '1' },
+        currencies: { ACME: 'USD' },
+        statuses: { ACME: 'ok' },
+        rows: [],
+      },
+      'failed',
+    )
+
+    expect(screen.getByText(failedBannerText)).toBeInTheDocument()
+    expect(screen.queryByText(bannerText)).not.toBeInTheDocument()
+  })
+})

@@ -6,6 +6,18 @@ import zipfile
 
 from fastapi.testclient import TestClient
 
+# `import api.main` is deliberately kept *lazy* — inside `_client` and
+# `_unconfigured_client` below, not at module scope. `api/main.py:48` calls
+# `dotenv.load_dotenv()` at import time, and a module-scope import here would
+# run it during pytest's *collection* phase (this file collects before
+# `test_procurement_real_data.py`, alphabetically), populating
+# `ANTHROPIC_API_KEY` from `.env` before that file's
+# `@pytest.mark.skipif(not os.getenv("ANTHROPIC_API_KEY") and ...)` decorator
+# evaluates — turning its permanently-skipped live-Anthropic-call test into
+# an actual billed API call. (Caught by re-measuring the full suite's skip
+# count after trying that approach: 3 skips became 2.) So the fix instead
+# keeps every import lazy and only reorders it — see `_unconfigured_client`.
+
 
 def _client(tmp_path, monkeypatch) -> TestClient:
     monkeypatch.setenv("PROCUREMENT_PROJECTS_ROOT", str(tmp_path))
@@ -147,8 +159,13 @@ def test_ingest_rejects_an_unknown_provider(tmp_path, monkeypatch):
 
 
 def test_ingest_rejects_a_provider_with_no_key(tmp_path, monkeypatch):
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    # `_client` first, `delenv` after (I3, final-review report): `_client`'s
+    # lazy `import api.main` triggers `dotenv.load_dotenv()` on first import
+    # in the process, which would otherwise repopulate a just-deleted
+    # `GEMINI_API_KEY` from the developer's `.env` if this were the first
+    # test in the file to run.
     client = _client(tmp_path, monkeypatch)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     _project_with_vendor(client)
     before = client.get("/api/projects/p/setup").json()
 
@@ -170,6 +187,43 @@ def test_ingest_without_a_provider_uses_the_default(tmp_path, monkeypatch):
     after = client.get("/api/projects/p/setup").json()
     assert after["has_results"] is True
     assert after["generation"] > 0
+
+
+def test_project_summary_reports_has_results_independent_of_status(
+    tmp_path, monkeypatch
+):
+    """I2 (final-review report): `has_results` must reflect the store, not
+    `status` — CLAUDE.md: "a failed extraction never blanks previously-good
+    stored data" means a project can be `status: failed` (its most recent run
+    extracted nothing) while the store still holds a complete earlier
+    extraction. `_project_summary` — the source for both `GET /api/projects`
+    and `GET /api/projects/{slug}` — must report `has_results: true` in that
+    state, not tie it to `status`.
+    """
+    from procurement import project as proj
+
+    client = _client(tmp_path, monkeypatch)
+    _project_with_vendor(client)
+    assert client.post("/api/projects/p/ingest").status_code == 200
+    setup_after_good_run = client.get("/api/projects/p/setup").json()
+    assert setup_after_good_run["has_results"] is True
+    assert setup_after_good_run["status"] != "failed"
+
+    # Simulate exactly the scenario I2 describes: a second run that failed
+    # every document, recomputing `status` to `"failed"` without touching the
+    # store the first run wrote (`procurement/pipeline.py`:
+    # `project.status = "failed" if extracted == 0 else ...`).
+    project = proj.load_project(str(tmp_path), "p")
+    project.status = "failed"
+    proj.save_project(str(tmp_path), project)
+
+    summary = client.get("/api/projects/p").json()
+    assert summary["status"] == "failed"
+    assert summary["has_results"] is True  # the store still holds the first run
+
+    listing = client.get("/api/projects").json()
+    assert listing[0]["status"] == "failed"
+    assert listing[0]["has_results"] is True
 
 
 def test_ingest_rejects_an_unknown_default_provider(tmp_path, monkeypatch):
@@ -202,8 +256,10 @@ def test_ingest_rejects_an_unready_default_provider(tmp_path, monkeypatch):
     full store in which every extraction had failed, and reported
     `has_results: true` with `generation` bumped 0 → 1.
     """
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    # `_client` first, `delenv` after (I3, final-review report) — see the
+    # comment in `test_ingest_rejects_a_provider_with_no_key`.
     client = _client(tmp_path, monkeypatch)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     _project_with_vendor(client)
     before = client.get("/api/projects/p/setup").json()
     monkeypatch.setenv("LLM_PROVIDER", "gemini")
@@ -226,9 +282,13 @@ def test_setup_reports_provider_state(tmp_path, monkeypatch):
 
 
 def test_setup_reports_provider_catalog(tmp_path, monkeypatch):
+    # `_client` first, `delenv` after (I3, final-review report) — see the
+    # comment in `test_ingest_rejects_a_provider_with_no_key`. `setenv` has
+    # no such hazard (`load_dotenv()` never overrides an already-set var),
+    # so only the `delenv` needs to move.
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-a-real-key")
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     client = _client(tmp_path, monkeypatch)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     client.post("/api/projects", json={"name": "P"})
     provider = client.get("/api/projects/p/setup").json()["provider"]
 
@@ -359,8 +419,10 @@ def test_a_rejection_does_not_poison_the_next_run(tmp_path, monkeypatch):
     Rejection is request-scoped: it leaves no state that could stop the next
     run from succeeding.
     """
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    # `_client` first, `delenv` after (I3, final-review report) — see the
+    # comment in `test_ingest_rejects_a_provider_with_no_key`.
     client = _client(tmp_path, monkeypatch)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     _project_with_vendor(client)
 
     assert client.post("/api/projects/p/ingest", json={"provider": "gemini"}).status_code == 400
@@ -410,11 +472,21 @@ def test_empty_provider_string_uses_the_default(tmp_path, monkeypatch):
 
 
 def _unconfigured_client(tmp_path, monkeypatch) -> TestClient:
+    # I3 (final-review report): import *before* the `delenv` calls below,
+    # not after. `api/main.py:48` calls `dotenv.load_dotenv()` at import
+    # time, which repopulates a just-deleted env var (it never overrides one
+    # that is still set, only refills one that was removed) — so importing
+    # first means any `.env` values load and get immediately wiped by the
+    # `delenv`s that follow, rather than being loaded *after* the wipe and
+    # silently surviving it. This was the exact bug: with the import last,
+    # `test_ingest_without_provider_is_400_and_leaves_store_untouched` ran a
+    # real, billed ingestion against the developer's configured Anthropic key
+    # when run in isolation (verified: `200` where `400` was expected).
+    import api.main as api_main
     monkeypatch.setenv("PROCUREMENT_PROJECTS_ROOT", str(tmp_path))
     monkeypatch.delenv("LLM_PROVIDER", raising=False)
     for key in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"):
         monkeypatch.delenv(key, raising=False)
-    import api.main as api_main
     monkeypatch.setattr(api_main, "ROOT", str(tmp_path))
     return TestClient(api_main.app)
 
@@ -560,6 +632,61 @@ def test_ingest_rejects_a_non_boolean_force(tmp_path, monkeypatch):
     after = client.get("/api/projects/p/setup").json()
     assert after["generation"] == before["generation"]
     assert after["has_results"] == before["has_results"]
+
+
+# ------------------------------------- M5: `provider` type-checked like `force`
+#
+# `force` is validated as an actual boolean two lines above `provider`'s
+# resolution (see `test_ingest_rejects_a_non_boolean_force`), but until now
+# `provider` was only ever coerced: `False`/`0` are falsy and fell straight
+# through to the env default instead of being rejected, and `123` was
+# stringified to `"123"` and rejected as an *unknown provider* (400) rather
+# than as a malformed field (422). These three make `provider` consistent
+# with `force`'s standard.
+
+
+def test_ingest_rejects_a_boolean_provider(tmp_path, monkeypatch):
+    """`{"provider": false}` must not silently fall through to the env
+    default — it is a malformed field, not an absent one."""
+    client = _client(tmp_path, monkeypatch)
+    _project_with_vendor(client)
+    before = client.get("/api/projects/p/setup").json()
+
+    res = client.post("/api/projects/p/ingest", json={"provider": False})
+
+    assert res.status_code == 422
+    assert "provider" in res.json()["detail"]
+    after = client.get("/api/projects/p/setup").json()
+    assert after["generation"] == before["generation"]
+    assert after["has_results"] == before["has_results"]
+
+
+def test_ingest_rejects_a_zero_provider(tmp_path, monkeypatch):
+    """`{"provider": 0}` is falsy like `false`, and must be rejected the
+    same way rather than silently resolving to the env default."""
+    client = _client(tmp_path, monkeypatch)
+    _project_with_vendor(client)
+
+    res = client.post("/api/projects/p/ingest", json={"provider": 0})
+
+    assert res.status_code == 422
+    assert "provider" in res.json()["detail"]
+
+
+def test_ingest_rejects_a_numeric_provider_as_malformed_not_unknown(
+    tmp_path, monkeypatch
+):
+    """`{"provider": 123}` is truthy, so before this fix it stringified to
+    `"123"` and was rejected as an *unknown provider* (400) — a confusing
+    message for a client that sent the wrong JSON type. It must be a 422
+    naming `provider`, the same shape of error a non-boolean `force` gets."""
+    client = _client(tmp_path, monkeypatch)
+    _project_with_vendor(client)
+
+    res = client.post("/api/projects/p/ingest", json={"provider": 123})
+
+    assert res.status_code == 422
+    assert "provider" in res.json()["detail"]
 
 
 def test_run_started_event_names_the_client_class(tmp_path, monkeypatch):

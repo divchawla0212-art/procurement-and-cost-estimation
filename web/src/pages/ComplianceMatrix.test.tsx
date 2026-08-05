@@ -108,3 +108,42 @@ describe('done_with_failures banner placement (Task 4 review)', () => {
     expect(screen.getByText(bannerText)).toBeInTheDocument()
   })
 })
+
+describe('failed-run banner (I2, final-review report)', () => {
+  // This screen only mounts once `has_results` is true (`nav.ts`), so a
+  // `status: 'failed'` render here means the latest run failed outright but
+  // an earlier run's extraction is still in the store (CLAUDE.md: "a failed
+  // extraction never blanks previously-good stored data"). That is a
+  // different situation from `done_with_failures` (some documents in *this*
+  // run failed), so it gets its own banner text, not the partial-run one.
+  const failedBannerText = /most recent ingestion run failed to extract anything/i
+
+  it('is shown on the populated render for a failed run with prior results', async () => {
+    await renderMatrix(
+      {
+        vendors: ['ACME'],
+        rows: [oneRow],
+        coverage: baseCoverage,
+        groups: { not_matched: [], needs_human: [], matched: [oneRow] },
+      },
+      'failed',
+    )
+
+    expect(screen.getByText(failedBannerText)).toBeInTheDocument()
+    expect(screen.queryByText(bannerText)).not.toBeInTheDocument()
+  })
+
+  it('is not shown for a clean run', async () => {
+    await renderMatrix(
+      {
+        vendors: ['ACME'],
+        rows: [oneRow],
+        coverage: baseCoverage,
+        groups: { not_matched: [], needs_human: [], matched: [oneRow] },
+      },
+      'done',
+    )
+
+    expect(screen.queryByText(failedBannerText)).not.toBeInTheDocument()
+  })
+})

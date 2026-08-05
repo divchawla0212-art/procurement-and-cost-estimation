@@ -91,6 +91,14 @@ def _project_summary(p) -> dict:
         "target_currency": p.target_currency,
         "status": p.status,
         "generation": p.generation,
+        # Whether the store holds an extraction to read, independent of
+        # `status` (BUG-001 follow-up / I2). `status` can be "failed" while
+        # the store still holds a complete prior extraction — CLAUDE.md: "a
+        # failed extraction never blanks previously-good stored data" — so
+        # `status` alone is the wrong predicate for whether screens 02/03 are
+        # reachable. Same computation `_setup_state` already uses; kept to
+        # one implementation.
+        "has_results": bool(load_dataset(ROOT, p.slug)),
     }
 
 
@@ -391,7 +399,18 @@ def ingest(slug: str, payload: dict | None = Body(default=None)) -> dict:
     # `has_results: true`, and an unknown one surfaced as a 502 from inside the
     # try below.
     requested = (payload or {}).get("provider")
-    provider = str(requested).strip().lower() if requested else None
+    # A *present* `provider` must be a string. Without this check `False` and
+    # `0` are falsy and silently fell through to the env default rather than
+    # being rejected, while `123` was stringified to `"123"` and rejected as
+    # an *unknown provider* (400) rather than as a malformed field (422) —
+    # the same class of accident `force`'s boolean check two lines below
+    # guards against, so `provider` is held to the same standard.
+    if requested is not None and not isinstance(requested, str):
+        raise HTTPException(
+            status_code=422,
+            detail="`provider` must be a string.",
+        )
+    provider = requested.strip().lower() if requested else None
     effective = provider or (os.getenv("LLM_PROVIDER") or "").strip().lower() or None
 
     # Defaults to False: a client that predates this field (or omits it) keeps
