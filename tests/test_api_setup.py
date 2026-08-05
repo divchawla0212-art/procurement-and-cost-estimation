@@ -112,6 +112,27 @@ def test_set_fx_rates_normalises_and_validates(tmp_path, monkeypatch):
     assert bad.status_code == 422
 
 
+def test_fx_rates_rejects_a_non_positive_rate(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    client.post("/api/projects", json={"name": "P"})
+    client.put("/api/projects/p/fx-rates", json={"rates": {"EUR": 1.08}})
+
+    res = client.put("/api/projects/p/fx-rates", json={"rates": {"EUR": 0}})
+
+    assert res.status_code == 422
+    assert "EUR" in res.json()["detail"]
+    # the good rate must survive a rejected write
+    assert client.get("/api/projects/p/setup").json()["fx_rates"] == {"EUR": 1.08}
+
+
+def test_fx_rates_rejects_a_negative_rate(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    client.post("/api/projects", json={"name": "P"})
+    res = client.put("/api/projects/p/fx-rates", json={"rates": {"GBP": -1.27}})
+    assert res.status_code == 422
+    assert "GBP" in res.json()["detail"]
+
+
 def test_ingest_without_vendors_is_rejected(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     client.post("/api/projects", json={"name": "P"})

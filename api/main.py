@@ -372,11 +372,17 @@ def set_fx_rates(slug: str, payload: dict = Body(...)) -> dict:
     rates: dict[str, float] = {}
     for code, value in raw.items():
         try:
-            rates[str(code).strip().upper()] = float(value)
+            rate = float(value)
         except (TypeError, ValueError) as exc:
             raise HTTPException(
                 status_code=422, detail=f"Rate for '{code}' is not a number."
             ) from exc
+        if rate <= 0:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Rate for '{code}' must be greater than zero.",
+            )
+        rates[str(code).strip().upper()] = rate
     project.fx_rates = rates
     proj.save_project(ROOT, project)
     return _setup_state(project)
