@@ -234,8 +234,82 @@ def test_renormalize_recomputes_from_facts_read_inside_the_lock(tmp_path, monkey
 
     monkeypatch.setattr(snapshots, "update_facts", swap_then_update)
     monkeypatch.setattr(renormalize_module.snapshots, "update_facts", swap_then_update)
-    renormalize(root, "p")
+    assert renormalize(root, "p") == 1
 
     stored = snapshots.load_facts(root, "p", "K")
     assert abs(stored.normalized["normalized_total"] - 2000.0) < 0.01, \
         "wrote a total derived from the commercial the pre-pass saw"
+    # the other half of "did not write the pre-pass's object back": the
+    # concurrent writer's commercial facts must survive too, not just the
+    # normalized total computed from them.
+    assert stored.commercial["base_price"] == 2000.0
+
+
+def test_renormalize_skips_a_vendor_deleted_between_pre_pass_and_lock(tmp_path, monkeypatch):
+    """A candidate whose facts file is gone by the time the lock is acquired
+    (pipeline.py prunes a departed vendor mid-run) must be skipped, not
+    crash the caller and not be resurrected. `update_facts(create=False)`
+    raises LookupError for exactly this case."""
+    root = str(tmp_path)
+    _project(root, "p", target_currency="USD", fx_rates={"EUR": 1.08})
+    snapshots.save_facts(root, "p", VendorFacts(
+        vendor="GONE", commercial={"vendor": "GONE", "currency": "EUR",
+                                   "base_price": 1000.0, "freight_included": True}))
+    snapshots.save_facts(root, "p", VendorFacts(
+        vendor="STAYS", commercial={"vendor": "STAYS", "currency": "EUR",
+                                    "base_price": 500.0, "freight_included": True}))
+
+    real_update = snapshots.update_facts
+    deleted = []
+
+    @contextmanager
+    def delete_gone_then_update(root_, slug_, vendor_, **kw):
+        if vendor_ == "GONE" and not deleted:
+            deleted.append(True)
+            snapshots.delete_facts(root_, slug_, vendor_)
+        with real_update(root_, slug_, vendor_, **kw) as f:
+            yield f
+
+    monkeypatch.setattr(snapshots, "update_facts", delete_gone_then_update)
+    monkeypatch.setattr(renormalize_module.snapshots, "update_facts", delete_gone_then_update)
+
+    changed = renormalize(root, "p")  # must not raise
+
+    assert changed == 1  # only STAYS
+    assert snapshots.load_facts(root, "p", "GONE") is None, \
+        "a pruned vendor must stay absent, not be resurrected"
+    stayed = snapshots.load_facts(root, "p", "STAYS")
+    assert abs(stayed.normalized["normalized_total"] - 540.0) < 0.01
+
+
+def test_renormalize_uses_the_project_read_inside_the_lock(tmp_path, monkeypatch):
+    """The other half of the freshness rule: not just facts, but the
+    project's fx_rates/target_currency must be read fresh inside the lock.
+    If a rate changes between the pre-pass and the lock, the stored total
+    must follow the NEW rate."""
+    root = str(tmp_path)
+    _project(root, "p", target_currency="USD", fx_rates={"EUR": 1.0})
+    snapshots.save_facts(root, "p", VendorFacts(
+        vendor="K", commercial={"vendor": "K", "currency": "EUR",
+                                "base_price": 1000.0, "freight_included": True}))
+
+    real_update = snapshots.update_facts
+    swapped = []
+
+    @contextmanager
+    def swap_rate_then_update(root_, slug_, vendor_, **kw):
+        if not swapped:
+            swapped.append(True)
+            # a concurrent request changes the FX rate, then we take the lock
+            _set_rate(root_, {"EUR": 2.0})
+        with real_update(root_, slug_, vendor_, **kw) as f:
+            yield f
+
+    monkeypatch.setattr(snapshots, "update_facts", swap_rate_then_update)
+    monkeypatch.setattr(renormalize_module.snapshots, "update_facts", swap_rate_then_update)
+    assert renormalize(root, "p") == 1
+
+    stored = snapshots.load_facts(root, "p", "K")
+    assert abs(stored.normalized["normalized_total"] - 2000.0) < 0.01, \
+        "wrote a total derived from the rate the pre-pass saw, not the one " \
+        "current when the lock was taken"

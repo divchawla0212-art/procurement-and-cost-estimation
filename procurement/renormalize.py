@@ -68,18 +68,29 @@ def renormalize(root: str, slug: str) -> int:
             # they are NOW. The pre-pass only decided candidacy; writing the
             # value it saw back over facts a concurrent run has since
             # changed is BUG-010.
-            with snapshots.update_facts(root, slug, vendor) as facts:
-                if not facts.commercial:
-                    continue               # candidacy evaporated
-                current_project = load_project(root, slug)
-                fresh = normalize_bid(
-                    VendorBid.model_validate(facts.commercial),
-                    current_project.target_currency,
-                    current_project.fx_rates).model_dump()
-                if fresh == facts.normalized:
-                    continue               # candidacy evaporated; not a change
-                facts.normalized = fresh   # the only field this function writes
-                changed += 1
+            try:
+                with snapshots.update_facts(root, slug, vendor) as facts:
+                    if not facts.commercial:
+                        continue               # candidacy evaporated
+                    current_project = load_project(root, slug)
+                    fresh = normalize_bid(
+                        VendorBid.model_validate(facts.commercial),
+                        current_project.target_currency,
+                        current_project.fx_rates).model_dump()
+                    if fresh == facts.normalized:
+                        continue               # candidacy evaporated; not a change
+                    facts.normalized = fresh   # the only field this function writes
+                    changed += 1
+            except LookupError:
+                # The vendor was pruned (pipeline.py deletes a departed
+                # vendor's facts inside a run) between the pre-pass and this
+                # lock acquire. `update_facts(create=False)` raises rather
+                # than resurrecting it; skip, don't recreate -- a stored
+                # collection holds exactly the records of its currently-live
+                # sources, and re-saving here would bring a deleted vendor
+                # back. Not a TOCTOU: this is the lock-acquire failure
+                # itself, not a pre-lock existence check.
+                continue
 
     events.append_event(root, slug, Event(
         at=_now(), run_id=events.new_run_id(), actor="renormalize",
