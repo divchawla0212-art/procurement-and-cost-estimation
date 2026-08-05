@@ -2,7 +2,7 @@
 
 React UI for the read-only compliance comparison matrix.
 
-See the [root README](../README.md) for how to run the API + this app alongside Streamlit ingestion.
+See the [root README](../README.md) for how to run the API and this app together.
 
 ```bash
 npm install

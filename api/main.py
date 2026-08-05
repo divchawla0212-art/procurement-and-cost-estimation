@@ -1,9 +1,9 @@
-"""FastAPI entry for the enterprise review UI.
+"""FastAPI entry for the web app — the only front end.
 
 Read routes wrap an existing procurement builder or project loader. The setup
 routes (create project, attach requirements, upload vendor archives, set FX
-rates, run ingestion) wrap the same functions the Streamlit portal calls, so
-the two front ends stay behaviourally identical.
+rates, run ingestion) wrap the same `procurement` functions directly, so the
+HTTP layer stays a thin adapter and never becomes a second implementation.
 """
 from __future__ import annotations
 
@@ -28,6 +28,7 @@ import dotenv
 
 from procurement import project as proj
 from procurement.coverage import build_extraction_status, rollup
+from procurement.feedback import save_feedback
 from procurement.export import (
     matrix_to_csv_str,
     matrix_to_xlsx_bytes,
@@ -38,12 +39,12 @@ from procurement.matrix import GROUP_ORDER, build_matrix, rows_in_group
 from procurement.pipeline import load_dataset, run_ingestion
 from procurement.quote_select import pick_quote
 from procurement.statement import build_statement
+from procurement.store import snapshots
 
-# Load a local `.env` exactly as `portal/app.py` does, so both front ends see
-# the same providers. `load_dotenv()` resolves the file by walking up from this
-# module, not from the working directory, so it works under `uvicorn`, Docker
-# and pytest alike — and it never overrides a real environment variable, which
-# is what a deployment injects.
+# Load a local `.env` here rather than relying on the launcher. `load_dotenv()`
+# resolves the file by walking up from this module, not from the working
+# directory, so it works under `uvicorn`, Docker and pytest alike — and it never
+# overrides a real environment variable, which is what a deployment injects.
 dotenv.load_dotenv()
 
 ROOT = os.environ.get("PROCUREMENT_PROJECTS_ROOT", "projects")
@@ -189,9 +190,9 @@ def _download(payload: bytes, media_type: str, filename: str) -> Response:
 def _export(fmt: str, slug: str, stem: str, build_xlsx, build_csv) -> Response:
     if fmt == "xlsx":
         return _download(build_xlsx(), XLSX_MIME, f"{slug}-{stem}.xlsx")
-    # utf-8-sig, for the reason the Streamlit statement view records: Excel
-    # reads a BOM-less UTF-8 CSV as cp1252, and both documents carry non-ASCII
-    # — the statement's U+00B7 tally separator, the matrix's rationale text.
+    # utf-8-sig: Excel reads a BOM-less UTF-8 CSV as cp1252, and both documents
+    # carry non-ASCII — the statement's U+00B7 tally separator, the matrix's
+    # rationale text.
     return _download(build_csv().encode("utf-8-sig"), CSV_MIME,
                      f"{slug}-{stem}.csv")
 
@@ -217,6 +218,33 @@ def export_statement(slug: str, format: str = _FORMAT) -> Response:
     return _export(format, slug, "comparative-statement",
                    lambda: statement_to_xlsx_bytes(statement),
                    lambda: statement_to_csv_str(statement))
+
+
+# -------------------------------------------------------------- review writes
+#
+# The only write a reviewer makes outside setup and ingestion. It was the
+# Streamlit portal's sole write until the portal was removed; the invariants it
+# has to honour (one generation bump per note, a reason on every note) are
+# unchanged, and now live in `procurement/feedback.py` beside the other store
+# writers rather than in a view.
+
+
+@app.put("/api/projects/{slug}/vendors/{vendor}/feedback")
+def put_feedback(slug: str, vendor: str, payload: dict = Body(...)) -> dict:
+    _load_or_404(slug)
+    try:
+        save_feedback(ROOT, slug, vendor,
+                      str(payload.get("text", "")),
+                      str(payload.get("reason", "")))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {
+        "vendor": vendor,
+        "technical_feedback": snapshots.load_facts(ROOT, slug, vendor).technical_feedback,
+        "generation": snapshots.get_generation(ROOT, slug),
+    }
 
 
 # --------------------------------------------------------------- setup routes
@@ -385,8 +413,8 @@ def ingest(slug: str, payload: dict | None = Body(default=None)) -> dict:
     from shared.llm.factory import get_client
 
     # The scanned-PDF transcription fallback uses Anthropic; enable it only when
-    # an Anthropic key is present, mirroring the Streamlit portal. This is
-    # deliberately independent of the selected provider — see §5.1 of the spec.
+    # an Anthropic key is present. This is deliberately independent of the
+    # selected provider — see §5.1 of the spec.
     pdf_fallback = None
     if os.getenv("ANTHROPIC_API_KEY"):
         from procurement.pdf_llm import transcribe_pdf

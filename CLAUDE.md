@@ -8,7 +8,8 @@ Two Python packages over one shared LLM layer:
 - **`cost_estimation/`** — the older costing-sheet ingestion CLI (`cost-est`).
 - **`shared/llm/`** — provider clients behind one `classify_structure` interface,
   plus the versioned prompt files in `shared/llm/prompts/`.
-- **`portal/app.py`** — Streamlit UI over `procurement`.
+- **`api/main.py` + `web/`** — FastAPI and the React SPA it serves: the single
+  front end, covering setup, ingestion and review.
 
 ## Running things
 
@@ -19,36 +20,36 @@ python -m pytest
 Run from the repo root. Tests are key-free — they use `shared/llm/mock_client.py`,
 and no test may require `ANTHROPIC_API_KEY`.
 
-**One test fails on a developer workstation, and it is not yours to fix in
-passing:** `tests/test_portal_app.py::test_missing_api_key_does_not_block_creation`,
-which fails for anyone with a populated `.env`. `portal/app.py` calls
-`load_dotenv()`, which repopulates `ANTHROPIC_API_KEY` after that test's
-`monkeypatch.delenv`. `load_dotenv()` resolves the file relative to
-`portal/app.py`, not to your working directory, so running pytest from
-somewhere else does not dodge it — only the absence of a `.env` does.
-
-There are therefore **two** baselines, and both are correct:
+There are **two** baselines, and both are correct — they differ only in which
+untracked fixture directories are present, never in pass/fail:
 
 | where | baseline |
 |---|---|
-| a developer workstation, `.env`, `data/` and an ingested multi-vendor `projects/` present | **880 passed, 3 skipped, 1 failed** |
-| CI, and any clean checkout | **874 passed, 10 skipped, 0 failed** |
+| a developer workstation, `data/` and an ingested multi-vendor `projects/` present | **873 passed, 3 skipped, 0 failed** |
+| CI, and any clean checkout | **866 passed, 10 skipped, 0 failed** |
 
 Anything else is a real regression.
 
-CI being green is not luck. With no `.env` the key stays deleted, the advisory
-warning fires, and the portal test passes. With no `projects/` all four
-`test_real_corpus_coverage.py` tests skip on their module-level guard. The
-remaining three extra skips are not credential failures: they are the tests
-guarded on the untracked `data/` sample directory, which a workstation has and
-a fresh checkout does not.
+CI being green is not luck. With no `projects/` all four
+`test_real_corpus_coverage.py` tests skip on their module-level guard, and the
+three tests guarded on the untracked `data/` sample directory skip too. The
+three skips a workstation already shows are credential guards
+(`test_anthropic_client.py`, `test_bedrock_client.py`,
+`test_procurement_real_data.py`) and skip in both places.
 
-So the CI row is the workstation row with the portal failure turned into a
-pass, the four corpus-coverage passes turned into skips, and the three `data/`
-passes turned into skips — `874 = 880 + 1 - 4 - 3`, `10 = 3 + 4 + 3`,
-`0 = 1 - 1`; 884 tests either way. When the counts move, measure the
+So the CI row is the workstation row with the four corpus-coverage passes and
+the three `data/` passes turned into skips — `866 = 873 - 4 - 3`,
+`10 = 3 + 4 + 3`; 876 tests either way. When the counts move, measure the
 workstation row and derive the CI row from it; editing the two rows
 independently is how they drift apart.
+
+**There is no longer a workstation-only failure.** Until the Streamlit portal
+was removed, `tests/test_portal_app.py::test_missing_api_key_does_not_block_creation`
+failed for anyone with a populated `.env`, because `portal/app.py` called
+`load_dotenv()` and repopulated the key that the test had just deleted. That
+test went with the portal, so a populated `.env` no longer changes the count. A
+red workstation run is now always a real regression — do not go looking for the
+old excuse.
 
 The workstation row also depends on what your untracked `projects/` holds:
 `test_real_corpus_coverage.py` asserts against the newest store there with more
@@ -69,8 +70,9 @@ CI runs that same command on every pull request into `main`, via
 3.12, no provider secrets. Keep it that way: a test that needs a key belongs
 behind a skip guard, not behind a repository secret.
 
-The portal runs via the `procurement-portal` entry in `.claude/launch.json` —
-use the preview tooling, not a bare `streamlit run`.
+The app runs via the `procurement-api` and `enterprise-web` entries in
+`.claude/launch.json` — use the preview tooling, not bare `uvicorn` / `npm run
+dev`.
 
 ## Store invariants — violating these corrupts award decisions
 

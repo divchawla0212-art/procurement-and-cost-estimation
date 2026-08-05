@@ -1,41 +1,34 @@
 name: procurement
 
 services:
-  # FastAPI + the compiled React UI on one origin.
+  # FastAPI + the compiled React UI on one origin. The single service: setup,
+  # ingestion and review all go through it.
   api:
     build:
       context: .
+      args:
+        # Bakes .env — and the provider key in it — into the image, so this
+        # build is a self-contained deployment artifact. Do not push the result
+        # to a repository whose readers should not hold that key; build the
+        # shareable image with `--build-arg INCLUDE_ENV=false` instead.
+        INCLUDE_ENV: "${INCLUDE_ENV:-true}"
     image: procurement-review:latest
+    # Container port is fixed; the host port is not. Windows reserves wide
+    # dynamic ranges for WinNAT/Hyper-V (`netsh interface ipv4 show
+    # excludedportrange protocol=tcp`) and 8000 often falls inside one, so the
+    # bind fails with no process holding the port. Override with
+    # PROCUREMENT_HOST_PORT when that happens.
     ports:
-      - "8000:8000"
+      - "${PROCUREMENT_HOST_PORT:-8000}:8000"
     env_file:
       - path: .env
         required: false
     environment:
       PROCUREMENT_PROJECTS_ROOT: /data/projects
-    volumes:
-      - projects:/data/projects
-    restart: unless-stopped
-
-  # The Streamlit portal — same image, same store, different front end.
-  portal:
-    image: procurement-review:latest
-    depends_on:
-      - api
-    command:
-      - streamlit
-      - run
-      - portal/app.py
-      - --server.port=8501
-      - --server.address=0.0.0.0
-      - --server.headless=true
-    ports:
-      - "8501:8501"
-    env_file:
-      - path: .env
-        required: false
-    environment:
-      PROCUREMENT_PROJECTS_ROOT: /data/projects
+      # The bundled sample project is copied into the volume on start unless an
+      # identically-slugged project is already there. Set to 0 for a deployment
+      # that should come up with an empty store.
+      SEED_SAMPLE_PROJECTS: "${SEED_SAMPLE_PROJECTS:-1}"
     volumes:
       - projects:/data/projects
     restart: unless-stopped

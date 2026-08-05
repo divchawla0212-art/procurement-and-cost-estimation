@@ -1,5 +1,7 @@
-# Secrets — never bake these into an image layer. Compose injects .env at runtime.
-.env
+# `.env` is re-included in the build context on purpose, so the `env-true` stage
+# can bake it when INCLUDE_ENV=true. It is NOT copied by the application COPY —
+# the `source` stage deletes it — so INCLUDE_ENV=false still yields an image with
+# no key in any layer. Every other env file stays excluded unconditionally.
 .env.*
 !.env.example
 
@@ -28,6 +30,11 @@ web/dist
 projects/
 data/
 processed-data/
+
+# ...except the bundled sample project, which ships as a read-only seed under
+# /app/samples and is copied into the volume on first start. Only this one slug
+# is re-included, so the build context stays small.
+!projects/gas-14
 
 # Docs and notebooks add nothing to the runtime
 docs
