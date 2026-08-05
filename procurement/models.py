@@ -69,6 +69,7 @@ class ComparisonRow(BaseModel):
     payment_terms: str | None
     engine_make: str | None
     extraction_status: str
+    normalization_status: str = "ok"       # "ok" | "no_fx_rate"
 
 
 class ComparisonTable(BaseModel):

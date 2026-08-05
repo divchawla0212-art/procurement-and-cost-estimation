@@ -17,6 +17,7 @@ def build_comparison(bids: list[VendorBid], normalized: list[NormalizedBid],
             payment_terms=bid.payment_terms,
             engine_make=bid.engine_make,
             extraction_status=bid.extraction_status,
+            normalization_status=n.normalization_status if n else "ok",
         ))
     rows.sort(key=lambda r: (r.normalized_total is None, r.normalized_total or 0.0))
     return ComparisonTable(target_currency=target_currency, rows=rows)

@@ -23,6 +23,12 @@ def test_rows_and_csv():
     assert "vendor" in csv and "MAN" in csv
 
 
+def test_csv_header_carries_the_normalization_status_column():
+    csv = comparison_to_csv_str(_table())
+    header = csv.splitlines()[0]
+    assert "normalization_status" in header.split(",")
+
+
 def test_xlsx_bytes_roundtrip():
     data = comparison_to_xlsx_bytes(_table())
     wb = openpyxl.load_workbook(io.BytesIO(data))
