@@ -55,6 +55,7 @@ class NormalizedBid(BaseModel):
     normalized_total: float | None
     adjustments: list[NormalizationAdjustment] = []
     extraction_status: str = "ok"
+    normalization_status: str = "ok"       # "ok" | "no_fx_rate"
 
 
 class ComparisonRow(BaseModel):

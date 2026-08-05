@@ -868,4 +868,8 @@ def test_row20_a_boxed_base_price_still_extracts_cleanly(tmp_path):
     run_ingestion(root, "p", second)
     assert second.calls.count("bid") == 0               # cached, not re-asked
     assert _facts(root).commercial["base_price"] == 1110836.0
-    assert _facts(root).normalized["normalized_total"]
+    # AED has no configured rate in this fixture's project (BUG-005): the
+    # boxed base_price still extracted cleanly, but normalization correctly
+    # refuses to invent a 1:1 rate rather than reporting a bogus total.
+    assert _facts(root).normalized["normalized_total"] is None
+    assert _facts(root).normalized["normalization_status"] == "no_fx_rate"
