@@ -129,7 +129,7 @@ nothing crashes — the screens simply present as available when they are not.
 
 - **Spec:** [`docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md`](docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md) §1.1
 - **Plan:** [`docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md`](docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md), Task 4
-- **Ledger:** none — not part of a phase
+- **Ledger:** [`.superpowers/sdd/2026-08-05-tracked-bugs-001-004/progress.md`](.superpowers/sdd/2026-08-05-tracked-bugs-001-004/progress.md) — untracked, since `.superpowers/` is gitignored; not a broken link, just not in git
 - **Design change:** the open design question above is settled in spec §1.1:
   `done_with_failures` **does** admit the user, behind a banner that names no
   documents and points at `04 Extraction status`; only `new` and `failed`
@@ -234,7 +234,7 @@ endpoint that would have made it re-extract the other 31.
 
 - **Spec:** [`docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md`](docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md) §1.2
 - **Plan:** [`docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md`](docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md), Task 5
-- **Ledger:** none — not part of a phase
+- **Ledger:** [`.superpowers/sdd/2026-08-05-tracked-bugs-001-004/progress.md`](.superpowers/sdd/2026-08-05-tracked-bugs-001-004/progress.md) — untracked, since `.superpowers/` is gitignored; not a broken link, just not in git
 - **Design change:** settled in spec §1.2 — `force` is accepted in the
   `POST /ingest` payload (default `false`, so an existing client sees no
   behaviour change); the UI exposes it as a separate `Force full
@@ -242,8 +242,8 @@ endpoint that would have made it re-extract the other 31.
   true, gated behind a `window.confirm` that names the cost before firing.
   Before exposing the switch, the brief's required Step 1b measurement was
   taken directly against `run_ingestion(..., force=True)` on an
-  already-ingested fixture (full detail in
-  `.superpowers/sdd/2026-08-05-tracked-bugs-001-004/task-5-report.md`):
+  already-ingested fixture — the measurements that matter are inlined below
+  rather than left behind a pointer to the gitignored task report:
   - `generation` moves **exactly once per forced run** — confirmed on two
     consecutive forced runs, 1→2 and then 2→3.
   - `_prune_orphan_facts` **runs unconditionally** inside the write
@@ -333,7 +333,7 @@ web/src/pages/ComplianceMatrix.tsx:113
 
 - **Spec:** [`docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md`](docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md) §1.4
 - **Plan:** [`docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md`](docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md), Task 6
-- **Ledger:** none — not part of a phase
+- **Ledger:** [`.superpowers/sdd/2026-08-05-tracked-bugs-001-004/progress.md`](.superpowers/sdd/2026-08-05-tracked-bugs-001-004/progress.md) — untracked, since `.superpowers/` is gitignored; not a broken link, just not in git
 - **Design change:** settled in spec §1.4 — there was no open design question
   to settle for this one. Both known strings, plus every other live hit found
   by the repo-wide sweep (`grep -rni "streamlit\|portal"` across `web/src`,
@@ -451,7 +451,7 @@ No key was present in the container. `classified_by: llm` and
 
 - **Spec:** [`docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md`](docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md) §1.3
 - **Plan:** [`docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md`](docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md), Tasks 1–2
-- **Ledger:** none — not part of a phase
+- **Ledger:** [`.superpowers/sdd/2026-08-05-tracked-bugs-001-004/progress.md`](.superpowers/sdd/2026-08-05-tracked-bugs-001-004/progress.md) — untracked, since `.superpowers/` is gitignored; not a broken link, just not in git
 - **Design change:** settled in spec §1.3 — `mock` stays reachable, but only
   when named explicitly; there is no implicit default any more. Every
   `os.getenv("LLM_PROVIDER", "mock")` became `os.getenv("LLM_PROVIDER")`

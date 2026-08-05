@@ -42,6 +42,37 @@ means fetching `/extraction-status` from two screens that do not otherwise need
 it, and the screen that already does that job is one click away. The banner
 says that some documents failed and points at `04`.
 
+**Correction (final-review report, I2) — the paragraph above is wrong about
+`failed`.** The original reasoning was: `new` and `failed` are the two states
+where the store holds no extraction to read, so gating screens 02/03 on
+`status ∉ {new, failed}` is safe. That is false for `failed`, and it is false
+because of a `CLAUDE.md` store invariant this spec did not check against: "a
+failed extraction never blanks previously-good stored data." `project.status`
+is recomputed **per run** as `"failed" if extracted == 0 else ...`
+(`procurement/pipeline.py`), so a project that ingested cleanly once and then
+had a *second* run fail every document — an expired key, a provider outage, or
+a forced re-run, which BUG-002's fix on this same branch newly makes reachable
+— ends at `status: failed` with the entire first run's extraction still
+sitting in the store. Gating on `status` alone made that project's compliance
+matrix and comparative statement unreachable even though the store held a
+complete, readable matrix, and left `web/src/pages/Setup.tsx`'s "Review
+compliance matrix" button (gated on `has_results`, which was `true`) routing
+to the screen the user was already on.
+
+**The rule now:** the gate is `has_results` (`ProjectSummary.has_results`,
+computed in `api/main.py::_project_summary` as
+`bool(load_dataset(ROOT, slug))` — the same computation `_setup_state` already
+used for the setup screen, not a second implementation). A project with
+results is reviewable whatever its `status`; a project without is not.
+`status` no longer drives the gate at all — it drives only the banner. The
+`done_with_failures` banner is unchanged (some documents in *this* run
+failed). A `status: failed` project that is reachable (because it still holds
+an earlier run's results) also gets a banner, with its own wording: the
+*latest* run failed outright and everything on screen is from an earlier run,
+which is a different situation from a partial failure in the current run and
+reads better said plainly rather than reused. See `web/src/nav.ts`,
+`web/src/pages/ComplianceMatrix.tsx` and `web/src/pages/ComparativeStatement.tsx`.
+
 ### 1.2 BUG-002 — how is a forced re-extraction surfaced and guarded?
 
 **`force` in the ingest payload; a separate, secondary UI action behind an
