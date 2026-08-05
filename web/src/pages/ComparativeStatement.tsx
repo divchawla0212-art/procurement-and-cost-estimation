@@ -219,6 +219,7 @@ function PricedRow({
             qty={cell?.qty ?? null}
             unitPrice={cell?.unit_price ?? null}
             total={cell?.total ?? null}
+            note={cell?.note ?? null}
             currency={currency}
             cellStyle={cellStyle}
           />
@@ -232,12 +233,14 @@ function PricedCells({
   qty,
   unitPrice,
   total,
+  note,
   currency,
   cellStyle,
 }: {
   qty: number | null
   unitPrice: number | null
   total: number | null
+  note: string | null
   currency: string
   cellStyle: { fontWeight: number; background: string } | undefined
 }): JSX.Element {
@@ -251,6 +254,7 @@ function PricedCells({
       </td>
       <td className="num" style={cellStyle}>
         {total != null ? formatMoney(total, currency) : '—'}
+        {note && <p className="rationale">{note}</p>}
       </td>
     </>
   )

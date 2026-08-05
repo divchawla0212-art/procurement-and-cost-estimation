@@ -32,7 +32,6 @@ A bug is only `Closed` once two things are true:
 
 | ID | Severity | Area | Summary | Reported | Status |
 |---|---|---|---|---|---|
-| BUG-009 | S3 | api, procurement/project | Every `project.json` writer is an unguarded read-modify-write: a `PUT /fx-rates` that returned 200 is silently discarded by a run finishing in the same window | 2026-08-05 | Open |
 | BUG-007 | S3 | web / api / procurement/pipeline | After a run ends `done_with_failures`, the only retry controls are project-wide — nothing re-extracts one document, or one vendor's documents | 2026-08-05 | Open |
 | BUG-006 | S3 | web / api | Extraction reports no live progress: a 12-minute run shows one static banner, while the per-document events that would fill it are already being written to disk | 2026-08-05 | Open |
 | BUG-005 | S1 | procurement/normalize | A project ships with no FX rates, and an unconfigured currency is silently converted at 1.0 — a EUR bid is ranked as if €1 = $1 | 2026-08-05 | Open |
@@ -41,6 +40,7 @@ A bug is only `Closed` once two things are true:
 
 | ID | Severity | Area | Summary | Closed | Fixed in | Spec / Plan |
 |---|---|---|---|---|---|---|
+| BUG-009 | S3 | api, procurement/project | Every `project.json` writer was an unguarded read-modify-write, so a `PUT /fx-rates` that returned 200 was discarded by a run finishing in the same window | 2026-08-05 | `<pending>` | none — see the Fix block |
 | BUG-008 | S3 | procurement/store, api | Nothing serialised two ingestion runs, and `atomic_write_json` shared one fixed `.tmp` name, so concurrent writers interleaved into one snapshot | 2026-08-05 | `5080a2c` | none — see the Fix block; measured, not designed up front |
 | BUG-004 | S1 | api | With no `LLM_PROVIDER` set, ingestion silently falls back to the **mock** provider and stores fabricated facts as `ok` | 2026-08-05 | `dfc3f37`, `9d3ba95`, `cddbea1` | [spec](docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md) / [plan](docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md) |
 | BUG-003 | S4 | web | Empty states still tell the user to run ingestion "in the Streamlit portal", which no longer exists | 2026-08-05 | `d3cfa61` | [spec](docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md) / [plan](docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md) |
@@ -1140,7 +1140,7 @@ stagger):*
 
 - **Severity:** S3
 - **Area:** `api/main.py`, `procurement/project.py`, `procurement/store/snapshots.py`
-- **Status:** Open
+- **Status:** Fixed
 - **Reported:** 2026-08-05
 - **Reporter:** found while closing BUG-008 — noted there as untested, then tested
 
@@ -1255,3 +1255,63 @@ A  natural: fx-rates hammered throughout a run
   writes the same files, so the same class of stale write exists there too —
   loading facts, computing, then saving over whatever the run wrote in between.
   That was **not** tested here and should be, as part of whichever fix lands.
+
+### Fix
+
+- **Spec:** none — the investigation above is the design record; the one open
+  question was settled by the reporter choosing to extend the per-slug lock.
+- **Plan:** none — one primitive and five call sites.
+- **Design change:** the lock lives in `procurement/project.py`, not in
+  `api/main.py` where BUG-008's run lock sits. It has to: the race is
+  `load → gap → save`, so a lock around only the save still leaves the read
+  outside it, and `pipeline.py` and `snapshots.py` mutate the project too.
+
+  `update_project(root, slug)` is a context manager holding a per-slug lock
+  across load, mutation and save. All five read-modify-write sites now use it —
+  `api/main.py` (requirements, fx-rates), `procurement/project.py`
+  (`unpack_vendor_zip`), `procurement/pipeline.py` (the run's status write) and
+  `procurement/store/snapshots.py` (`bump_generation`). `load_project` remains
+  correct for a read, `save_project` for a project's first write; what must not
+  return is the load/save pair spelled out at a call site.
+
+  Two consequences worth stating:
+  - **A settings write no longer blocks for the length of a run.** The critical
+    section is one load-modify-save, not the whole ingestion, so the 13-minute
+    stall the design note worried about does not arise. `PUT /fx-rates` during
+    a run waits microseconds, not minutes, and there is no new 409.
+  - **The lock is a plain `Lock`, deliberately not an `RLock`.** Re-entering it
+    would let an inner update save and an outer update then save its own older
+    copy over the top — the same lost write, harder to see. A plain Lock turns
+    that mistake into a hang the suite catches. `renormalize` is therefore
+    called *outside* the fx-rates critical section, since it opens its own
+    transaction and bumps `generation` through the same lock.
+
+  Scope limit, unchanged from BUG-008: this is in-process, matching the shipped
+  single-worker image. Two containers on one volume are still unserialised.
+- **Commit / PR:** `<pending>`
+- **Test:** `tests/test_project_concurrency.py` — four tests, each forcing the
+  window deterministically rather than racing for it:
+  `test_an_fx_write_during_a_run_is_not_lost` (the reported case),
+  `test_concurrent_field_writes_do_not_overwrite_each_other`,
+  `test_concurrent_generation_bumps_are_not_lost`, and
+  `test_a_vendor_upload_during_another_write_is_not_lost`.
+
+  All six conversions were mutation-checked by reverting each to its old
+  load/save pair, plus a seventh removing the lock from `update_project`
+  itself. Six of six caught by their own test.
+
+  Two test defects that pass surfaced, both worth recording:
+  - The hook held the *first* project.json write of a run. A run writes it
+    twice — `bump_generation` on the transaction's exit, then `status` — so the
+    test was proving the bump atomic and never touched the status write the bug
+    was actually reported against. Reverting that write failed no test. The
+    hook now selects which write to hold.
+  - Reverting `unpack_vendor_zip` and `bump_generation` was caught by nothing
+    at all, in the whole suite. Both conversions were correct but unjustified
+    until the last two tests above were written for them.
+- **Verified:** yes. Python 936 passed / 3 skipped, web 32/32, no deadlock from
+  the plain Lock. On Linux inside the shipped image, two concurrent
+  `bump_generation` calls now leave `generation` at 2 in **0 of 25 trials
+  wrong, against 25 of 25 wrong before the fix**. The original forced probe can
+  no longer run at all — it hooks `pipeline.save_project`, which the fix
+  removed from that path; the regression tests above replace it.

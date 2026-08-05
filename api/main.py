@@ -343,8 +343,11 @@ def upload_requirements(slug: str, file: UploadFile = File(...)) -> dict:
     os.makedirs(dest_dir, exist_ok=True)
     with open(os.path.join(dest_dir, filename), "wb") as fh:
         shutil.copyfileobj(file.file, fh)
-    project.requirements_file = filename
-    proj.save_project(ROOT, project)
+    # Atomic (BUG-009): the load and the save are one critical section, so a
+    # concurrent mutation of another field is not overwritten by the copy read
+    # at the top of this handler.
+    with proj.update_project(ROOT, slug) as project:
+        project.requirements_file = filename
     return _setup_state(project)
 
 
@@ -385,8 +388,14 @@ def set_fx_rates(slug: str, payload: dict = Body(...)) -> dict:
                 detail=f"Rate for '{code}' must be greater than zero.",
             )
         rates[str(code).strip().upper()] = rate
-    project.fx_rates = rates
-    proj.save_project(ROOT, project)
+    # Atomic (BUG-009): this is the write the bug was reported against - an
+    # in-flight run's own status write used to overwrite the rates set here,
+    # after this endpoint had already answered 200.
+    with proj.update_project(ROOT, slug) as project:
+        project.fx_rates = rates
+    # Outside the lock on purpose: renormalize opens its own transaction, which
+    # bumps `generation` through the same lock. Calling it inside would be the
+    # nesting the plain Lock in project.py deliberately refuses.
     renormalize(ROOT, slug)
     # `renormalize` may have bumped `generation` on disk; `project` here is
     # the in-memory copy from before that, so reload rather than under-report.

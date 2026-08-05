@@ -69,6 +69,46 @@ describe('done_with_failures banner placement (Task 4 review)', () => {
   })
 })
 
+describe('priced-cell note (BUG-005, Task 6 fix round 1)', () => {
+  // Normalised (and final_value, vat) rows are kind: 'priced', rendered by
+  // PricedRow/PricedCells — a different path from AttributeRow, which is
+  // the only place that used to read `cell.note`. A vendor whose bid could
+  // not be converted gets total: null and a note naming the missing
+  // currency; the note must reach the screen, not just the API response.
+  it('renders a priced cell note when the total is blank', async () => {
+    await renderStatement(
+      {
+        project: 'p',
+        currency: 'USD',
+        generation: 1,
+        vendors: ['EUROVEND'],
+        revisions: { EUROVEND: '1' },
+        currencies: { EUROVEND: 'EUR' },
+        statuses: { EUROVEND: 'ok' },
+        rows: [
+          {
+            key: 'normalised',
+            label: 'Normalised (ex-VAT, ex-options, USD)',
+            kind: 'priced',
+            cells: {
+              EUROVEND: {
+                qty: null,
+                unit_price: null,
+                total: null,
+                text: null,
+                note: 'no FX rate set for EUR',
+              },
+            },
+          },
+        ],
+      },
+      'done',
+    )
+
+    expect(screen.getByText('no FX rate set for EUR')).toBeInTheDocument()
+  })
+})
+
 describe('failed-run banner (I2, final-review report)', () => {
   // See the matching describe block in ComplianceMatrix.test.tsx: this
   // screen only mounts once `has_results` is true, so `status: 'failed'`

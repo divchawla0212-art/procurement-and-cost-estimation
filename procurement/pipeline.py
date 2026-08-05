@@ -1,7 +1,8 @@
 import os
 from datetime import datetime, timezone
 
-from procurement.project import load_project, save_project, vendor_files
+from procurement.project import (load_project, save_project, update_project,
+                                 vendor_files)
 from procurement.extract import extract_bid
 from procurement.normalize import normalize_bid
 from procurement.compare import build_comparison
@@ -997,16 +998,19 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
                     "by_verdict": {v: sum(1 for r in results if r.verdict == v)
                                    for v in compliance.VERDICTS}}))
 
-    project = load_project(root, slug)
-    project.status = ("failed" if extracted == 0
-                      else "done_with_failures" if failed else "done")
-    save_project(root, project)
+    # Atomic (BUG-009): read and write under one lock, so settings a reviewer
+    # changed mid-run - FX rates especially - are not overwritten by the copy
+    # this run read a moment earlier.
+    with update_project(root, slug) as project:
+        project.status = ("failed" if extracted == 0
+                          else "done_with_failures" if failed else "done")
+        status = project.status
 
     events.append_event(root, slug, Event(
         at=_now(), run_id=run_id, actor="pipeline", action="run.finished",
         detail={"extracted": extracted, "failed": failed,
                 "documents": len(rfq_docs) + len(documents),
-                "status": project.status}))
+                "status": status}))
 
     return load_dataset(root, slug) or {}
 

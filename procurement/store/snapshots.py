@@ -6,7 +6,7 @@ saves in `transaction()` and the counter bumps exactly once, on success.
 import os
 from contextlib import contextmanager
 
-from procurement.project import load_project, save_project
+from procurement.project import load_project, save_project, update_project
 from procurement.store import layout
 from procurement.store.models import (ComplianceResult, DocumentRecord,
                                       RequirementSet, VendorFacts)
@@ -17,10 +17,12 @@ def get_generation(root: str, slug: str) -> int:
 
 
 def bump_generation(root: str, slug: str) -> int:
-    project = load_project(root, slug)
-    project.generation += 1
-    save_project(root, project)
-    return project.generation
+    # Read-modify-write under the project lock (BUG-009). Unlocked, two
+    # transactions that interleaved here both read N and both wrote N+1, so a
+    # counter documented as moving once per transaction moved once for two.
+    with update_project(root, slug) as project:
+        project.generation += 1
+        return project.generation
 
 
 @contextmanager
