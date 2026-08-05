@@ -322,3 +322,83 @@ def test_withdrawn_vendor_is_dropped_from_the_store_and_the_comparison(tmp_path)
     dataset = load_dataset(root, "p")
     assert [b["vendor"] for b in dataset["bids"]] == ["KERUI"]
     assert [r["vendor"] for r in dataset["comparison"]["rows"]] == ["KERUI"]
+
+
+# --- has_results: the cheap form of `bool(load_dataset(...))` -----------------
+#
+# `_project_summary` needs one bit — "is there an extraction to open?" — for
+# every project in the dashboard listing. Answering it with
+# `bool(load_dataset(...))` made the listing O(projects x vendors) full fact
+# loads plus a discarded price comparison per project. `has_results` answers the
+# same question from the store's shape alone, so each test below pins it against
+# the `load_dataset` truthiness it replaces: the two must never disagree.
+
+
+def test_has_results_is_false_before_anything_is_extracted(tmp_path):
+    from procurement.pipeline import has_results
+    root = _project(tmp_path)
+
+    assert has_results(root, "p") is False
+    assert load_dataset(root, "p") is None
+
+
+def test_has_results_is_true_once_the_store_holds_facts(tmp_path):
+    from procurement.pipeline import has_results
+    root = _project(tmp_path)
+    run_ingestion(root, "p", _client())
+
+    assert has_results(root, "p") is True
+    assert bool(load_dataset(root, "p")) is True
+
+
+def test_has_results_ignores_facts_of_a_vendor_the_project_no_longer_lists(tmp_path):
+    """The `project.vendors` filter is part of the predicate, not decoration.
+
+    `load_dataset` returns None when every stored fact vendor has left the
+    project's roster, so `has_results` must too -- reading the store's vendor
+    directory alone would answer True and offer a review screen with nothing
+    behind it.
+    """
+    from procurement.project import save_project
+    from procurement.pipeline import has_results
+    root = _project(tmp_path)
+    run_ingestion(root, "p", _client())
+    project = load_project(root, "p")
+    project.vendors = ["GHOST"]
+    save_project(root, project)
+
+    assert load_dataset(root, "p") is None
+    assert has_results(root, "p") is False
+
+
+def test_has_results_trusts_the_store_when_the_project_records_no_vendors(tmp_path):
+    """An empty `project.vendors` means "not recorded", not "none".
+
+    A migrated project can hold facts while listing no vendors, so `load_dataset`
+    deliberately skips its filter in that case and `has_results` must skip it on
+    the same condition.
+    """
+    from procurement.project import save_project
+    from procurement.pipeline import has_results
+    root = _project(tmp_path)
+    run_ingestion(root, "p", _client())
+    project = load_project(root, "p")
+    project.vendors = []
+    save_project(root, project)
+
+    assert bool(load_dataset(root, "p")) is True
+    assert has_results(root, "p") is True
+
+
+def test_has_results_does_not_build_the_price_comparison(tmp_path, monkeypatch):
+    from procurement import pipeline
+    root = _project(tmp_path)
+    run_ingestion(root, "p", _client())
+
+    def _refuse(*args, **kwargs):
+        raise AssertionError(
+            "has_results built a price comparison it then threw away")
+
+    monkeypatch.setattr(pipeline, "build_comparison", _refuse)
+
+    assert pipeline.has_results(root, "p") is True

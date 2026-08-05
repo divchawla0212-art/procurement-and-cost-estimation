@@ -36,7 +36,7 @@ from procurement.export import (
     statement_to_xlsx_bytes,
 )
 from procurement.matrix import GROUP_ORDER, build_matrix, rows_in_group
-from procurement.pipeline import load_dataset, run_ingestion
+from procurement.pipeline import has_results, run_ingestion
 from procurement.quote_select import pick_quote
 from procurement.statement import build_statement
 from procurement.store import snapshots
@@ -97,8 +97,11 @@ def _project_summary(p) -> dict:
         # failed extraction never blanks previously-good stored data" — so
         # `status` alone is the wrong predicate for whether screens 02/03 are
         # reachable. Same computation `_setup_state` already uses; kept to
-        # one implementation.
-        "has_results": bool(load_dataset(ROOT, p.slug)),
+        # one implementation. This route renders every project, so it takes
+        # the predicate that reads the store's shape rather than
+        # `bool(load_dataset(...))`, which loaded every vendor's facts and
+        # built a price comparison per project purely to discard it.
+        "has_results": has_results(ROOT, p.slug),
     }
 
 
@@ -297,7 +300,7 @@ def _setup_state(project) -> dict:
         "fx_rates": project.fx_rates,
         "status": project.status,
         "generation": project.generation,
-        "has_results": bool(load_dataset(ROOT, slug)),
+        "has_results": has_results(ROOT, slug),
         "provider": _provider_state(),
     }
 

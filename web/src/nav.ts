@@ -16,7 +16,7 @@
 // The right predicate is "does the store hold results to read", and
 // `has_results` (`ProjectSummary.has_results`, computed in
 // `api/main.py::_project_summary` the same way `_setup_state` already does —
-// `bool(load_dataset(ROOT, slug))`) answers exactly that. A project with
+// `procurement.pipeline.has_results`) answers exactly that. A project with
 // results is reviewable whatever its `status`; a project without is not.
 // `status` now drives only the partial/failed-run banner on the review
 // screens, not this gate.

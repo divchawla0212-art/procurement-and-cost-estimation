@@ -1010,19 +1010,24 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
     return load_dataset(root, slug) or {}
 
 
-def load_dataset(root: str, slug: str) -> dict | None:
-    """Assemble the UI-facing view from the store.
+def _live_fact_vendors(root: str, slug: str) -> list[str]:
+    """Vendors the store holds facts for *and* the project still lists.
 
-    Migrates on read as well as on ingestion: the API calls this on every
-    project-summary request, and a project whose results only exist in a
-    legacy dataset.json would otherwise show nothing until the user paid for
-    a full re-extraction. The migration is idempotent and a no-op once the
-    store is populated.
+    The shared front half of `load_dataset` and `has_results`. Both have to
+    decide "are there live facts here?" and they must decide it identically:
+    were `has_results` the looser test, the UI would offer a review screen with
+    nothing behind it.
+
+    Migrates on read as well as on ingestion: the API reaches this on every
+    project-summary request, and a project whose results only exist in a legacy
+    dataset.json would otherwise show nothing until the user paid for a full
+    re-extraction. The migration is idempotent and a no-op once the store is
+    populated.
     """
     migrate.migrate_dataset_json(root, slug)
     vendors = snapshots.list_fact_vendors(root, slug)
     if not vendors:
-        return None
+        return []
     project = load_project(root, slug)
     if project.vendors:
         # defence in depth behind run_ingestion's pruning: never show a vendor
@@ -1030,8 +1035,26 @@ def load_dataset(root: str, slug: str) -> dict | None:
         # at all, since that cannot distinguish "none" from "not recorded" for
         # a project whose facts came from migration.
         vendors = [v for v in vendors if v in set(project.vendors)]
+    return vendors
+
+
+def has_results(root: str, slug: str) -> bool:
+    """Whether `load_dataset` would return a dataset -- without building one.
+
+    `_project_summary` needs this one bit for every project in the dashboard
+    listing. Spelling it `bool(load_dataset(...))` made that listing load every
+    vendor's facts and build a price comparison per project only to discard it,
+    so the cost of opening the dashboard scaled with the corpus it lists.
+    """
+    return bool(_live_fact_vendors(root, slug))
+
+
+def load_dataset(root: str, slug: str) -> dict | None:
+    """Assemble the UI-facing view from the store."""
+    vendors = _live_fact_vendors(root, slug)
     if not vendors:
         return None
+    project = load_project(root, slug)
     bids, normalized = [], []
     for vendor in vendors:
         facts = snapshots.load_facts(root, slug, vendor)

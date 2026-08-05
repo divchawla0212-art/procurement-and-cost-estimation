@@ -226,6 +226,33 @@ def test_project_summary_reports_has_results_independent_of_status(
     assert listing[0]["has_results"] is True
 
 
+def test_project_listing_does_not_rebuild_the_price_comparison(tmp_path, monkeypatch):
+    """`has_results` costs one directory read per project, not a full load.
+
+    The dashboard listing renders every project, and `_project_summary` needs
+    only the boolean "is there an extraction to open?". Answering it with
+    `bool(load_dataset(...))` loaded every vendor's facts and built a price
+    comparison per project, purely to discard it -- so the cost of opening the
+    dashboard grew with the corpus it lists.
+    """
+    from procurement import pipeline
+
+    client = _client(tmp_path, monkeypatch)
+    _project_with_vendor(client)
+    assert client.post("/api/projects/p/ingest").status_code == 200
+
+    def _refuse(*args, **kwargs):
+        raise AssertionError(
+            "GET /api/projects built a price comparison it then threw away")
+
+    monkeypatch.setattr(pipeline, "build_comparison", _refuse)
+
+    listing = client.get("/api/projects").json()
+
+    assert [p["slug"] for p in listing] == ["p"]
+    assert listing[0]["has_results"] is True
+
+
 def test_ingest_rejects_an_unknown_default_provider(tmp_path, monkeypatch):
     """An omitted `provider` is validated too — the default is not exempt.
 
