@@ -1,5 +1,6 @@
 # tests/test_store_snapshots.py
 import threading
+import time
 
 import pytest
 
@@ -149,20 +150,41 @@ def test_update_facts_does_not_bump_generation(tmp_path):
 
 
 def test_two_vendors_do_not_serialise_against_each_other(tmp_path):
-    """The lock is per vendor, not per project: a run must not block itself."""
+    """The lock is per vendor, not per project: a run must not block itself.
+
+    A per-project lock cannot get both threads inside their `update_facts`
+    bodies at once, so the losing thread blocks on lock acquisition before it
+    ever reaches the barrier -- the winner's `both_inside.wait()` then times
+    out alone and raises `BrokenBarrierError`. Thread targets swallow
+    unhandled exceptions (they do not propagate to the main thread and do not
+    fail a bare `is_alive()` check), so this test must capture them itself and
+    must bound wall-clock time: with a per-project lock this can only finish
+    by timing out, which takes close to the barrier's `timeout=5`.
+    """
     root = str(tmp_path)
     for v in ("A", "B"):
         snapshots.save_facts(root, "p", VendorFacts(vendor=v))
     both_inside = threading.Barrier(2, timeout=5)
+    errors = []
 
     def hold(vendor):
-        with snapshots.update_facts(root, "p", vendor) as f:
-            both_inside.wait()          # deadlocks if one lock covers both
-            f.quotation_doc_id = vendor
+        try:
+            with snapshots.update_facts(root, "p", vendor) as f:
+                both_inside.wait()      # times out (per-project) or proceeds (per-vendor)
+                f.quotation_doc_id = vendor
+        except Exception as exc:
+            errors.append(exc)
 
     threads = [threading.Thread(target=hold, args=(v,)) for v in ("A", "B")]
+    started = time.monotonic()
     for t in threads:
         t.start()
     for t in threads:
         t.join(timeout=10)
+    elapsed = time.monotonic() - started
+
     assert all(not t.is_alive() for t in threads)
+    assert errors == []
+    assert elapsed < 2, f"took {elapsed:.1f}s -- the barrier likely timed out"
+    assert snapshots.load_facts(root, "p", "A").quotation_doc_id == "A"
+    assert snapshots.load_facts(root, "p", "B").quotation_doc_id == "B"
