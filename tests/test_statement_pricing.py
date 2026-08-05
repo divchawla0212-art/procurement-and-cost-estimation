@@ -426,6 +426,29 @@ def test_an_unconvertible_bid_keeps_its_normalised_row_with_a_reason(tmp_path):
     assert "EUR" in cell.note
 
 
+def test_no_fx_rate_with_an_unstated_base_gets_no_normalised_cell(tmp_path):
+    """Fix round 2 review finding. _usable_rate returns "no_fx_rate" from
+    currency/fx_rates alone, before it ever looks at base_price — currency
+    and base_price are independent fields. A vendor who never stated a price
+    (base_price stays the 0.0 unknown sentinel) must not be told a rate is
+    the problem: setting one would not fill this cell, because base is still
+    unknown. That vendor falls through to the pre-existing unknown-base
+    path (no cell at all), the same as any other vendor with no base."""
+    root = _project(tmp_path)
+    project_vendors_extended(root, "EUROVEND")
+    snapshots.save_facts(root, "p", VendorFacts(
+        vendor="EUROVEND", commercial={"currency": "EUR", "base_price": 0.0},
+        normalized={"vendor": "EUROVEND", "normalized_currency": "USD",
+                    "normalized_total": None, "adjustments": [],
+                    "extraction_status": "ok", "normalization_status": "no_fx_rate"}))
+
+    statement = build_statement(root, "p")
+
+    cell = _cell(statement, "normalised", "EUROVEND")
+    assert cell is None or cell.total is None
+    assert cell is None or "no FX rate" not in (cell.note or "")
+
+
 def test_a_flag_is_not_a_rate(tmp_path):
     """`Override.value` is an unvalidated Any, so a bool or a string can
     reach vat_rate and discount_pct. True read as a rate means a 100%
