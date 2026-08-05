@@ -35,7 +35,6 @@ A bug is only `Closed` once two things are true:
 | BUG-010 | S1 | procurement/pipeline, procurement/renormalize, procurement/feedback | `facts.json` has BUG-009's defect and none of its guard: a run holds a vendor's facts across an entire LLM extraction, then saves them back over anything written meanwhile — a reviewer's note, or a corrected FX rate's totals | 2026-08-05 | Open |
 | BUG-007 | S3 | web / api / procurement/pipeline | After a run ends `done_with_failures`, the only retry controls are project-wide — nothing re-extracts one document, or one vendor's documents | 2026-08-05 | Open |
 | BUG-006 | S3 | web / api | Extraction reports no live progress: a 12-minute run shows one static banner, while the per-document events that would fill it are already being written to disk | 2026-08-05 | Open |
-| BUG-005 | S1 | procurement/normalize | A project ships with no FX rates, and an unconfigured currency is silently converted at 1.0 — a EUR bid is ranked as if €1 = $1 | 2026-08-05 | Open |
 
 ## Closed
 
@@ -43,6 +42,7 @@ A bug is only `Closed` once two things are true:
 |---|---|---|---|---|---|---|
 | BUG-009 | S3 | api, procurement/project | Every `project.json` writer was an unguarded read-modify-write, so a `PUT /fx-rates` that returned 200 was discarded by a run finishing in the same window | 2026-08-05 | `d2bfefe` | none — see the Fix block |
 | BUG-008 | S3 | procurement/store, api | Nothing serialised two ingestion runs, and `atomic_write_json` shared one fixed `.tmp` name, so concurrent writers interleaved into one snapshot | 2026-08-05 | `5080a2c` | none — see the Fix block; measured, not designed up front |
+| BUG-005 | S1 | procurement/normalize | A project ships with no FX rates, and an unconfigured currency is silently converted at 1.0 — a EUR bid is ranked as if €1 = $1 | 2026-08-05 | `3dc1e5f`, `cb8e673` | [spec](docs/superpowers/specs/2026-08-05-fx-rate-normalization-design.md) / [plan](docs/superpowers/plans/2026-08-05-fx-rate-normalization.md) |
 | BUG-004 | S1 | api | With no `LLM_PROVIDER` set, ingestion silently falls back to the **mock** provider and stores fabricated facts as `ok` | 2026-08-05 | `dfc3f37`, `9d3ba95`, `cddbea1` | [spec](docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md) / [plan](docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md) |
 | BUG-003 | S4 | web | Empty states still tell the user to run ingestion "in the Streamlit portal", which no longer exists | 2026-08-05 | `d3cfa61` | [spec](docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md) / [plan](docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md) |
 | BUG-002 | S3 | api / procurement/pipeline | No way to force a full re-extraction: `run_ingestion(force=True)` is unreachable from the API and the UI | 2026-08-05 | `f095220`, `7f066e4` | [spec](docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md) / [plan](docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md) |
@@ -500,7 +500,7 @@ No key was present in the container. `classified_by: llm` and
 
 - **Severity:** S1
 - **Area:** `procurement/normalize.py`, `procurement/models.py`
-- **Status:** Open
+- **Status:** Closed
 - **Reported:** 2026-08-05
 - **Reporter:** Rahul Jana (client-reported)
 
@@ -622,6 +622,75 @@ error, no failed status, and `extraction_status: ok` on both rows.
   "confirmed by a human".
 - **2026-08-05** — Arithmetic stays in Python here (CLAUDE.md), so this is
   entirely a code fix; no extractor or prompt change is involved.
+
+### Fix
+
+- **Spec:** [`docs/superpowers/specs/2026-08-05-fx-rate-normalization-design.md`](docs/superpowers/specs/2026-08-05-fx-rate-normalization-design.md)
+- **Plan:** [`docs/superpowers/plans/2026-08-05-fx-rate-normalization.md`](docs/superpowers/plans/2026-08-05-fx-rate-normalization.md), Tasks 1–8
+- **Ledger:** [`.superpowers/sdd/2026-08-05-fx-rate-normalization/progress.md`](.superpowers/sdd/2026-08-05-fx-rate-normalization/progress.md) — untracked, since `.superpowers/` is gitignored; not a broken link, just not in git
+- **Design change:** none beyond the spec as written — both open design
+  questions above were settled in the spec itself before Task 1 began: (2) is
+  the fix (`normalize_bid` refuses to convert without a usable rate,
+  `normalization_status: "no_fx_rate"`), and (1) ships as a suggestion only —
+  the setup form prefills `EUR 1.08` (dated, labelled "as of 2026-08-05 —
+  check before saving") when no rate is set and the target is USD, but saves
+  nothing until a human clicks Save.
+- **Commit / PR:** `3dc1e5f` (Task 1 — `normalize_bid` refuses to convert
+  without a usable rate), `6ba4338` (Task 2 — reject a non-positive rate at
+  the API), `587227e` (Task 3 — `renormalize`, no LLM call), `3d4d5f7` (the
+  ingest lock restored after a concurrent-session collision during Task 3's
+  landing — see the ledger's INCIDENT note), `9879106` (Task 5 — carry the
+  no-rate reason to `ComparisonRow` and the export), `2ee8309` (Task 6 round
+  1 — keep the Normalised row with a reason), `cdca14c` (Task 6 round 2 — gate
+  the no-fx-rate note on a known base too), `682f8e1` (Task 7 — suggest the
+  dated EUR 1.08 rate without storing it).
+
+  Two commits carry this plan's code under a message that names a different
+  bug, because a parallel session on this branch committed while this plan's
+  changes sat staged in the shared git index:
+  - `cb8e673`, messaged `docs: file BUG-009 -- ...`, carries all of Task 4's
+    implementation (`STORE_VERSION` 1→2, `migrate_normalization`,
+    `create_project` stamping `store_version`).
+  - `d2bfefe`, messaged `fix(project,api): serialise every project.json
+    mutation (BUG-009)`, carries Task 6's web change (threading `note` through
+    `PricedCells` so the statement's Normalised-row reason is actually
+    visible).
+
+  Both were verified content-correct byte-for-byte against what each task's
+  own implementer and reviewer produced; only the commit message is wrong.
+  History was not rewritten — another session was live in the same tree at
+  the time and remains so.
+- **Test:** `tests/test_procurement_normalize.py` (Task 1 — rewrites the
+  characterization test that pinned the 1.0 assumption), `tests/test_api_setup.py`
+  (Task 2 — 422 on a non-positive rate), `tests/test_renormalize.py` (Tasks 3
+  and 4 — `renormalize`'s no-LLM-call, single-generation-bump, no-op-when-
+  unchanged contract, plus `migrate_normalization`'s one-shot store upgrade),
+  `tests/test_procurement_compare.py` and `tests/test_procurement_export.py`
+  (Task 5), `tests/test_statement_pricing.py` (Task 6), `web/src/pages/Setup.test.tsx`
+  (Task 7), and `tests/test_fx_normalization_lifecycle.py` (Task 8 — the
+  12-row two-run mutation matrix below). Every row of the Task 8 matrix was
+  verified non-vacuous by reinstating its named defect and confirming the
+  intended row failed and no other row did, then reverting:
+
+  | reinstated defect | row(s) that failed | other rows |
+  |---|---|---|
+  | `rate = fx_rates.get(bid.currency, 1.0)` in `normalize.py` | added-rate, changed-rate, withdrawn-rate, withdrawn-rate-statement rows; 4 of Task 1's own unit tests | unaffected |
+  | drop the `rate <= 0` guard in `normalize.py` | set-to-0 row (its store-level defence-in-depth assertion; the API-level 422 assertion is Task 2's own gate and stays green) | unaffected |
+  | always open a `transaction` in `renormalize`, unconditionally | read-repeatedly row (its direct, no-pending-change `renormalize` calls; `test_renormalize.py`'s own equivalent unit test also failed) | unaffected |
+  | skip `migrate_normalization` in `_live_fact_vendors` | read-repeatedly row (the migration never ran, so `store_version` never advanced) | unaffected — Task 4's own `test_renormalize.py` tests call `migrate_normalization` directly and do not exercise this call site, so they stayed green; this row is the only place the wiring itself is checked |
+  | restore `statement.py`'s bare `if norm_total is not None` gate | withdrawn-rate-statement row, plus 3 of Task 6's own `test_statement_pricing.py` tests | unaffected |
+
+  Two rows needed strengthening during this verification because they passed
+  against their own probe on the first attempt: the changed-rate row did not
+  assert the pre-mutation (no-rate) state, so the `.get(rate, 1.0)` defect
+  went unobserved; the set-to-0 row exercised only the API's 422 gate, never
+  normalize.py's own guard, so the `rate <= 0` defect went unobserved. Both
+  gaps were closed before this task's commit — see the test file itself.
+- **Verified:** yes. Workstation: **950 passed, 3 skipped** (re-measured;
+  derives the CI row as 943 passed, 10 skipped — see `CLAUDE.md`). Web: **36
+  passed**, `npm run build` clean. `tests/test_pipeline_incremental.py`
+  (the four cache-invalidation rows this plan deliberately does not
+  duplicate) still passes unchanged.
 
 ---
 

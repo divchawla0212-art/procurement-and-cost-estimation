@@ -25,8 +25,8 @@ untracked fixture directories are present, never in pass/fail:
 
 | where | baseline |
 |---|---|
-| a developer workstation, `data/` and an ingested multi-vendor `projects/` present | **897 passed, 3 skipped, 0 failed** |
-| CI, and any clean checkout | **890 passed, 10 skipped, 0 failed** |
+| a developer workstation, `data/` and an ingested multi-vendor `projects/` present | **950 passed, 3 skipped, 0 failed** |
+| CI, and any clean checkout | **943 passed, 10 skipped, 0 failed** |
 
 Anything else is a real regression.
 
@@ -38,8 +38,8 @@ three skips a workstation already shows are credential guards
 `test_procurement_real_data.py`) and skip in both places.
 
 So the CI row is the workstation row with the four corpus-coverage passes and
-the three `data/` passes turned into skips — `890 = 897 - 4 - 3`,
-`10 = 3 + 4 + 3`; 900 tests either way. When the counts move, measure the
+the three `data/` passes turned into skips — `943 = 950 - 4 - 3`,
+`10 = 3 + 4 + 3`; 953 tests either way. When the counts move, measure the
 workstation row and derive the CI row from it; editing the two rows
 independently is how they drift apart.
 
