@@ -643,7 +643,9 @@ error, no failed status, and `extraction_status: ok` on both rows.
   no-rate reason to `ComparisonRow` and the export), `2ee8309` (Task 6 round
   1 — keep the Normalised row with a reason), `cdca14c` (Task 6 round 2 — gate
   the no-fx-rate note on a known base too), `682f8e1` (Task 7 — suggest the
-  dated EUR 1.08 rate without storing it).
+  dated EUR 1.08 rate without storing it), `88da033` (Task 8 — the 12-row
+  two-run mutation matrix, and this closure itself; recorded here in a
+  follow-up commit because a commit cannot cite its own hash).
 
   Two commits carry this plan's code under a message that names a different
   bug, because a parallel session on this branch committed while this plan's
