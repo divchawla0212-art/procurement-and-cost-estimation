@@ -32,6 +32,7 @@ A bug is only `Closed` once two things are true:
 
 | ID | Severity | Area | Summary | Reported | Status |
 |---|---|---|---|---|---|
+| BUG-005 | S1 | procurement/normalize | A project ships with no FX rates, and an unconfigured currency is silently converted at 1.0 — a EUR bid is ranked as if €1 = $1 | 2026-08-05 | Open |
 
 ## Closed
 
@@ -487,3 +488,132 @@ No key was present in the container. `classified_by: llm` and
   passed / 3 skipped, reviewed (including two post-review corrections to
   test accuracy, documented in the task's own report). Re-verified in this
   task's full-suite run (below).
+
+---
+
+## BUG-005 — A missing FX rate is silently assumed to be 1.0, flipping the ranking
+
+- **Severity:** S1
+- **Area:** `procurement/normalize.py`, `procurement/models.py`
+- **Status:** Open
+- **Reported:** 2026-08-05
+- **Reporter:** Rahul Jana (client-reported)
+
+### What happens
+
+`Project.fx_rates` defaults to `{}` (`procurement/models.py:82`), so a project
+has no conversion rates until someone sets them through
+`PUT /api/projects/{slug}/fx-rates`. Nothing requires that step, and nothing
+blocks ingestion or the comparison table if it is skipped.
+
+When a rate is missing, `normalize_bid` does not decline to convert — it
+converts at 1.0:
+
+```python
+# procurement/normalize.py:11
+rate = fx_rates.get(bid.currency, 1.0) if is_foreign else 1.0
+```
+
+The bid is then ranked on that number. A EUR quotation is compared against a
+USD target as if €1 = $1, which understates it by whatever the true rate is.
+The vendor is made to look cheaper than they are, and with two vendors close
+together **the cheapest-bid ordering inverts**.
+
+An adjustment recording `"no FX rate for EUR; assumed 1.0"` is attached to the
+normalized bid, so the assumption is not literally hidden — but it is a
+footnote on a row whose headline number is already wrong, and
+`ComparisonRow.normalized_total` carries no flag distinguishing a real
+conversion from an assumed one.
+
+This is the store invariant in CLAUDE.md — "Missing data is never coerced to a
+passing or zero value" — being violated with a *passing* value: 1.0 is the one
+multiplier that looks like a successful conversion.
+
+### What should happen
+
+Two separable things, and the second is the actual defect:
+
+1. **A new project should start with a usable EUR rate** rather than none —
+   the reported ask: seed `fx_rates` with `{"EUR": 1.08}`.
+2. **A currency with no configured rate must not be silently converted at
+   1.0.** It should be surfaced as unconvertible — `normalized_total` omitted
+   (the invariant's "omitted, not emitted as `0`") and the row marked as
+   needing a rate, so it cannot be ranked against converted bids as though it
+   were comparable.
+
+**Open design question, to settle before implementing:** a hardcoded
+`{"EUR": 1.08}` is a *direction- and date-specific* constant, and seeding it
+blindly trades one silent wrong number for another:
+
+- 1.08 is EUR→USD. It is only meaningful while `target_currency` is `USD`
+  (the default, `models.py:81`). For a GBP- or INR-denominated project the
+  seeded rate is simply wrong, and being pre-filled makes it *less* likely to
+  be questioned than an empty field.
+- The rate is a snapshot, not a live quote. It needs a visible "as of" date in
+  the setup UI, or it silently ages into the same class of error this bug is
+  about.
+- Seeding EUR does nothing for GBP, JPY, INR or any other currency, which keep
+  the 1.0 assumption. Fixing (2) covers every currency; fixing only (1) covers
+  one and leaves the trap armed for the rest.
+
+Recommendation: treat (2) as the fix and (1) as a convenience default layered
+on top, entered through the same validated path as a user-set rate and dated.
+
+### Reproduce
+
+Two vendors, no FX rates configured, target currency at its `USD` default —
+the state every new project is in:
+
+```python
+from procurement.models import VendorBid
+from procurement.normalize import normalize_bid
+from procurement.compare import build_comparison
+
+eur = VendorBid(vendor='EUROVEND', currency='EUR', base_price=1000.0, freight_included=True)
+usd = VendorBid(vendor='USVEND',  currency='USD', base_price=1050.0, freight_included=True)
+ns = [normalize_bid(b, 'USD', {}) for b in (eur, usd)]
+build_comparison([eur, usd], ns, 'USD')
+```
+
+**Reproduces:** always
+
+```
+EUROVEND  normalized_total = 1000.0   ['no FX rate for EUR; assumed 1.0']
+USVEND    normalized_total = 1050.0   []
+
+Ranking shown to the buyer:
+  EUROVEND   EUR 1000.0  ->  1000.0   (cheapest)
+  USVEND     USD 1050.0  ->  1050.0
+```
+
+At 1.08 the EUR bid is really **$1080** — the most expensive of the two. The
+table awards it as the cheapest. The buyer is shown a reversed ranking with no
+error, no failed status, and `extraction_status: ok` on both rows.
+
+### Environment
+
+- Branch / commit: `fix-tracked-bugs-001-004` @ `272df60`, plus the
+  uncommitted `has_results` change
+- Python / Node: 3.12.3 / v24.15.0
+- Data: synthetic bids above; no project fixture needed — the defect is in
+  normalization, not extraction
+- Config: `fx_rates = {}`, `target_currency = "USD"` — both defaults
+
+### Notes
+
+- **2026-08-05** — `tests/test_procurement_normalize.py::test_missing_fx_rate_is_surfaced`
+  already asserts this behaviour (`assert abs(n.normalized_total - 1000.0) <= 0.01
+  # assumed 1:1`). It is a characterization test: it pins the 1.0 assumption as
+  intended rather than catching it. Fixing (2) means **rewriting that test**,
+  not just adding one — expect it to go red, and read it as the specification
+  it currently is before changing it.
+- **2026-08-05** — `Object.keys(setup.fx_rates).length > 0` is one of the four
+  steps in the setup checklist (`web/src/pages/Setup.tsx:151-157`), and
+  `activeIndex` is the first *incomplete* one. Seeding `fx_rates` at creation
+  marks "FX rates" done before the user has looked at it and advances the
+  wizard straight to the next step — so the default would remove the very
+  prompt that currently gets real rates entered. Whatever shape (1) takes has
+  to keep that step live, e.g. by tracking "seeded" separately from
+  "confirmed by a human".
+- **2026-08-05** — Arithmetic stays in Python here (CLAUDE.md), so this is
+  entirely a code fix; no extractor or prompt change is involved.
