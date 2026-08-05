@@ -40,7 +40,7 @@ A bug is only `Closed` once two things are true:
 
 | ID | Severity | Area | Summary | Closed | Fixed in | Spec / Plan |
 |---|---|---|---|---|---|---|
-| BUG-009 | S3 | api, procurement/project | Every `project.json` writer was an unguarded read-modify-write, so a `PUT /fx-rates` that returned 200 was discarded by a run finishing in the same window | 2026-08-05 | `<pending>` | none — see the Fix block |
+| BUG-009 | S3 | api, procurement/project | Every `project.json` writer was an unguarded read-modify-write, so a `PUT /fx-rates` that returned 200 was discarded by a run finishing in the same window | 2026-08-05 | `d2bfefe` | none — see the Fix block |
 | BUG-008 | S3 | procurement/store, api | Nothing serialised two ingestion runs, and `atomic_write_json` shared one fixed `.tmp` name, so concurrent writers interleaved into one snapshot | 2026-08-05 | `5080a2c` | none — see the Fix block; measured, not designed up front |
 | BUG-004 | S1 | api | With no `LLM_PROVIDER` set, ingestion silently falls back to the **mock** provider and stores fabricated facts as `ok` | 2026-08-05 | `dfc3f37`, `9d3ba95`, `cddbea1` | [spec](docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md) / [plan](docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md) |
 | BUG-003 | S4 | web | Empty states still tell the user to run ingestion "in the Streamlit portal", which no longer exists | 2026-08-05 | `d3cfa61` | [spec](docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md) / [plan](docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md) |
@@ -1288,7 +1288,7 @@ A  natural: fx-rates hammered throughout a run
 
   Scope limit, unchanged from BUG-008: this is in-process, matching the shipped
   single-worker image. Two containers on one volume are still unserialised.
-- **Commit / PR:** `<pending>`
+- **Commit / PR:** `d2bfefe`
 - **Test:** `tests/test_project_concurrency.py` — four tests, each forcing the
   window deterministically rather than racing for it:
   `test_an_fx_write_during_a_run_is_not_lost` (the reported case),
