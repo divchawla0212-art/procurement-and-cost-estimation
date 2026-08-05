@@ -38,6 +38,7 @@ from procurement.export import (
 from procurement.matrix import GROUP_ORDER, build_matrix, rows_in_group
 from procurement.pipeline import has_results, run_ingestion
 from procurement.quote_select import pick_quote
+from procurement.renormalize import renormalize
 from procurement.statement import build_statement
 from procurement.store import snapshots
 
@@ -385,7 +386,10 @@ def set_fx_rates(slug: str, payload: dict = Body(...)) -> dict:
         rates[str(code).strip().upper()] = rate
     project.fx_rates = rates
     proj.save_project(ROOT, project)
-    return _setup_state(project)
+    renormalize(ROOT, slug)
+    # `renormalize` may have bumped `generation` on disk; `project` here is
+    # the in-memory copy from before that, so reload rather than under-report.
+    return _setup_state(_load_or_404(slug))
 
 
 @app.post("/api/projects/{slug}/ingest")

@@ -32,7 +32,6 @@ A bug is only `Closed` once two things are true:
 
 | ID | Severity | Area | Summary | Reported | Status |
 |---|---|---|---|---|---|
-| BUG-008 | S3 | procurement/store, api | Nothing serialises two ingestion runs: `atomic_write_json` shares one fixed `.tmp` name, so simultaneous runs breach the generation invariant 30/30 and can interleave two writers into one snapshot | 2026-08-05 | Open |
 | BUG-007 | S3 | web / api / procurement/pipeline | After a run ends `done_with_failures`, the only retry controls are project-wide — nothing re-extracts one document, or one vendor's documents | 2026-08-05 | Open |
 | BUG-006 | S3 | web / api | Extraction reports no live progress: a 12-minute run shows one static banner, while the per-document events that would fill it are already being written to disk | 2026-08-05 | Open |
 | BUG-005 | S1 | procurement/normalize | A project ships with no FX rates, and an unconfigured currency is silently converted at 1.0 — a EUR bid is ranked as if €1 = $1 | 2026-08-05 | Open |
@@ -41,6 +40,7 @@ A bug is only `Closed` once two things are true:
 
 | ID | Severity | Area | Summary | Closed | Fixed in | Spec / Plan |
 |---|---|---|---|---|---|---|
+| BUG-008 | S3 | procurement/store, api | Nothing serialised two ingestion runs, and `atomic_write_json` shared one fixed `.tmp` name, so concurrent writers interleaved into one snapshot | 2026-08-05 | `<pending>` | none — see the Fix block; measured, not designed up front |
 | BUG-004 | S1 | api | With no `LLM_PROVIDER` set, ingestion silently falls back to the **mock** provider and stores fabricated facts as `ok` | 2026-08-05 | `dfc3f37`, `9d3ba95`, `cddbea1` | [spec](docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md) / [plan](docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md) |
 | BUG-003 | S4 | web | Empty states still tell the user to run ingestion "in the Streamlit portal", which no longer exists | 2026-08-05 | `d3cfa61` | [spec](docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md) / [plan](docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md) |
 | BUG-002 | S3 | api / procurement/pipeline | No way to force a full re-extraction: `run_ingestion(force=True)` is unreachable from the API and the UI | 2026-08-05 | `f095220`, `7f066e4` | [spec](docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md) / [plan](docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md) |
@@ -926,7 +926,7 @@ its vendor.
 
 - **Severity:** S3
 - **Area:** `procurement/store/layout.py`, `procurement/store/snapshots.py`, `api/main.py`
-- **Status:** Open
+- **Status:** Fixed
 - **Reported:** 2026-08-05
 - **Reporter:** found by testing BUG-006's untested concurrency note
 
@@ -1062,3 +1062,73 @@ stagger):*
   written yet. When one is: it belongs with the store tests rather than the
   pipeline ones, because the primitive in E1 fails on its own without any
   pipeline involved, and that is the smaller failing test.
+
+### Fix
+
+- **Spec:** none — the investigation above *is* the design record, and the one
+  open question (where exclusivity lives) was settled in conversation, not in
+  a spec. The choice and its limits are stated below.
+- **Plan:** none — two files, one behaviour each; a plan would have restated
+  the Fix block.
+- **Design change:** two independent halves, deliberately not one.
+  1. **The primitive is made safe on its own terms.** `atomic_write_json` now
+     builds a unique temp name per write —
+     `f"{path}.{os.getpid()}.{uuid.uuid4().hex}.tmp"` — so concurrent writers
+     of one destination each own their file and `os.replace` picks the winner
+     atomically. A concurrent write is last-writer-wins instead of corrupt.
+     `_replace_with_retry` was needed alongside it: POSIX `rename(2)` never
+     fails when two threads replace one destination, but Windows `MoveFileEx`
+     raises `PermissionError`, measured at 3 collisions in 15 races on the
+     workstation. It retries the *rename* only, never the write, against the
+     writer's own untouched temp. The loop is a no-op on Linux.
+  2. **Runs are serialised per project.** A `threading.Lock` per slug in
+     `api/main.py`, acquired non-blocking; a second concurrent run gets
+     **409** rather than being queued, since it is always a duplicate or a
+     mistake and executing it re-spends the project's LLM cost for a result
+     already in flight. Released in `finally`, so the 502 path cannot strand
+     it.
+
+  **The limit of (2), stated because it is otherwise silent:** an in-process
+  lock covers the shipped deployment exactly — one `uvicorn` worker
+  (`Dockerfile` CMD, no `--workers`), one container, one volume. It does not
+  serialise two containers on a shared volume, a multi-worker uvicorn, or
+  `cost-est` writing alongside the API. Those need a lockfile with a
+  stale-lock policy, which was considered and deferred: a crashed run holding
+  a lockfile blocks a client who has no operator to clear it, and that
+  trade-off deserves its own decision rather than being smuggled in here.
+  Half (1) is what protects those cases from *corruption* today; what they
+  still lack is mutual exclusion.
+- **Commit / PR:** `<pending>`
+- **Test:** `tests/test_store_layout.py`
+  (`test_concurrent_writers_never_interleave_into_one_file`,
+  `test_concurrent_writers_do_not_fail_each_other`,
+  `test_every_concurrent_writer_renames_its_own_temp_away`) and
+  `tests/test_api_setup.py`
+  (`test_a_second_ingest_while_one_is_running_is_rejected`,
+  `test_the_run_lock_is_released_so_a_later_ingest_still_works`,
+  `test_a_run_does_not_block_ingestion_of_a_different_project`).
+
+  All six were mutation-checked by reinstating each defect one at a time and
+  confirming the owning test failed: no lock at all; lock released only on
+  success rather than in `finally`; one global lock instead of per-slug; the
+  shared temp name; no cleanup of the temp on failure; a leaked temp on the
+  success path. Six of six caught.
+
+  Two test defects were found *by* that pass and are worth recording, since
+  both were tests that looked fine and guarded nothing:
+  - `_race_two_writers` originally read the destination once, after all 15
+    rounds. A round that landed a corrupt file was overwritten by the next
+    one, so reinstating the original defect left the interleaving test green.
+    It now inspects the destination after **every** round.
+  - `test_failed_serialization_leaves_no_orphan_tmp` — a **pre-existing** test
+    — asserted `not os.path.exists(p + ".tmp")`. Unique temp names made that
+    name one the writer never creates, so the assertion became unfalsifiable:
+    this fix silently disarmed an existing guard. It now asserts over the
+    directory contents, and the mutation pass confirms it fails when the
+    cleanup is removed.
+- **Verified:** yes. Python 925 passed / 3 skipped, web 31/31 — note that the
+  925 includes an untracked `renormalize` change from concurrent work in the
+  tree, not just this fix; the six tests above are this change's contribution.
+  The original E1 probe was re-run on Linux inside the shipped image after the
+  fix: **0 of 25 rounds landed a mixed or corrupt file (was 25 of 25), no
+  writer raised, and no temp file was left behind.**

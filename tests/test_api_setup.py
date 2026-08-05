@@ -795,3 +795,129 @@ def test_a_real_environment_variable_beats_the_dotenv_file(monkeypatch):
     finally:
         monkeypatch.undo()
         importlib.reload(api.main)
+
+
+# --------------------------------------------------------------------------
+# BUG-008: one ingestion run per project at a time.
+#
+# `ingest` is a synchronous FastAPI handler, so two requests execute
+# concurrently in the threadpool. Before this guard, two overlapping runs
+# breached the store's generation invariant in 30 of 30 measured trials
+# (generation reached 1, not 2, after two runs) and one of the two always died
+# of a filesystem race, surfacing as a 502. A second run is always either a
+# mistake or a duplicate submission - never something to execute, since it
+# re-spends the full LLM cost of the project for a result the first run is
+# already producing.
+# --------------------------------------------------------------------------
+
+def _blocking_ingestion(monkeypatch):
+    """Hold the FIRST `run_ingestion` open so a second request arrives mid-run.
+
+    Only the first call blocks. Blocking every call would make a test unable to
+    tell "refused by the run lock" apart from "still waiting on this fixture",
+    which is how the per-project test below first went green for the wrong
+    reason.
+
+    Returns (entered, release): wait on `entered` to know the first run is
+    inside the handler, set `release` to let it finish.
+    """
+    import threading
+
+    import api.main as api_main
+
+    entered, release = threading.Event(), threading.Event()
+    real = api_main.run_ingestion
+    first_call = threading.Lock()
+
+    def blocking(*args, **kwargs):
+        if first_call.acquire(blocking=False):
+            entered.set()
+            assert release.wait(timeout=30), "test never released the blocked run"
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(api_main, "run_ingestion", blocking)
+    return entered, release
+
+
+def test_a_second_ingest_while_one_is_running_is_rejected(tmp_path, monkeypatch):
+    import threading
+
+    import api.main as api_main
+
+    client = _client(tmp_path, monkeypatch)
+    _project_with_vendor(client)
+    entered, release = _blocking_ingestion(monkeypatch)
+
+    first: list = []
+    runner = threading.Thread(
+        target=lambda: first.append(client.post("/api/projects/p/ingest")))
+    runner.start()
+    try:
+        assert entered.wait(timeout=30), "the first run never reached the handler"
+        # A separate client, so this cannot be serialised by the transport.
+        second = TestClient(api_main.app).post("/api/projects/p/ingest")
+    finally:
+        release.set()
+        runner.join(timeout=60)
+
+    assert second.status_code == 409, \
+        f"a concurrent run should be refused, got {second.status_code}"
+    assert first[0].status_code == 200, "the first run must still succeed"
+
+
+def test_the_run_lock_is_released_so_a_later_ingest_still_works(tmp_path, monkeypatch):
+    """A lock that outlives its run would break ingestion permanently - a worse
+    bug than the race it closes. The 502 path is the one that matters: it
+    leaves the handler by exception, not by return."""
+    import api.main as api_main
+
+    client = _client(tmp_path, monkeypatch)
+    _project_with_vendor(client)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("extraction exploded")
+
+    monkeypatch.setattr(api_main, "run_ingestion", boom)
+    assert client.post("/api/projects/p/ingest").status_code == 502
+
+    monkeypatch.undo()
+    monkeypatch.setenv("PROCUREMENT_PROJECTS_ROOT", str(tmp_path))
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.setattr(api_main, "ROOT", str(tmp_path))
+    assert client.post("/api/projects/p/ingest").status_code == 200, \
+        "the lock was not released after the failed run"
+
+
+def test_a_run_does_not_block_ingestion_of_a_different_project(tmp_path, monkeypatch):
+    """Exclusivity is per project. A shared lock would serialise unrelated
+    projects, turning one slow run into a queue for everyone."""
+    import threading
+
+    import api.main as api_main
+
+    client = _client(tmp_path, monkeypatch)
+    _project_with_vendor(client)
+    # A second, independent project with its own vendor.
+    client.post("/api/projects", json={"name": "Q"})
+    body = (b"unit price 20 USD. This synthetic fixture body is padded with "
+            b"filler prose so its character count clears the pipeline's "
+            b"minimum-extractable-text guard, letting the extraction logic "
+            b"under test run rather than the guard itself.")
+    client.post("/api/projects/q/vendors",
+                files={"file": ("bids.zip", _make_zip({"ACME/quote.txt": body}),
+                                "application/zip")})
+
+    entered, release = _blocking_ingestion(monkeypatch)
+    first: list = []
+    runner = threading.Thread(
+        target=lambda: first.append(client.post("/api/projects/p/ingest")))
+    runner.start()
+    try:
+        assert entered.wait(timeout=30), "the first run never reached the handler"
+        other = TestClient(api_main.app).post("/api/projects/q/ingest")
+    finally:
+        release.set()
+        runner.join(timeout=60)
+
+    assert other.status_code == 200, \
+        f"an unrelated project must not be blocked, got {other.status_code}"
