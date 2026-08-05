@@ -440,26 +440,36 @@ function FxStep({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [ok, setOk] = useState(false)
+  const [suggested, setSuggested] = useState(false)
 
   useEffect(() => {
     const entries = Object.entries(setup.fx_rates)
-    setRows(entries.map(([code, rate]) => ({ code, rate: String(rate) })))
+    if (entries.length === 0 && setup.target_currency === 'USD') {
+      setRows([{ code: 'EUR', rate: '1.08' }])
+      setSuggested(true)
+    } else {
+      setRows(entries.map(([code, rate]) => ({ code, rate: String(rate) })))
+      setSuggested(false)
+    }
     setError(null)
   }, [setup])
 
   function edit(index: number, patch: Partial<FxRow>) {
     setRows((rs) => rs.map((r, i) => (i === index ? { ...r, ...patch } : r)))
     setOk(false)
+    setSuggested(false)
   }
 
   function addRow() {
     setRows((rs) => [...rs, { code: '', rate: '' }])
     setOk(false)
+    setSuggested(false)
   }
 
   function removeRow(index: number) {
     setRows((rs) => rs.filter((_, i) => i !== index))
     setOk(false)
+    setSuggested(false)
   }
 
   async function save() {
@@ -487,6 +497,11 @@ function FxStep({
 
   return (
     <>
+      {suggested && (
+        <p className="hint" style={{ marginBottom: '0.5rem' }}>
+          Suggested: 1.08 as of 2026-08-05 — check before saving.
+        </p>
+      )}
       {rows.map((row, i) => (
         <div className="fxrow" key={i} style={{ marginBottom: '0.5rem' }}>
           <input

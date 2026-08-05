@@ -15,10 +15,11 @@ vi.mock('../api', async (importOriginal) => {
     ...actual,
     fetchSetup: vi.fn(),
     runIngestion: vi.fn(),
+    saveFxRates: vi.fn(),
   }
 })
 
-import { fetchSetup, runIngestion } from '../api'
+import { fetchSetup, runIngestion, saveFxRates } from '../api'
 
 // No `clearMocks` in vitest.config.ts, so without this, `runIngestion`'s call
 // history (and any lingering mockResolvedValue) carries over between tests in
@@ -135,5 +136,50 @@ describe('the force bypass button (BUG-002)', () => {
     await waitFor(() => {
       expect(runIngestion).toHaveBeenCalledWith('p', 'mock')
     })
+  })
+})
+
+describe('FX rate suggestion (BUG-005 §1.4)', () => {
+  // The FX card's prefill is set by FxStep's own useEffect, a render pass
+  // that happens after the "Run ingestion" button (renderSetup's readiness
+  // signal) is already on screen. So these assertions use `find*` queries
+  // (which retry) rather than `get*`/`query*`, to avoid a race against that
+  // second render.
+  it('offers EUR 1.08 when no rates are set and the target is USD', async () => {
+    await renderSetup({ ...baseSetup, fx_rates: {}, target_currency: 'USD' })
+
+    expect(await screen.findByDisplayValue('EUR')).toBeInTheDocument()
+    expect(await screen.findByDisplayValue('1.08')).toBeInTheDocument()
+    expect(
+      await screen.findByText(
+        /Suggested: 1\.08 as of 2026-08-05 — check before saving\./,
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('does not offer it when the target is not USD', async () => {
+    await renderSetup({ ...baseSetup, fx_rates: {}, target_currency: 'GBP' })
+
+    // Nothing ever populates a row here, so there is no later state to race
+    // against — an immediate absence check is safe.
+    expect(screen.queryByDisplayValue('1.08')).not.toBeInTheDocument()
+  })
+
+  it('does not offer it when rates already exist', async () => {
+    await renderSetup({
+      ...baseSetup,
+      fx_rates: { EUR: 1.12 },
+      target_currency: 'USD',
+    })
+
+    expect(await screen.findByDisplayValue('1.12')).toBeInTheDocument()
+    expect(screen.queryByDisplayValue('1.08')).not.toBeInTheDocument()
+  })
+
+  it('does not save the suggestion on its own', async () => {
+    await renderSetup({ ...baseSetup, fx_rates: {}, target_currency: 'USD' })
+
+    await screen.findByDisplayValue('1.08')
+    expect(saveFxRates).not.toHaveBeenCalled()
   })
 })
