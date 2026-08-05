@@ -11,10 +11,12 @@ import io
 import os
 import zipfile
 
+from procurement import pipeline
+from procurement.feedback import save_feedback
 from procurement.pipeline import run_ingestion, load_dataset
 from procurement.store import events, snapshots
 from shared.llm.mock_client import MockLLMClient       # noqa: F401  (fixtures)
-from procurement.project import create_project, unpack_vendor_zip
+from procurement.project import create_project, unpack_vendor_zip, update_project
 
 
 def _zip(entries):
@@ -98,6 +100,28 @@ class RoutingClient:
         if kind == "doc_class":
             return {"doc_class": self.doc_class}
         return {"currency": "USD", "base_price": 1000.0, "freight_included": True}
+
+
+class EurQuotingClient(RoutingClient):
+    """RoutingClient, quoting EUR 1000 instead of USD 1000.
+
+    Required, not decorative. The stock mock client answers `{}` for every
+    schema, so a quotation comes back `currency=""`, `base_price=0.0`, and
+    `normalize_bid` returns 0.0 at *any* rate — a rate-sensitive assertion
+    written against it cannot fail, whatever the code does. A foreign currency
+    and a non-zero price are what make the FX multiplier observable at all.
+    """
+
+    def classify_structure(self, prompt, output_schema, context_text, images=None):
+        out = super().classify_structure(prompt, output_schema, context_text, images)
+        if self._kind(output_schema) == "quotation":
+            return {"currency": "EUR", "base_price": 1000.0, "freight_included": True}
+        return out
+
+
+def _set_rates(root, rates, slug="p"):
+    with update_project(root, slug) as project:
+        project.fx_rates = dict(rates)
 
 
 # --------------------------------------------------------------------------
@@ -472,3 +496,66 @@ def test_a_reclassified_quotation_document_prunes_the_stored_prices(tmp_path):
     # the untouched datasheet's facts, and the reclassified document's own new
     # facts, both survive: pruning is per-source, not per-vendor
     assert len(facts.technical) == 2
+
+
+# --------------------------------------------------------------------------
+# BUG-010 - a run must write the facts as they are AT THE SAVE, not as they
+# were when it read them before an extraction that takes minutes
+# --------------------------------------------------------------------------
+
+def test_a_run_does_not_write_back_feedback_it_read_before_extracting(tmp_path,
+                                                                      monkeypatch):
+    """BUG-010's H1, without threads. `technical_feedback` is the field this is
+    measured on because the run never modifies it at all: whatever a run writes
+    there, it copied off a snapshot it read before the extraction.
+    """
+    root = _project(tmp_path, {"KERUI/Quotation.txt": b"base price 1000"})
+
+    run_ingestion(root, "p", RoutingClient())      # a first run, so facts exist
+    assert snapshots.load_facts(root, "p", "KERUI") is not None
+
+    # a reviewer saves a note while the second run's extraction is in flight
+    real_extract = pipeline.extract_bid
+
+    def extract_then_review(*a, **kw):
+        result = real_extract(*a, **kw)
+        save_feedback(root, "p", "KERUI", "reviewed mid-run", reason="audit")
+        return result
+
+    monkeypatch.setattr(pipeline, "extract_bid", extract_then_review)
+    run_ingestion(root, "p", RoutingClient(), force=True)
+
+    assert snapshots.load_facts(root, "p", "KERUI").technical_feedback \
+        == "reviewed mid-run", \
+        "the run overwrote a reviewer's note with the value it read before extracting"
+
+
+def test_a_run_normalizes_with_the_rate_current_at_the_save(tmp_path, monkeypatch):
+    """BUG-010's H2, the severity variant: a rate corrected mid-run must not
+    leave a plausible wrong number in the store. A lost feedback note is
+    visibly missing; a total converted at a superseded rate is not.
+    """
+    root = _project(tmp_path, {"KERUI/Quotation.txt": b"base price 1000"})
+    _set_rates(root, {"EUR": 1.08})
+    run_ingestion(root, "p", EurQuotingClient())
+
+    stored = snapshots.load_facts(root, "p", "KERUI")
+    assert stored.commercial["currency"] == "EUR"
+    assert stored.commercial["base_price"] > 0, \
+        "vacuous fixture: a zero price is rate-insensitive and cannot detect this"
+    assert abs(stored.normalized["normalized_total"] - 1080.0) < 0.01
+
+    # the buyer corrects the rate while the second run's extraction is in flight
+    real_extract = pipeline.extract_bid
+
+    def extract_then_correct_the_rate(*a, **kw):
+        result = real_extract(*a, **kw)
+        _set_rates(root, {"EUR": 1.15})
+        return result
+
+    monkeypatch.setattr(pipeline, "extract_bid", extract_then_correct_the_rate)
+    run_ingestion(root, "p", EurQuotingClient(), force=True)
+
+    stored = snapshots.load_facts(root, "p", "KERUI")
+    assert abs(stored.normalized["normalized_total"] - 1150.0) < 0.01, \
+        f"stale rate: stored {stored.normalized['normalized_total']}, want 1150.0"
