@@ -32,6 +32,7 @@ A bug is only `Closed` once two things are true:
 
 | ID | Severity | Area | Summary | Reported | Status |
 |---|---|---|---|---|---|
+| BUG-008 | S3 | procurement/store, api | Nothing serialises two ingestion runs: `atomic_write_json` shares one fixed `.tmp` name, so simultaneous runs breach the generation invariant 30/30 and can interleave two writers into one snapshot | 2026-08-05 | Open |
 | BUG-007 | S3 | web / api / procurement/pipeline | After a run ends `done_with_failures`, the only retry controls are project-wide — nothing re-extracts one document, or one vendor's documents | 2026-08-05 | Open |
 | BUG-006 | S3 | web / api | Extraction reports no live progress: a 12-minute run shows one static banner, while the per-document events that would fill it are already being written to disk | 2026-08-05 | Open |
 | BUG-005 | S1 | procurement/normalize | A project ships with no FX rates, and an unconfigured currency is silently converted at 1.0 — a EUR bid is ranked as if €1 = $1 | 2026-08-05 | Open |
@@ -738,16 +739,16 @@ happening were appended to disk one by one.
   two workarounds exist — `04 Extraction status` after the fact, and tailing
   `projects/<slug>/store/events.jsonl` during. The second is not a user-facing
   workaround, only an operator one.
-- **2026-08-05** — **Re-triage upward if** the reload hazard is confirmed.
-  `running` is component state, so a refresh (or a proxy/browser dropping a
-  13-minute idle connection) clears it while the server-side run continues.
-  The `Run ingestion` button then re-enables — `canRun` reads only
-  `noVendors`, `selected.ready` and `running` (`web/src/pages/Setup.tsx:606`) —
-  and there is no server-side lock, so a second `run_ingestion` can start
-  against a project mid-transaction. Whether concurrent runs actually corrupt a
-  snapshot **was not tested here**; it is the first thing to check, because a
-  wrong answer there makes this an S1 store bug rather than a missing-feature
-  S3.
+- **2026-08-05** — The reload hazard is real but **it is not the dangerous
+  one**, and this note originally said otherwise. `running` is component state,
+  so a refresh clears it while the server-side run continues, and the button
+  re-enables — `canRun` reads only `noVendors`, `selected.ready` and `running`
+  (`web/src/pages/Setup.tsx:606`). That path was then measured, and a
+  *staggered* second run is safe: by the time it reaches its write transaction
+  the first has long finished, so it merely redoes the work. What is not safe
+  is a *simultaneous* second submission. Severity stays S3; the concurrency
+  defect itself is now filed separately as **BUG-008**, which carries the
+  measurements. This entry remains a missing-feature S3.
 - **2026-08-05** — `sendJson` sets no timeout (`web/src/api.ts:28-38`), so the
   browser's own limits are the only ceiling on how long that request may hang.
   Whatever shape the fix takes should stop relying on a single long-lived
@@ -908,3 +909,156 @@ its vendor.
   retry that blocks the UI with no progress for the length of one extraction is
   a smaller version of the same complaint. Whichever ships second inherits the
   other's shape, so settle BUG-006's synchronous-vs-background question first.
+- **2026-08-05** — **Blocked on BUG-008, and this is the load-bearing
+  dependency.** A scoped retry is a short, write-dominated run — seconds of
+  extraction against the same final write transaction a full run performs. That
+  is precisely the run shape in which BUG-008's measurements produced actual
+  data loss (an unparseable `facts.json`, `documents.json` emptied), whereas the
+  extraction-dominated full-run shape never did across 32 staggered trials.
+  Shipping per-vendor or per-document retries lets a reviewer fire two of them
+  seconds apart on one project, which moves the product out of the shape that
+  has been accidentally protecting it. Do not ship this without the serialisation
+  guard BUG-008 asks for.
+
+---
+
+## BUG-008 — Nothing serialises two ingestion runs, and the snapshot writer shares one temp filename
+
+- **Severity:** S3
+- **Area:** `procurement/store/layout.py`, `procurement/store/snapshots.py`, `api/main.py`
+- **Status:** Open
+- **Reported:** 2026-08-05
+- **Reporter:** found by testing BUG-006's untested concurrency note
+
+### What happens
+
+Two things compose badly, and neither is guarded.
+
+**1. The snapshot writer shares one temp filename per path.**
+
+```python
+# procurement/store/layout.py:60
+tmp = path + ".tmp"
+```
+
+The temp name is derived from the destination, not from the writer. Two
+concurrent writers of the same snapshot therefore open the *same* temp file:
+the second `open(tmp, "w")` truncates what the first is still writing, both
+write into it at their own offsets, and both then `os.replace` it onto the
+destination. The `except BaseException: os.remove(tmp)` cleanup
+(`layout.py:67-69`) makes it worse rather than better — a failing writer
+deletes the temp file the *other* writer is about to rename from.
+
+**2. Nothing stops two runs from overlapping.** `def ingest(...)`
+(`api/main.py:386`) is a synchronous FastAPI handler, so it runs in the
+threadpool and two requests execute concurrently in one process. There is no
+lock, no run registry and no busy check — a `grep` for `lock`, `threading` or
+`asyncio` across `api/` and `procurement/` returns nothing. `run_ingestion`
+(`procurement/pipeline.py:612`) takes no exclusivity of its own, and
+`bump_generation` (`procurement/store/snapshots.py:19-23`) is a
+read-modify-write over `project.json` with no guard either.
+
+The client makes overlap reachable rather than theoretical: `running` is
+component state (`web/src/pages/Setup.tsx:581`), so a reload re-enables the
+button mid-run, and nothing server-side rejects the second request.
+
+### What should happen
+
+One ingestion run per project at a time, refused (`409`) rather than queued —
+a second concurrent run is always either a mistake or a duplicate submission,
+and running it costs a full project's LLM spend for a result the first run is
+already producing.
+
+Independently of that, `atomic_write_json` should not be corruptible by
+concurrency it does not control. A per-writer temp name (`path + f".{os.getpid()}.{uuid4().hex}.tmp"`)
+makes the primitive safe on its own terms; the `os.remove` cleanup then only
+ever deletes the writer's own file. This is worth doing even with a lock in
+place — the lock is the correctness fix, the unique temp name is the reason a
+future caller cannot reintroduce the same defect.
+
+**Open design question, to settle before implementing:** where exclusivity
+lives. An in-process `threading.Lock` keyed by slug is enough for the single
+`uvicorn` worker the image ships, and wrong the moment anyone runs two workers
+or two containers against one volume. A lockfile in the project directory
+survives both but needs a stale-lock policy for a crashed run — and a crashed
+run is exactly what leaves one behind. This tracker entry does not decide it.
+
+### Reproduce
+
+**Reproduces:** deterministically for the invariant breach; the data-loss
+variant is timing-dependent (see Notes). Measured on Linux inside the shipped
+image (`docker run … procurement-review:latest`), and separately on the Windows
+workstation.
+
+*The primitive, in isolation — two threads, one path, 25 races:*
+
+```
+E1  concurrent atomic_write_json on ONE path        [linux / python 3.12.13]
+     25x  MIXED A+B (valid JSON, wrong content)
+     writer exceptions: {'FileNotFoundError': 25}
+
+Every race produced a destination file holding records from BOTH writers.
+It parses. Nothing downstream can tell it is wrong.
+(Windows: 24x mixed, 1x destination missing, 43 PermissionErrors.)
+```
+
+*End to end — two `run_ingestion` calls, 28 documents, 4 vendors, offset 0,
+30 repetitions, with a provider-latency client so the run is
+extraction-dominated like a real one:*
+
+```
+E6  offset 0.00s, realistic run shape, 30 reps      [linux]
+  reps with ANY invariant breach : 30/30
+  reps with actual DATA LOSS     : 0/30
+  run_ingestion exceptions       : {'B:FileNotFoundError': 14,
+                                    'A:FileNotFoundError': 16}
+    30/30  generation=1        (invariant: exactly 2 after two runs)
+    30/30  2 runs started / 1 finished
+```
+
+*The data-loss variant, from the write-dominated sweep (1 of 3 at a ~10%
+stagger):*
+
+```
+  UNPARSEABLE vendors/ADPOWER/facts.json: JSONDecodeError
+  documents.json has 0 records, fixture has 28
+  vendors with NO facts snapshot: ['HYOSUNG', 'KERUI', 'SIEMENS']
+  generation=0        <- the store reads as though nothing ever ran
+  2 runs started, 0 finished
+```
+
+### Environment
+
+- Branch / commit: `fix-tracked-bugs-001-004` @ `3541076`
+- Measured on: `linux / python 3.12.13` inside `procurement-review:latest` (the
+  shipped image), and `win32 / python 3.12.3` on the workstation
+- Provider: `RoutingClient` (the test double) and a latency-injecting subclass
+  — no key needed; the defect is in the store writer, not extraction
+- Data: synthetic, 28 documents across 4 vendors
+
+### Notes
+
+- **2026-08-05** — Filed after BUG-006's note flagged this as untested. The
+  answer is **not** the S1 that note anticipated, and the reason is worth
+  recording: at offset 0 the two runs collide on the *first* shared write, one
+  dies immediately, and the survivor proceeds alone. The early crash is
+  accidentally protective — it removes the second writer before the large
+  collections are written. Damage is therefore loud (a `502` from
+  `api/main.py:473`) rather than silent.
+- **2026-08-05** — Severity S3, not S1, on measured reachability: 0 of 30
+  offset-0 trials lost data, and 0 of 32 staggered trials across eight offsets
+  (0.05s to 1.6s, plus 50% and 90% of run length) breached anything at all. The
+  data-loss case was reproduced only in the write-dominated shape, where the
+  final write transaction is most of the run. **Re-triage to S1 if** BUG-007's
+  scoped retries ship — they make that shape the normal one.
+- **2026-08-05** — A lost `generation` bump does *not* cause stale reads. The
+  index's freshness key is `generation` **plus** the mtime_ns and size of every
+  snapshot (`procurement/store/index.py:7-11, 35-50`), and the snapshot files
+  did change, so `is_stale` still fires and the index rebuilds. The breach is to
+  the audit trail — "generation bumps once per write transaction" (CLAUDE.md) —
+  and to anything that later trusts the counter alone, not to what a reviewer
+  currently sees.
+- **2026-08-05** — No fix is proposed here and no regression test has been
+  written yet. When one is: it belongs with the store tests rather than the
+  pipeline ones, because the primitive in E1 fails on its own without any
+  pipeline involved, and that is the smaller failing test.
