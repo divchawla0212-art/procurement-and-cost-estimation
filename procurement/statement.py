@@ -263,6 +263,13 @@ def _priced_rows(project, facts) -> list[StatementRow]:
             cell("normalised",
                  f"Normalised (ex-VAT, ex-options, {project.target_currency})",
                  "priced", vendor, total=norm_total)
+        elif (normalized or {}).get("normalization_status") == "no_fx_rate":
+            # Emitted with no total: the row must not vanish, or its absence
+            # reads as "nothing to compare" rather than "a rate is missing".
+            cell("normalised",
+                 f"Normalised (ex-VAT, ex-options, {project.target_currency})",
+                 "priced", vendor,
+                 note=f"no FX rate set for {c.get('currency')}")
 
     for vendor in project.vendors:
         s = sums.get(vendor, {})

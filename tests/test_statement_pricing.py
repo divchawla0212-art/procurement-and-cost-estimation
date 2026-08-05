@@ -407,6 +407,25 @@ def test_a_genuine_zero_normalises_to_zero_and_is_shown(tmp_path):
     assert _cell(statement, "normalised", "KERUI").total == 0.0
 
 
+def test_an_unconvertible_bid_keeps_its_normalised_row_with_a_reason(tmp_path):
+    """BUG-005 §1.3. A dropped row reads as 'nothing to compare here'; the
+    buyer needs to know a rate is missing, not that the vendor is silent."""
+    root = _project(tmp_path)
+    project_vendors_extended(root, "EUROVEND")
+    snapshots.save_facts(root, "p", VendorFacts(
+        vendor="EUROVEND", commercial={"currency": "EUR", "base_price": 1000.0},
+        normalized={"vendor": "EUROVEND", "normalized_currency": "USD",
+                    "normalized_total": None, "adjustments": [],
+                    "extraction_status": "ok", "normalization_status": "no_fx_rate"}))
+
+    statement = build_statement(root, "p")
+
+    row = next(r for r in statement.rows if r.key == "normalised")
+    cell = row.cells["EUROVEND"]
+    assert cell.total is None
+    assert "EUR" in cell.note
+
+
 def test_a_flag_is_not_a_rate(tmp_path):
     """`Override.value` is an unvalidated Any, so a bool or a string can
     reach vat_rate and discount_pct. True read as a rate means a 100%
