@@ -32,6 +32,8 @@ A bug is only `Closed` once two things are true:
 
 | ID | Severity | Area | Summary | Reported | Status |
 |---|---|---|---|---|---|
+| BUG-007 | S3 | web / api / procurement/pipeline | After a run ends `done_with_failures`, the only retry controls are project-wide — nothing re-extracts one document, or one vendor's documents | 2026-08-05 | Open |
+| BUG-006 | S3 | web / api | Extraction reports no live progress: a 12-minute run shows one static banner, while the per-document events that would fill it are already being written to disk | 2026-08-05 | Open |
 | BUG-005 | S1 | procurement/normalize | A project ships with no FX rates, and an unconfigured currency is silently converted at 1.0 — a EUR bid is ranked as if €1 = $1 | 2026-08-05 | Open |
 
 ## Closed
@@ -617,3 +619,292 @@ error, no failed status, and `extraction_status: ok` on both rows.
   "confirmed by a human".
 - **2026-08-05** — Arithmetic stays in Python here (CLAUDE.md), so this is
   entirely a code fix; no extractor or prompt change is involved.
+
+---
+
+## BUG-006 — Extraction reports no live progress while it runs
+
+- **Severity:** S3
+- **Area:** `web/src/pages/Setup.tsx`, `api/main.py`
+- **Status:** Open
+- **Reported:** 2026-08-05
+- **Reporter:** Rahul Jana (client-reported)
+
+### What happens
+
+`POST /api/projects/{slug}/ingest` is a plain synchronous handler
+(`api/main.py:386`). It calls `run_ingestion(...)` inline (`api/main.py:470`)
+and returns only once the entire project has been classified, extracted and
+compared. There is no background task, no job id, no polling endpoint, no SSE
+and no websocket — `grep` for `BackgroundTask`, `asyncio` or any lock across
+`api/` and `procurement/` returns nothing relevant.
+
+The client matches that shape. `runIngestion` (`web/src/api.ts:115`) is one
+awaited `fetch` with no timeout, and `IngestionStep` holds a single boolean
+(`const [running, setRunning] = useState(false)`, `web/src/pages/Setup.tsx:581`)
+set before the request and cleared after it. While it is true the user sees one
+fixed sentence:
+
+```tsx
+// web/src/pages/Setup.tsx:644-648
+{running && (
+  <div className="banner" …>
+    Extracting and comparing vendor bids…
+  </div>
+)}
+```
+
+No document count, no vendor name, no elapsed time, no way to tell a working
+run from a wedged one. Screen `04 Extraction status` does not help mid-run
+either: `ExtractionStatus.tsx:26` fetches once on mount and never re-polls, and
+the document records it reads are written in a single transaction near the end
+of the run (`snapshots.save_documents`, `procurement/pipeline.py:985`), so
+until the run finishes there is nothing new for it to show.
+
+The information the banner is missing already exists, and is already being
+written **incrementally, per document**, while the run is in flight.
+`events.append_event` opens the file in append mode and closes it per call
+(`procurement/store/events.py:14-18`) — it is not buffered to the end of the
+run. On the bundled sample's first run that is 33 `document.classified` and 32
+`document.extracted` records landing on disk one at a time over roughly 13
+minutes, each carrying its `target` doc_id and a `detail.status` of `ok` or
+`failed`. `procurement/store/events.py:21` even provides
+`read_events(root, slug, run_id)`, filtered by run. Nothing in `api/main.py`
+calls it — there is no `/events` or `/progress` route in the whole file.
+
+### What should happen
+
+While a run is in flight the UI should show what it is doing: which document is
+being read, how many of how many are done, and how many have failed so far.
+
+The reporting path does not need to be invented — the per-document events are
+already there. What is missing is (a) an endpoint that exposes them, and (b) a
+run that outlives its HTTP request, so there is something to poll *against*.
+
+**Open design question, to settle before implementing:** whether the run stays
+synchronous.
+
+- Keeping it synchronous and adding a read-only progress endpoint is the small
+  change: `GET …/runs/{run_id}/events` over `read_events`, polled by the client.
+  But the client only learns `run_id` when the POST returns, i.e. when the run
+  is already over. Progress would have to be keyed on "the newest run", which
+  is ambiguous the moment two runs overlap.
+- Making the run a background job (returning `202` and a `run_id` immediately)
+  fixes that and also fixes the reload hazard below, but it is the larger
+  change and it puts a job-state question in front of the store: what
+  `project.status` reads as while a run is in flight, given `status` is only
+  assigned at `procurement/pipeline.py:1000`, after everything.
+
+Either way the fix must not weaken the store invariants — progress reporting is
+a read of the append-only event log, and must stay a read. This tracker entry
+does not decide it.
+
+### Reproduce
+
+1. Ingest a project with a realistic document count and watch screen
+   `01 Set up & ingest`.
+2. Time the interval between pressing `Run ingestion` and the banner changing.
+
+**Reproduces:** always
+
+Measured on `projects/gas-14`, the bundled sample, from its own
+`store/events.jsonl` — `run.started` to `run.finished` per run:
+
+```
+run 23674e3b28e1 (first)    761.9 s  (12 min 42 s)
+  33 document.classified · 32 document.extracted · 1 document.skipped
+  run.finished detail: {'extracted': 31, 'failed': 1, 'documents': 33,
+                        'status': 'done_with_failures'}
+
+run 8116af1e6564 (second)    10.0 s
+  32 document.skipped · 1 document.extracted
+
+For 761.9 seconds the UI showed the string "Extracting and comparing vendor
+bids…" and nothing else, while the 69 events describing exactly what was
+happening were appended to disk one by one.
+```
+
+### Environment
+
+- Branch / commit: `fix-tracked-bugs-001-004` @ `0a3ed43`
+- Python / Node: 3.12.3 / v24.15.0
+- Provider: any — the gap is in reporting, not extraction. A slower provider
+  makes it worse, not different.
+- Data: `projects/gas-14` (the bundled sample), 33 documents
+
+### Notes
+
+- **2026-08-05** — Severity S3, not S2: the run itself completes correctly and
+  two workarounds exist — `04 Extraction status` after the fact, and tailing
+  `projects/<slug>/store/events.jsonl` during. The second is not a user-facing
+  workaround, only an operator one.
+- **2026-08-05** — **Re-triage upward if** the reload hazard is confirmed.
+  `running` is component state, so a refresh (or a proxy/browser dropping a
+  13-minute idle connection) clears it while the server-side run continues.
+  The `Run ingestion` button then re-enables — `canRun` reads only
+  `noVendors`, `selected.ready` and `running` (`web/src/pages/Setup.tsx:606`) —
+  and there is no server-side lock, so a second `run_ingestion` can start
+  against a project mid-transaction. Whether concurrent runs actually corrupt a
+  snapshot **was not tested here**; it is the first thing to check, because a
+  wrong answer there makes this an S1 store bug rather than a missing-feature
+  S3.
+- **2026-08-05** — `sendJson` sets no timeout (`web/src/api.ts:28-38`), so the
+  browser's own limits are the only ceiling on how long that request may hang.
+  Whatever shape the fix takes should stop relying on a single long-lived
+  request holding the UI's only piece of state.
+
+---
+
+## BUG-007 — A partially-failed run offers only project-wide retry, never one document or one vendor
+
+- **Severity:** S3
+- **Area:** `web/src/pages/ExtractionStatus.tsx`, `api/main.py`, `procurement/pipeline.py`
+- **Status:** Open
+- **Reported:** 2026-08-05
+- **Reporter:** Rahul Jana (client-reported)
+
+### What happens
+
+A run ends `done_with_failures` when some documents extracted and some did not
+(`procurement/pipeline.py:1000-1001`). Screen `04 Extraction status` then
+reports the damage precisely — per vendor, per document, with the stored note
+rendered verbatim (`ExtractionStatus.tsx:157-159`) and a separate column for a
+failed second pass (`ExtractionStatus.tsx:169-182`).
+
+It reports and stops there. `DocumentRow` (`ExtractionStatus.tsx:140-186`)
+renders six cells — File, Classified, Read as, Status, Second pass, Facts — and
+not one of them is actionable. `VendorPanel` (`ExtractionStatus.tsx:65-138`)
+has an `actions` slot, and it holds a counts summary, not a control. The screen
+that knows what failed cannot retry any of it.
+
+Every retry control lives on `01 Set up & ingest`, and both are project-wide:
+
+- `Run ingestion` (`Setup.tsx:711-717`) → `runIngestion(slug, provider)`.
+- `Force full re-extraction` (`Setup.tsx:722-731`) → the same call with
+  `force: true`, behind a `window.confirm` that names the cost
+  (`Setup.tsx:624-629`).
+
+Nothing below them can be scoped either. `run_ingestion(root, slug, client,
+pdf_fallback=None, force=False)` (`procurement/pipeline.py:612`) takes no
+vendor and no document argument; the endpoint reads only `provider`
+(`api/main.py:404`) and `force` (`api/main.py:431`); `runIngestion` sends only
+those two (`web/src/api.ts:115-127`).
+
+The nearest thing to a targeted retry is a side effect of the cache key rather
+than a control:
+
+```python
+# procurement/pipeline.py:755-760
+unchanged = (prior is not None
+             and prior.content_sha256 == doc.content_sha256
+             and prior.prompt_version == expected_version
+             and prior.extraction_status == "ok"
+             and (route != "datasheet" or prior.vocabulary_sha == vocab_sha))
+```
+
+`prior.extraction_status == "ok"` means a plain re-run *does* retry failures
+automatically, and `prior.secondary_status == "ok"` does the same for the second
+pass (`procurement/pipeline.py:765-769`). So the failures are recoverable — but
+only by re-running the whole project, and only as an invisible side effect the
+UI never explains. The user is shown a list of failures and given one button
+that does not mention them.
+
+### What should happen
+
+Two controls, both attached to the screen where the failures are actually
+visible:
+
+1. **Per document** — a retry on the row of a document whose `status` is
+   `failed` (or whose `secondary_status` is `failed`), re-extracting exactly
+   that document.
+2. **Per vendor** — a retry in the `VendorPanel` header, re-extracting that
+   vendor's documents and no one else's.
+
+Both need a scope parameter that does not exist today: `run_ingestion` needs to
+accept a vendor or a document set, the ingest payload needs to carry it, and
+the client needs to send it.
+
+**Open design question, to settle before implementing:** what a scoped run does
+to the parts of `run_ingestion` that are deliberately whole-project.
+
+- Classification, `resolve_supersession` and `pick_quote` all run across every
+  vendor before extraction (`procurement/pipeline.py:628-664`). A vendor-scoped
+  run that skips them may pick a different quotation than a full run would; one
+  that keeps them is only "scoped" in its extraction pass.
+- `_prune_orphan_facts`, the stale-vendor sweep and
+  `compliance.evaluate_project` (`procurement/pipeline.py:991`) run
+  unconditionally inside the write transaction — BUG-002's Step 1b measurement
+  established that for `force`, and a scoped run must not be the thing that
+  makes them conditional. **A stored collection contains exactly the records of
+  its currently-live sources** (CLAUDE.md) is a whole-store invariant; a
+  per-vendor write must still leave the whole store satisfying it.
+- `generation` bumps once per write transaction, never once per file. A
+  per-document retry is still one transaction and must still bump exactly once.
+- Whether a scoped retry is `force`-like (ignore the cache for the named
+  documents) or plain (let the cache decide, which for a `failed` document
+  means re-extract anyway). These differ only for a document cached `ok` that
+  the reviewer believes is wrong — which is precisely the case BUG-002's
+  project-wide `force` was added for, at full project cost.
+
+This tracker entry does not decide it. Whatever shape it takes, the plan needs
+the same two-run mutation matrix BUG-002's fix used
+(`tests/test_pipeline_force.py`) — a scope parameter is a new way to write a
+subset of the store, and subset writes are where phase 2's pruning defect lived.
+
+### Reproduce
+
+1. Ingest a project until a run ends `done_with_failures`.
+2. Open `04 Extraction status` and find the failed row.
+3. Look for any control that acts on that row, or on that vendor.
+
+**Reproduces:** always
+
+From `projects/gas-14`'s own event log — the sample shipped with a failure and
+recovered from it exactly this way:
+
+```
+run 23674e3b28e1  status done_with_failures
+  document.extracted  target c7e2cb129356  detail {'status': 'failed',
+                                                   'doc_class': 'quotation'}
+  → 1 failed of 33
+
+run 8116af1e6564  status done
+  document.extracted  ×1     ← c7e2cb129356, retried
+  document.skipped    ×32    ← everything else, 'unchanged'
+
+The one failed document was recovered. The only way to ask for it was to
+press the project-wide "Run ingestion" button, which walked all 33 documents
+to re-extract 1. No control exists that names c7e2cb129356, and none names
+its vendor.
+```
+
+### Environment
+
+- Branch / commit: `fix-tracked-bugs-001-004` @ `0a3ed43`
+- Python / Node: 3.12.3 / v24.15.0
+- Provider: any — the gap is in scoping, not extraction
+- Data: `projects/gas-14` (the bundled sample), whose two runs carry the
+  failure and its recovery
+
+### Notes
+
+- **2026-08-05** — Severity S3, not S2: a workaround exists and it works — a
+  plain `Run ingestion` retries failed documents automatically, and on the
+  sample that cost 10 s against the first run's 762 s, because every healthy
+  document was a cache hit. The complaint is that the workaround is invisible,
+  unscoped, and lives on a different screen from the failures.
+- **2026-08-05** — The cheap-retry claim above holds only while the cache holds.
+  A vendor whose documents all failed re-reads all of them on every subsequent
+  run, and a reviewer who reaches for `Force full re-extraction` to fix one bad
+  document re-spends the entire project's LLM cost. Per-vendor scope is the
+  control that makes the expensive case proportionate.
+- **2026-08-05** — Related but distinct from BUG-001: that one is about
+  *reaching* the review screens with incomplete data, settled with the
+  `has_results` gate plus a `status` banner. This one is about *repairing* the
+  incomplete data once you can see it. A fix here should reuse BUG-001's
+  `done_with_failures` banner as the entry point rather than adding a second
+  vocabulary for the same state.
+- **2026-08-05** — Depends on BUG-006 in practice, not in code: a per-document
+  retry that blocks the UI with no progress for the length of one extraction is
+  a smaller version of the same complaint. Whichever ships second inherits the
+  other's shape, so settle BUG-006's synchronous-vs-background question first.
