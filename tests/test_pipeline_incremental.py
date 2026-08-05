@@ -1,11 +1,17 @@
 import io
+import os
 import shutil
 import zipfile
-from procurement.project import create_project, unpack_vendor_zip, load_project
+from contextlib import contextmanager
+
+from procurement.project import (create_project, unpack_vendor_zip,
+                                 load_project, save_project)
 from procurement.pipeline import run_ingestion, inventory_documents, load_dataset
 from procurement.store import events, snapshots
 from procurement.store.models import Override
 from shared.llm.mock_client import MockLLMClient
+
+from tests.test_pipeline_rfq import RfqClient      # the schema-aware stub
 
 
 def _zip(entries):
@@ -402,3 +408,91 @@ def test_has_results_does_not_build_the_price_comparison(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline, "build_comparison", _refuse)
 
     assert pipeline.has_results(root, "p") is True
+
+
+# --- BUG-010: the prune save under the vendor lock -----------------------
+#
+# _prune_orphan_facts used to load-modify-save a vendor's facts outside any
+# lock, so a run's prune could discard a reviewer's technical_feedback (or a
+# concurrent writer's fresher fields) written in the window between its read
+# and its write. It is converted to snapshots.update_facts.
+
+_DATASHEET = "01 DataSheet Gas Generator.txt"
+
+
+def _project_with_datasheet(tmp_path):
+    """One vendor, one quotation and one datasheet -- so a run produces
+    stored `technical` facts keyed to the datasheet's doc_id, which can then
+    be orphaned by deleting just that file (the vendor itself stays live)."""
+    root = str(tmp_path)
+    create_project(root, "P", target_currency="USD")
+    vdir = tmp_path / "p" / "vendors" / "KERUI"
+    vdir.mkdir(parents=True)
+    (vdir / "Quotation.txt").write_bytes(b"base price 1000" + _PAD)
+    (vdir / _DATASHEET).write_bytes(b"H2S up to 70 ppm" + _PAD)
+    project = load_project(root, "p")
+    project.vendors = ["KERUI"]
+    save_project(root, project)
+    return root
+
+
+def test_pruning_does_not_disturb_feedback_or_overrides(tmp_path):
+    root = _project_with_datasheet(tmp_path)
+    run_ingestion(root, "p", RfqClient())
+
+    stored = snapshots.load_facts(root, "p", "KERUI")
+    assert stored.technical, "the datasheet must have produced a technical fact to prune"
+    doc_id = next(d.doc_id for d in snapshots.load_documents(root, "p")
+                  if d.path.endswith(_DATASHEET))
+
+    with snapshots.update_facts(root, "p", "KERUI") as f:
+        f.technical_feedback = "a reviewer's note"
+
+    os.remove(tmp_path / "p" / "vendors" / "KERUI" / _DATASHEET)
+    run_ingestion(root, "p", RfqClient(), force=True)
+
+    stored = snapshots.load_facts(root, "p", "KERUI")
+    assert stored.technical_feedback == "a reviewer's note", \
+        "pruning must not carry a stale copy back over the reviewer's note"
+    assert not any(f.get("doc_id") == doc_id for f in stored.technical), \
+        "the deleted datasheet's fact must actually be pruned"
+
+
+def test_pruning_skips_a_vendor_whose_facts_vanish_between_precheck_and_lock(
+        tmp_path, monkeypatch):
+    """A vendor whose facts vanish (e.g. a concurrent run's stale-vendor
+    sweep, further down this same transaction on a different run) between
+    the prune's advisory pre-check and its own lock acquire must be skipped,
+    not crash the run and not be resurrected. `update_facts(create=False)` --
+    the prune's call, unlike the extraction save's `create=True` a few lines
+    up in pipeline.py -- raises LookupError for exactly this case.
+    """
+    root = _project_with_datasheet(tmp_path)
+    run_ingestion(root, "p", RfqClient())
+    assert snapshots.load_facts(root, "p", "KERUI").technical
+
+    os.remove(tmp_path / "p" / "vendors" / "KERUI" / _DATASHEET)
+
+    from procurement import pipeline as pipeline_module
+    real_update = snapshots.update_facts
+    deleted = []
+
+    @contextmanager
+    def delete_then_update(root_, slug_, vendor_, **kw):
+        # Only the prune's own call is create=False (default); the
+        # extraction save a few lines up always passes create=True. That
+        # distinguishes "the prune is about to take its lock" from every
+        # other update_facts call this run makes, without needing to count
+        # calls or inspect a stack.
+        if vendor_ == "KERUI" and not kw.get("create", False) and not deleted:
+            deleted.append(True)
+            snapshots.delete_facts(root_, slug_, vendor_)
+        with real_update(root_, slug_, vendor_, **kw) as f:
+            yield f
+
+    monkeypatch.setattr(pipeline_module.snapshots, "update_facts", delete_then_update)
+
+    run_ingestion(root, "p", RfqClient(), force=True)   # must not raise
+
+    assert snapshots.load_facts(root, "p", "KERUI") is None, \
+        "a vendor whose facts vanished mid-prune must stay absent, not be resurrected"

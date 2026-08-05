@@ -199,50 +199,90 @@ def _prune_orphan_facts(root: str, slug: str, run_id: str, vendors: list[str],
             live_by_route.setdefault((doc.vendor, route), set()).add(doc.doc_id)
 
     for vendor in vendors:
-        facts = snapshots.load_facts(root, slug, vendor)
-        if facts is None:
-            continue
         live_technical = live_by_route.get((vendor, "datasheet"), set())
         live_deviations = live_by_route.get((vendor, "deviation"), set())
         live_quotations = live_by_route.get((vendor, "quotation"), set())
-        technical = [f for f in facts.technical if f.get("doc_id") in live_technical]
-        deviations = [d for d in facts.deviations if d.get("doc_id") in live_deviations]
-        # commercial has no per-record doc_id, so it is pruned via the stored
-        # link: a vendor whose quotation was deleted, or whose document is
-        # still present but no longer classifies (or infers) as a quotation,
-        # kept its prices forever otherwise. The None guard matters: facts
-        # written before quotation_doc_id existed have no link, and reading
-        # that absence as "dead" would delete every pre-existing vendor's
-        # prices on the first run after upgrade.
-        commercial_dead = (facts.quotation_doc_id is not None
-                           and facts.quotation_doc_id not in live_quotations)
-        if (len(technical) == len(facts.technical)
-                and len(deviations) == len(facts.deviations)
-                and not commercial_dead):
+
+        # Cheap pre-check on an unlocked read, so an unchanged vendor is not
+        # rewritten (and re-eventing) on every run. Deliberately advisory:
+        # the authoritative filter re-runs against a fresh read inside the
+        # lock below, because another writer may have added records for a
+        # live document since this read (BUG-010).
+        peek = snapshots.load_facts(root, slug, vendor)
+        if peek is None:
             continue
-        dropped = sorted(
-            {f.get("doc_id") for f in facts.technical
-             if f.get("doc_id") not in live_technical}
-            | {d.get("doc_id") for d in facts.deviations
-               if d.get("doc_id") not in live_deviations})
-        detail = {"doc_ids": dropped,
-                  "technical_dropped": len(facts.technical) - len(technical),
-                  "deviations_dropped": len(facts.deviations) - len(deviations)}
-        if commercial_dead:
-            detail["commercial_dropped"] = facts.quotation_doc_id
-            facts.commercial = None
-            facts.normalized = None
-            facts.quotation_doc_id = None
-        facts.technical = technical
-        facts.deviations = deviations
-        # Overrides are left untouched: they are re-reconciled against the
-        # fresh extraction on the next run, where a path that no longer
-        # resolves correctly raises conflict=True. Re-reconciling here would
-        # compare against already-resolved values and corrupt extracted_value.
-        snapshots.save_facts(root, slug, facts)
-        events.append_event(root, slug, Event(
-            at=_now(), run_id=run_id, actor="pipeline",
-            action="facts.pruned", target=vendor, detail=detail))
+        peek_commercial_dead = (peek.quotation_doc_id is not None
+                                and peek.quotation_doc_id not in live_quotations)
+        if (all(f.get("doc_id") in live_technical for f in peek.technical)
+                and all(d.get("doc_id") in live_deviations for d in peek.deviations)
+                and not peek_commercial_dead):
+            continue
+
+        detail = None
+        try:
+            with snapshots.update_facts(root, slug, vendor) as facts:
+                # Re-filter against what is stored NOW, not the pre-check's
+                # copy: another writer may have added or removed records for
+                # this vendor since the read above.
+                technical = [f for f in facts.technical
+                             if f.get("doc_id") in live_technical]
+                deviations = [d for d in facts.deviations
+                             if d.get("doc_id") in live_deviations]
+                # commercial has no per-record doc_id, so it is pruned via the
+                # stored link: a vendor whose quotation was deleted, or whose
+                # document is still present but no longer classifies (or
+                # infers) as a quotation, kept its prices forever otherwise.
+                # The None guard matters: facts written before
+                # quotation_doc_id existed have no link, and reading that
+                # absence as "dead" would delete every pre-existing vendor's
+                # prices on the first run after upgrade.
+                commercial_dead = (facts.quotation_doc_id is not None
+                                   and facts.quotation_doc_id not in live_quotations)
+                if (len(technical) == len(facts.technical)
+                        and len(deviations) == len(facts.deviations)
+                        and not commercial_dead):
+                    # Candidacy evaporated: a concurrent writer already
+                    # resolved what the pre-check saw as orphaned. Nothing to
+                    # write, and no event to report.
+                    continue
+                dropped = sorted(
+                    {f.get("doc_id") for f in facts.technical
+                     if f.get("doc_id") not in live_technical}
+                    | {d.get("doc_id") for d in facts.deviations
+                       if d.get("doc_id") not in live_deviations})
+                detail = {"doc_ids": dropped,
+                          "technical_dropped": len(facts.technical) - len(technical),
+                          "deviations_dropped": len(facts.deviations) - len(deviations)}
+                if commercial_dead:
+                    detail["commercial_dropped"] = facts.quotation_doc_id
+                    facts.commercial = None
+                    facts.normalized = None
+                    facts.quotation_doc_id = None
+                facts.technical = technical
+                facts.deviations = deviations
+                # Overrides and technical_feedback are left untouched here:
+                # overrides are re-reconciled against the fresh extraction on
+                # the next run, where a path that no longer resolves
+                # correctly raises conflict=True -- re-reconciling here would
+                # compare against already-resolved values and corrupt
+                # extracted_value. technical_feedback is the reviewer's
+                # field, never the run's; every field left alone keeps
+                # whatever is stored now, which is the point of update_facts.
+        except LookupError:
+            # This vendor's facts vanished between the pre-check above and
+            # this lock acquire -- e.g. the stale-vendor sweep further down
+            # this same function's caller runs on a *different* concurrent
+            # run that has already removed `vendor` from its project roster.
+            # Skip, don't recreate: a stored collection holds exactly the
+            # records of its currently-live sources, and update_facts
+            # (create=False) raising here is exactly that vendor correctly
+            # staying gone, not a bug to route around.
+            continue
+
+        if detail is not None:
+            events.append_event(root, slug, Event(          # outside the lock
+                at=_now(), run_id=run_id, actor="pipeline",
+                action="facts.pruned", target=vendor, detail=detail))
 
 
 def inventory_documents(root: str, slug: str) -> list[DocumentRecord]:
