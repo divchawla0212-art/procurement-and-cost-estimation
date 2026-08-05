@@ -32,6 +32,7 @@ A bug is only `Closed` once two things are true:
 
 | ID | Severity | Area | Summary | Reported | Status |
 |---|---|---|---|---|---|
+| BUG-010 | S1 | procurement/pipeline, procurement/renormalize, procurement/feedback | `facts.json` has BUG-009's defect and none of its guard: a run holds a vendor's facts across an entire LLM extraction, then saves them back over anything written meanwhile — a reviewer's note, or a corrected FX rate's totals | 2026-08-05 | Open |
 | BUG-007 | S3 | web / api / procurement/pipeline | After a run ends `done_with_failures`, the only retry controls are project-wide — nothing re-extracts one document, or one vendor's documents | 2026-08-05 | Open |
 | BUG-006 | S3 | web / api | Extraction reports no live progress: a 12-minute run shows one static banner, while the per-document events that would fill it are already being written to disk | 2026-08-05 | Open |
 | BUG-005 | S1 | procurement/normalize | A project ships with no FX rates, and an unconfigured currency is silently converted at 1.0 — a EUR bid is ranked as if €1 = $1 | 2026-08-05 | Open |
@@ -1315,3 +1316,146 @@ A  natural: fx-rates hammered throughout a run
   wrong, against 25 of 25 wrong before the fix**. The original forced probe can
   no longer run at all — it hooks `pipeline.save_project`, which the fix
   removed from that path; the regression tests above replace it.
+
+---
+
+## BUG-010 — A run holds a vendor's facts across its whole extraction, then writes them back over anything else
+
+- **Severity:** S1
+- **Area:** `procurement/pipeline.py`, `procurement/renormalize.py`, `procurement/feedback.py`
+- **Status:** Open
+- **Reported:** 2026-08-05
+- **Reporter:** found while closing BUG-009 — noted there as untested, then tested
+
+### What happens
+
+BUG-009 serialised `project.json`. `facts.json` has the same defect and none of
+the guard, in three places:
+
+| where | reads | writes | gap between them |
+|---|---|---|---|
+| `pipeline.py:833-942` | `base = load_facts(...)` | a whole `VendorFacts` | **an entire LLM extraction** |
+| `renormalize.py:50-65` | `load_facts(...)` per vendor | the whole object | the compute loop |
+| `feedback.py:30-35` | `load_facts(...)` | the whole object | short |
+
+The first is the dangerous one. `run_ingestion` loads a vendor's stored facts,
+performs the extraction — seconds with a mock, minutes with a real provider —
+and then writes a freshly built `VendorFacts` carrying fields copied off the
+copy it read *before* the extraction started:
+
+```python
+# procurement/pipeline.py:937-952
+normalized = (normalize_bid(
+    VendorBid.model_validate(resolved["commercial"]),
+    project.target_currency, project.fx_rates).model_dump()
+    if resolved["commercial"] else base.normalized)
+
+snapshots.save_facts(root, slug, VendorFacts(
+    ...
+    # carried or a re-extraction silently discards the reviewer's
+    # judgement — vocabulary_sha's defect, one field over
+    technical_feedback=base.technical_feedback))
+```
+
+Both carried fields are correct **sequentially** — the comment on
+`technical_feedback` is describing a real defect it fixes. Concurrently they
+are how the write is lost: anything written to that vendor's facts during the
+extraction is overwritten by `base`. `project` is likewise the copy loaded at
+`pipeline.py:616`, so `project.fx_rates` on line 939 is the rate as it was when
+the run *started*.
+
+This needs no narrow window. The gap is the extraction itself, so "did it
+during the run" is enough — which is exactly what a reviewer does.
+
+### What should happen
+
+A run must not write back a field it read minutes earlier and did not itself
+change. Whatever shape the fix takes, the two carried fields are the ones that
+matter: `technical_feedback`, which the run never modifies at all, and
+`normalized`, which it should derive from the *current* rate rather than the
+one it started with.
+
+**Open design question, to settle before implementing:** the BUG-009 answer
+does not transfer. Holding a per-vendor lock across the extraction would make
+it correct and make a reviewer wait minutes for a feedback save — the
+13-minute stall that fix specifically avoided. The plausible answers are
+instead to re-read the stored facts immediately before the save and merge
+field-wise (short critical section, but the merge rule has to be written down:
+which fields the run owns, which it must never touch), or to stop writing whole
+`VendorFacts` objects and write only the fields the run actually produced.
+This tracker entry does not decide it.
+
+### Reproduce
+
+**Reproduces:** always, on both platforms, with no forcing hook — start a
+forced run, issue the write partway through, wait for the run to finish.
+
+*H1 — a reviewer's feedback note, `PUT /vendors/KERUI/feedback` mid-run,
+acknowledged 200 with the note echoed back:*
+
+```
+H1  reviewer feedback written during a run
+  linux  8/8 trials    H1 FEEDBACK LOST
+  win32  5/8 trials    H1 FEEDBACK LOST
+```
+
+*H2 — `PUT /fx-rates` mid-run, then every vendor's stored `normalized`
+compared against what `normalize_bid` produces from its own stored
+`commercial` and the project's stored rate:*
+
+```
+H2  FX change + renormalize during a run
+  linux  8/8 trials    H2 STALE normalized for 2 vendor(s)
+```
+
+*H2, severity variant — a rate that already existed is **corrected** mid-run
+(1.08 -> 1.15), so a stale overwrite leaves a plausible number rather than a
+blank:*
+
+```
+  KERUI: stored=1080.0  should be=1150.0  (project says EUR=1.15)
+  ... 8 of 8 trials identical
+
+trials where the stored total is a WRONG NUMBER (not a blank): 8/8
+```
+
+### Environment
+
+- Branch / commit: `fix-tracked-bugs-001-004` @ `682f8e1`
+- Measured on `linux / python 3.12.13` (the shipped image) and
+  `win32 / python 3.12.3`
+- Provider: `mock`, with latency injected into `classify_structure`, and — for
+  H2 only — patched to return a real `EUR 1000` quotation (see Notes)
+- Data: synthetic, 12 documents across 3 vendors
+
+### Notes
+
+- **2026-08-05** — S1, on the severity variant rather than the base case. With
+  no rate configured, a stale overwrite yields `normalized_total = None` and
+  the vendor visibly drops out of the ranking — bad, but loud. When a rate is
+  *corrected* mid-run the stale value is a real number: the store then holds
+  `1080.0` while the project holds the rate that produces `1150.0`, and the
+  comparison ranks on the stale figure with nothing to indicate it. That is a
+  wrong award decision from a silent write, which is what S1 is for.
+- **2026-08-05** — **H2 first measured 0/8 and that result was worthless.** The
+  stock mock returns `{}` for every schema, so commercial facts came back
+  `currency=""`, `base_price=0.0`, and `normalize_bid` yields `0.0` whatever
+  the rate is — the fixture could not have detected the defect it was written
+  to find. Caught by inspecting the stored facts rather than trusting the clean
+  number, and the probe now refuses to report a pass unless at least one vendor
+  has a rate-sensitive price. Any future work here should keep that guard: a
+  concurrency probe that cannot fail is indistinguishable from one that passes.
+- **2026-08-05** — H1 reproduces on Linux more reliably than on Windows (8/8
+  vs 5/8). Linux is the deployment target, so the higher number is the one that
+  matters; the Windows shortfall is timing, not a difference in the defect.
+- **2026-08-05** — Not covered by BUG-008's run lock or BUG-009's project lock.
+  The run lock serialises runs against each other, and neither `PUT /feedback`
+  nor `PUT /fx-rates` is a run; the project lock covers a different file.
+  `save_feedback` and `renormalize` each hold their own load-modify-save window
+  as well (the table above), so the reverse direction — a settings write
+  clobbering what a run just extracted — is the same defect seen from the other
+  side. That direction was **not** measured here.
+- **2026-08-05** — No fix attempted, and no regression test written yet. When
+  one is, `tests/test_project_concurrency.py` is the file it belongs beside;
+  the forcing helper there is not needed, since the window is wide enough to
+  hit by simply issuing the write during a run.
