@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import shutil
 import tempfile
+import threading
 import zipfile
 
 from fastapi import (
@@ -392,6 +393,32 @@ def set_fx_rates(slug: str, payload: dict = Body(...)) -> dict:
     return _setup_state(_load_or_404(slug))
 
 
+# One ingestion run per project at a time (BUG-008). `ingest` below is a
+# synchronous handler, so FastAPI runs concurrent requests in its threadpool
+# and two runs of one project genuinely overlap. Measured before this guard:
+# 30 of 30 offset-zero trials ended at `generation` 1 after two runs instead of
+# 2, with one of the two runs dying of a filesystem race and surfacing as a
+# 502.
+#
+# Scope and its limits, stated plainly because the gap is silent otherwise:
+# this is an in-process lock, which is exactly the shipped deployment — the
+# image runs one `uvicorn` worker (Dockerfile CMD, no `--workers`) against one
+# volume. It does NOT serialise two containers sharing a volume, a
+# multi-worker uvicorn, or `cost-est` writing alongside the API. Those need a
+# lockfile with a stale-lock policy; see BUG-008's design note before adding
+# one, because a crashed run holding a lockfile blocks a client who has no
+# operator to clear it.
+_RUN_LOCKS: dict[str, threading.Lock] = {}
+_RUN_LOCKS_GUARD = threading.Lock()
+
+
+def _run_lock(slug: str) -> threading.Lock:
+    """The lock for one project, created once. Per slug, never global: a shared
+    lock would make one slow run a queue for every other project."""
+    with _RUN_LOCKS_GUARD:
+        return _RUN_LOCKS.setdefault(slug, threading.Lock())
+
+
 @app.post("/api/projects/{slug}/ingest")
 def ingest(slug: str, payload: dict | None = Body(default=None)) -> dict:
     project = _load_or_404(slug)
@@ -476,11 +503,30 @@ def ingest(slug: str, payload: dict | None = Body(default=None)) -> dict:
         from procurement.pdf_llm import transcribe_pdf
 
         pdf_fallback = transcribe_pdf
+    # Non-blocking: a caller that finds a run in progress is told so, never
+    # queued. Queueing would hold the request open for the length of a second
+    # full run — and that second run is always either a duplicate submission or
+    # a mistake, so running it just re-spends the project's LLM cost for a
+    # result the in-flight run is already producing.
+    lock = _run_lock(slug)
+    if not lock.acquire(blocking=False):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "An ingestion run is already in progress for this project. "
+                "Wait for it to finish before starting another."
+            ),
+        )
     try:
         run_ingestion(ROOT, slug, get_client(provider), pdf_fallback=pdf_fallback,
                      force=force)
     except Exception as exc:  # surface extraction failures to the UI verbatim
         raise HTTPException(status_code=502, detail=f"Ingestion failed: {exc}") from exc
+    finally:
+        # In `finally`, not after the call: the 502 path above leaves by
+        # exception, and a lock that outlives its run would break ingestion for
+        # the life of the process — a worse bug than the race it closes.
+        lock.release()
     return _setup_state(proj.load_project(ROOT, slug))
 
 
