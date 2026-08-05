@@ -32,16 +32,15 @@ A bug is only `Closed` once two things are true:
 
 | ID | Severity | Area | Summary | Reported | Status |
 |---|---|---|---|---|---|
-| BUG-004 | S1 | api | With no `LLM_PROVIDER` set, ingestion silently falls back to the **mock** provider and stores fabricated facts as `ok` | 2026-08-05 | Open |
-| BUG-003 | S4 | web | Empty states still tell the user to run ingestion "in the Streamlit portal", which no longer exists | 2026-08-05 | Open |
-| BUG-002 | S3 | api / procurement/pipeline | No way to force a full re-extraction: `run_ingestion(force=True)` is unreachable from the API and the UI | 2026-08-05 | Open |
-| BUG-001 | S3 | web | Compliance matrix and comparative statement are reachable before ingestion has completed | 2026-08-05 | Open |
 
 ## Closed
 
 | ID | Severity | Area | Summary | Closed | Fixed in | Spec / Plan |
 |---|---|---|---|---|---|---|
-| — | — | — | — | — | — | — |
+| BUG-004 | S1 | api | With no `LLM_PROVIDER` set, ingestion silently falls back to the **mock** provider and stores fabricated facts as `ok` | 2026-08-05 | `dfc3f37`, `9d3ba95`, `cddbea1` | [spec](docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md) / [plan](docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md) |
+| BUG-003 | S4 | web | Empty states still tell the user to run ingestion "in the Streamlit portal", which no longer exists | 2026-08-05 | `d3cfa61` | [spec](docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md) / [plan](docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md) |
+| BUG-002 | S3 | api / procurement/pipeline | No way to force a full re-extraction: `run_ingestion(force=True)` is unreachable from the API and the UI | 2026-08-05 | `f095220`, `7f066e4` | [spec](docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md) / [plan](docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md) |
+| BUG-001 | S3 | web | Compliance matrix and comparative statement are reachable before ingestion has completed | 2026-08-05 | `88f0403` (harness: `042e8fa`) | [spec](docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md) / [plan](docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md) |
 
 ---
 
@@ -49,7 +48,7 @@ A bug is only `Closed` once two things are true:
 
 - **Severity:** S3
 - **Area:** `web/src/App.tsx`
-- **Status:** Open
+- **Status:** Closed
 - **Reported:** 2026-08-05
 - **Reporter:** Rahul Jana (client-reported)
 
@@ -128,14 +127,27 @@ nothing crashes — the screens simply present as available when they are not.
 
 ### Fix
 
-- **Spec:** _not yet written_
-- **Plan:** _not yet written_
+- **Spec:** [`docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md`](docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md) §1.1
+- **Plan:** [`docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md`](docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md), Task 4
 - **Ledger:** none — not part of a phase
-- **Design change:** _pending — see the open design question above_
-- **Commit / PR:** _unfixed_
-- **Test:** _none yet. Needs a `web/` test asserting the two nav items are
-  disabled for a project whose `status` is `new` or `failed`._
-- **Verified:** _unfixed_
+- **Design change:** the open design question above is settled in spec §1.1:
+  `done_with_failures` **does** admit the user, behind a banner that names no
+  documents and points at `04 Extraction status`; only `new` and `failed`
+  block screens `02`/`03`. An unrecognised status is also treated as
+  unreachable — the safe direction when the front end sees a value it does
+  not know.
+- **Commit / PR:** `042e8fa` (front-end test harness, prerequisite), `88f0403`
+  (the fix)
+- **Test:** `web/src/nav.test.ts` (`reviewReachable` over all four documented
+  statuses plus `null`, `undefined`, `''`, and an unrecognised string) and
+  `web/src/App.test.tsx` (renders `App` with a mocked project per status,
+  asserts `02`/`03` disabled for `new`/`failed`, enabled for
+  `done`/`done_with_failures`, `04` unaffected). The `App.test.tsx` cases for
+  `new`/`failed` are the ones that fail without the fix — confirmed against
+  the unmodified `App.tsx` (`disabled = item.needsProject && !slug`), which
+  left those two cases red.
+- **Verified:** yes. Task 4: `npm test` 12/12, `npm run build` and `npm run
+  lint` clean, reviewed. Re-verified in this task's full-suite run (below).
 
 ---
 
@@ -143,7 +155,7 @@ nothing crashes — the screens simply present as available when they are not.
 
 - **Severity:** S3
 - **Area:** `api/main.py`, `procurement/pipeline.py`
-- **Status:** Open
+- **Status:** Closed
 - **Reported:** 2026-08-05
 - **Reporter:** found during code review of a client question about re-running
   ingestion
@@ -220,15 +232,47 @@ endpoint that would have made it re-extract the other 31.
 
 ### Fix
 
-- **Spec:** _not yet written_
-- **Plan:** _not yet written_
+- **Spec:** [`docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md`](docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md) §1.2
+- **Plan:** [`docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md`](docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md), Task 5
 - **Ledger:** none — not part of a phase
-- **Design change:** _pending — needs a decision on how the action is surfaced
-  and guarded_
-- **Commit / PR:** _unfixed_
-- **Test:** _none yet. Needs a test asserting a forced run re-extracts a
-  document whose cache key is otherwise unchanged._
-- **Verified:** _unfixed_
+- **Design change:** settled in spec §1.2 — `force` is accepted in the
+  `POST /ingest` payload (default `false`, so an existing client sees no
+  behaviour change); the UI exposes it as a separate `Force full
+  re-extraction` button, secondary-styled, shown only once `has_results` is
+  true, gated behind a `window.confirm` that names the cost before firing.
+  Before exposing the switch, the brief's required Step 1b measurement was
+  taken directly against `run_ingestion(..., force=True)` on an
+  already-ingested fixture (full detail in
+  `.superpowers/sdd/2026-08-05-tracked-bugs-001-004/task-5-report.md`):
+  - `generation` moves **exactly once per forced run** — confirmed on two
+    consecutive forced runs, 1→2 and then 2→3.
+  - `_prune_orphan_facts` **runs unconditionally** inside the write
+    transaction, not gated on `force` — confirmed by a `facts.pruned` event
+    correctly dropping a deleted document's orphaned commercial-fact link.
+  - No stored collection was left holding a record whose source was gone:
+    after the forced run, the affected vendor's technical/deviations lists
+    were empty, its commercial/normalized/quotation fields were all `None`,
+    and it had zero `DocumentRecord`s citing the deleted `doc_id`.
+  - Verdict: **not blocked** — `force` is consulted only inside the
+    per-document cache-skip decisions; the transaction boundary, the prune,
+    and the stale-vendor sweep are unconditional, so exposing the switch does
+    not put the store invariants at risk.
+- **Commit / PR:** `f095220` (the fix), `7f066e4` (review-round fixes —
+  non-boolean `force` now rejected with 422, an untested RFQ-side mutation
+  row, a vacuity guard, mock-isolation in the front-end tests, a duplicate
+  running-state button label)
+- **Test:** `tests/test_api_setup.py` (payload-level `force` tests, including
+  rejecting a non-boolean `force`), `tests/test_pipeline_force.py` (an 8-row
+  two-run mutation matrix, one row per invariant in the plan's Step 4b table;
+  every row independently verified by reinstating and reverting its own
+  defect in `procurement/pipeline.py` and confirming only that row failed),
+  and `web/src/pages/Setup.test.tsx` (6 tests: null-provider render, button
+  visibility gated on `has_results`, confirm-declined vs. confirmed, and that
+  the plain `Run ingestion` button never passes `force`).
+- **Verified:** yes. Task 5: Python 893 passed / 3 skipped, web 18/18; a
+  reviewer independently reinstated 6 of the 8 matrix defects and confirmed
+  each failed only its own row. Re-verified in this task's full-suite run
+  (below).
 
 ---
 
@@ -236,7 +280,7 @@ endpoint that would have made it re-extract the other 31.
 
 - **Severity:** S4
 - **Area:** `web/src/pages/ComparativeStatement.tsx`, `web/src/pages/ComplianceMatrix.tsx`
-- **Status:** Open
+- **Status:** Closed
 - **Reported:** 2026-08-05
 - **Reporter:** found incidentally while investigating BUG-001
 
@@ -287,14 +331,30 @@ web/src/pages/ComplianceMatrix.tsx:113
 
 ### Fix
 
-- **Spec:** none — copy change, no design decision
-- **Plan:** none — one-line change per file
+- **Spec:** [`docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md`](docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md) §1.4
+- **Plan:** [`docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md`](docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md), Task 6
 - **Ledger:** none — not part of a phase
-- **Design change:** none — the fix matches the existing design
-- **Commit / PR:** _unfixed_
-- **Test:** _none planned. A string assertion on empty-state copy would be a
-  change-detector test; the sweep in Notes is the better guard._
-- **Verified:** _unfixed_
+- **Design change:** settled in spec §1.4 — there was no open design question
+  to settle for this one. Both known strings, plus every other live hit found
+  by the repo-wide sweep (`grep -rni "streamlit\|portal"` across `web/src`,
+  `api/`, `procurement/`, `shared/`, `cost_estimation/`, `docs/`, `README.md`,
+  `CLAUDE.md`), become pointers to `01 Set up & ingest`, the screen that now
+  owns ingestion. Historical hits under `docs/superpowers/specs/` and
+  `docs/superpowers/plans/` are left alone, per the plan's Task 6 note and
+  `CLAUDE.md`'s own rule — rewriting a spec to match the present is how it
+  stops being evidence of what was designed at the time.
+- **Commit / PR:** `d3cfa61`
+- **Test:** none — deliberate; see the sweep. A string assertion on
+  empty-state copy would be a change-detector test, and the repo-wide sweep —
+  re-run after the fix and confirmed to leave only the historical hits listed
+  in the task's own report — is the better guard, per this tracker's header
+  rule and Task 6's independently-reproduced sweep.
+- **Verified:** yes. Task 6's sweep re-run came back clean (only historical
+  hits remain); the regression suite stayed green through the change (Python
+  893/3, web 23/23), and the task additionally added 5 behaviour tests for a
+  banner-placement defect folded in from Task 4 (reverting the `.tsx` changes
+  reproduces 3 failures, so those are non-vacuous). Re-verified in this
+  task's full-suite run (below).
 
 ---
 
@@ -302,7 +362,7 @@ web/src/pages/ComplianceMatrix.tsx:113
 
 - **Severity:** S1
 - **Area:** `api/main.py`
-- **Status:** Open
+- **Status:** Closed
 - **Reported:** 2026-08-05
 - **Reporter:** found while verifying what a client receives in the Docker image
 
@@ -389,14 +449,38 @@ No key was present in the container. `classified_by: llm` and
 
 ### Fix
 
-- **Spec:** _not yet written_
-- **Plan:** _not yet written_
+- **Spec:** [`docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md`](docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md) §1.3
+- **Plan:** [`docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md`](docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md), Tasks 1–2
 - **Ledger:** none — not part of a phase
-- **Design change:** _pending — needs a decision on whether `mock` stays
-  reachable in a deployed build at all_
-- **Commit / PR:** _unfixed_
-- **Test:** _none yet. Needs a test asserting `POST /ingest` with no
-  `LLM_PROVIDER` and no keys returns 400 and leaves the store untouched. Note
-  the suite itself depends on `mock` being selectable, so the fix must keep an
-  explicit path to it._
-- **Verified:** _unfixed_
+- **Design change:** settled in spec §1.3 — `mock` stays reachable, but only
+  when named explicitly; there is no implicit default any more. Every
+  `os.getenv("LLM_PROVIDER", "mock")` became `os.getenv("LLM_PROVIDER")`
+  (`api/main.py`, `shared/llm/factory.py`). An unconfigured `POST /ingest`
+  (no payload provider, no env var) now returns **400** naming
+  `LLM_PROVIDER` and leaves the store untouched; `_provider_state()` reports
+  `provider: null, ready: false`; `get_client(None)` with nothing configured
+  raises `ValueError` as an unreachable-from-a-correct-path backstop for the
+  next provider-less caller; `cost_estimation/cli.py`'s bare `get_client()`
+  call now surfaces that as a readable CLI failure (exit 1, message on
+  stderr) instead of a traceback. Additionally, per §1.3's provenance
+  paragraph, the `run.started` event now carries
+  `detail={"client": type(client).__name__}`, so `MockLLMClient` is visible
+  in the event log whenever it is deliberately selected.
+- **Commit / PR:** `dfc3f37` (the 400 guard + `run.started` provenance),
+  `9d3ba95` (the factory no longer defaults to mock; `cost-est` fails
+  readably), `cddbea1` (test coverage for the literal-empty-string
+  `LLM_PROVIDER` case, not just whitespace)
+- **Test:** `tests/test_api_setup.py`
+  (`test_ingest_without_provider_is_400_and_leaves_store_untouched`,
+  `test_provider_state_reports_null_when_unset`,
+  `test_explicit_mock_still_ingests`,
+  `test_run_started_event_names_the_client_class`), `tests/test_llm_factory.py`
+  (`test_unset_provider_raises`, `test_blank_provider_counts_as_unset`,
+  `test_explicit_mock_still_works_with_provider_unset`), and `tests/test_cli.py`
+  (`test_main_without_llm_provider_fails_readably`). The store-untouched
+  assertion is checked directly — `generation` unchanged, `documents.json`
+  and `events.jsonl` byte-identical before/after the rejected request.
+- **Verified:** yes. Task 1: 877 passed / 3 skipped, reviewed. Task 2: 881
+  passed / 3 skipped, reviewed (including two post-review corrections to
+  test accuracy, documented in the task's own report). Re-verified in this
+  task's full-suite run (below).

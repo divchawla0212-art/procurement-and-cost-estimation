@@ -25,8 +25,8 @@ untracked fixture directories are present, never in pass/fail:
 
 | where | baseline |
 |---|---|
-| a developer workstation, `data/` and an ingested multi-vendor `projects/` present | **873 passed, 3 skipped, 0 failed** |
-| CI, and any clean checkout | **866 passed, 10 skipped, 0 failed** |
+| a developer workstation, `data/` and an ingested multi-vendor `projects/` present | **893 passed, 3 skipped, 0 failed** |
+| CI, and any clean checkout | **886 passed, 10 skipped, 0 failed** |
 
 Anything else is a real regression.
 
@@ -38,10 +38,16 @@ three skips a workstation already shows are credential guards
 `test_procurement_real_data.py`) and skip in both places.
 
 So the CI row is the workstation row with the four corpus-coverage passes and
-the three `data/` passes turned into skips — `866 = 873 - 4 - 3`,
-`10 = 3 + 4 + 3`; 876 tests either way. When the counts move, measure the
+the three `data/` passes turned into skips — `886 = 893 - 4 - 3`,
+`10 = 3 + 4 + 3`; 896 tests either way. When the counts move, measure the
 workstation row and derive the CI row from it; editing the two rows
 independently is how they drift apart.
+
+The web suite is separate and not part of either row above — both rows are
+`python -m pytest` counts. Run it with `npm test` under `web/` (vitest,
+non-watching, exits non-zero on failure); `npm run build` also type-checks the
+test files, since `web/tsconfig.app.json` includes `src`. CI runs both, in the
+`web` job of the same workflow.
 
 **There is no longer a workstation-only failure.** Until the Streamlit portal
 was removed, `tests/test_portal_app.py::test_missing_api_key_does_not_block_creation`

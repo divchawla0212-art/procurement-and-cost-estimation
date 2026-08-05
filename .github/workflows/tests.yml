@@ -8,14 +8,16 @@
 # blast radius to fork PRs. The trade is stated plainly: the live-provider paths
 # are not exercised here.
 #
-# Expected on a clean checkout: 647 passed, 6 skipped, 0 failed.
+# Expected on a clean checkout: 886 passed, 10 skipped, 0 failed. See the
+# "Running things" section of CLAUDE.md for the arithmetic behind that number
+# and how it relates to the workstation baseline.
 #
-# Six skips are expected, not a defect: three need provider credentials, three
-# need a `data/` sample directory that is not tracked in git.
+# Ten skips are expected, not a defect: three need provider credentials, seven
+# need untracked fixture directories (`data/`, and the multi-vendor `projects/`
+# corpus) that are not tracked in git.
 #
-# Note that a local run differs, and is not a regression. Anyone with a
-# populated `.env` sees one failure that CI does not — see the "Running things"
-# section of CLAUDE.md for why.
+# The `web` job below takes no secrets either, and is not part of the pytest
+# counts above — it is a separate suite over `web/`.
 
 name: tests
 
@@ -52,3 +54,37 @@ jobs:
 
       - name: Run tests
         run: python -m pytest -q
+
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        working-directory: web
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # 22 matches the node:22-alpine base image in the Dockerfile — the same
+      # rationale as the Python job pinning to the pyproject.toml floor: build
+      # and test against the interpreter the shipped image actually runs.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      # web/tsconfig.app.json includes `src`, so *.test.tsx files are
+      # type-checked as part of the production build, not just by vitest.
+      # Running only `npm test` here would miss a test-file type error that
+      # `npm run build` catches — see task 5's carry-forward note in
+      # .superpowers/sdd/2026-08-05-tracked-bugs-001-004/progress.md.
+      - name: Build
+        run: npm run build
