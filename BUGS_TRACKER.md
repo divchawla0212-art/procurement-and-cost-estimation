@@ -130,22 +130,25 @@ nothing crashes — the screens simply present as available when they are not.
 - **Spec:** [`docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md`](docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md) §1.1
 - **Plan:** [`docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md`](docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md), Task 4
 - **Ledger:** [`.superpowers/sdd/2026-08-05-tracked-bugs-001-004/progress.md`](.superpowers/sdd/2026-08-05-tracked-bugs-001-004/progress.md) — untracked, since `.superpowers/` is gitignored; not a broken link, just not in git
-- **Design change:** the open design question above is settled in spec §1.1:
-  `done_with_failures` **does** admit the user, behind a banner that names no
-  documents and points at `04 Extraction status`; only `new` and `failed`
-  block screens `02`/`03`. An unrecognised status is also treated as
-  unreachable — the safe direction when the front end sees a value it does
-  not know.
+- **Design change:** the open design question above was first settled in spec
+  §1.1 as `status ∉ {new, failed}`, with `done_with_failures` admitting the
+  user behind a banner. Final review (I2) found that predicate wrong for
+  `failed` and corrected it — see the **Correction** block in spec §1.1 for
+  why. The gate is now `has_results`, not `status`; `status` drives only the
+  review-screen banners.
 - **Commit / PR:** `042e8fa` (front-end test harness, prerequisite), `88f0403`
-  (the fix)
-- **Test:** `web/src/nav.test.ts` (`reviewReachable` over all four documented
-  statuses plus `null`, `undefined`, `''`, and an unrecognised string) and
-  `web/src/App.test.tsx` (renders `App` with a mocked project per status,
-  asserts `02`/`03` disabled for `new`/`failed`, enabled for
-  `done`/`done_with_failures`, `04` unaffected). The `App.test.tsx` cases for
-  `new`/`failed` are the ones that fail without the fix — confirmed against
-  the unmodified `App.tsx` (`disabled = item.needsProject && !slug`), which
-  left those two cases red.
+  (the fix), `d0f5abb` (I2 correction: gate switched from `status` to
+  `has_results`), `7770774` (docs: record the I2 correction in the spec)
+- **Test:** `web/src/nav.test.ts` (`reviewReachable` driven directly by
+  `has_results`: `true` admits, `false`/`null`/`undefined` reject, plus the
+  I2 case confirming a `'failed'`-status project with `has_results: true`
+  still admits) and `web/src/App.test.tsx` (renders `App` with a mocked
+  project per `status`/`has_results` pair — `new`/`false`, `failed`/`false`,
+  `done`/`true`, `done_with_failures`/`true`, and the I2 case `failed`/`true`
+  — asserting `02`/`03` disabled only when `has_results` is `false`, `04`
+  unaffected throughout). The `new`/`false` and `failed`/`false` cases fail
+  without any gate at all; the `failed`/`true` case is the one that fails
+  under the original `status`-only predicate but passes under `has_results`.
 - **Verified:** yes. Task 4: `npm test` 12/12, `npm run build` and `npm run
   lint` clean, reviewed. Re-verified in this task's full-suite run (below).
 
