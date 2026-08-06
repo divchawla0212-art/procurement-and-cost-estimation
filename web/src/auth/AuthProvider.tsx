@@ -24,11 +24,19 @@ async function postCredentials(
   email: string,
   password: string,
 ): Promise<{ user: User | null; error?: string }> {
-  const res = await fetch(path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password }),
-  })
+  let res: Response
+  try {
+    res = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    })
+  } catch {
+    // fetch itself rejected — offline, connection refused, backend down —
+    // rather than the server answering with an error status. Resolve to a
+    // normal failed AuthResult so the caller's await never throws.
+    return { user: null, error: 'Could not reach the server. Check your connection and try again.' }
+  }
   if (!res.ok) {
     return { user: null, error: await readDetail(res) }
   }

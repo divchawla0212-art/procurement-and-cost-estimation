@@ -31,10 +31,17 @@ export function Auth(): JSX.Element {
     }
 
     setSubmitting(true)
-    const result = mode === 'login' ? await login(email, password) : await signup(email, password)
-    setSubmitting(false)
-    if (!result.ok) {
-      setError(result.error ?? 'Something went wrong. Try again.')
+    try {
+      const result = mode === 'login' ? await login(email, password) : await signup(email, password)
+      if (!result.ok) {
+        setError(result.error ?? 'Something went wrong. Try again.')
+      }
+    } finally {
+      // A `finally` here — not a plain statement after the await — is the
+      // point: it re-enables the button even if login/signup ever throws
+      // instead of resolving to a failed AuthResult, so no future error path
+      // can strand the form disabled.
+      setSubmitting(false)
     }
   }
 
