@@ -71,3 +71,36 @@ def test_delete_sessions_for_can_keep_the_current_one(tmp_path):
     store.delete_sessions_for(root, user.id, keep_token=keep)
     assert store.resolve_session(root, keep).id == user.id
     assert store.resolve_session(root, other) is None
+
+
+def test_delete_session_prunes_an_unrelated_users_expired_session(tmp_path):
+    """S3: 'exactly' applies to every writer, not just create_session.
+
+    The expired row must be created *after* the surviving session so that
+    create_session's own on-write pruning (which runs before this row exists)
+    cannot be the thing that removes it — the assertion has to be about
+    delete_session's own write, not a side effect of an earlier call.
+    """
+    root = str(tmp_path)
+    user_a = _user(root, email="a@b.com")
+    user_b = _user(root, email="c@d.com")
+    b_token = store.create_session(root, user_b.id)
+    store.create_session(root, user_a.id, ttl_seconds=-1)
+    store.delete_session(root, b_token)
+    assert store.read_auth(root)["sessions"] == []
+
+
+def test_delete_sessions_for_prunes_an_unrelated_users_expired_session(tmp_path):
+    """S3: 'exactly' applies to every writer, not just create_session.
+
+    Same ordering rationale as the delete_session case above: user_a's
+    expired row is created last so only delete_sessions_for's own write can
+    be responsible for pruning it.
+    """
+    root = str(tmp_path)
+    user_a = _user(root, email="a@b.com")
+    user_b = _user(root, email="c@d.com")
+    store.create_session(root, user_b.id)
+    store.create_session(root, user_a.id, ttl_seconds=-1)
+    store.delete_sessions_for(root, user_b.id)
+    assert store.read_auth(root)["sessions"] == []

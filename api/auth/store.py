@@ -216,12 +216,17 @@ def resolve_session(root: str, token: str) -> User | None:
 
 
 def delete_session(root: str, token: str) -> None:
-    """Log out: invalidate exactly the session for this token."""
+    """Log out: invalidate exactly the session for this token.
+
+    Prunes expired rows too — every writer to `sessions` must, or an expired
+    row belonging to some other user lingers until the next call that
+    happens to touch it (S3: "exactly", not "eventually").
+    """
     digest = _token_digest(token)
     with locked_update(root) as doc:
-        doc["sessions"] = [
+        doc["sessions"] = _unexpired([
             s for s in doc["sessions"] if s["token_sha256"] != digest
-        ]
+        ])
 
 
 def delete_sessions_for(root: str, user_id: str, *, keep_token: str | None = None) -> None:
@@ -230,10 +235,12 @@ def delete_sessions_for(root: str, user_id: str, *, keep_token: str | None = Non
     Used by the password-change flow (Task 4): revoking the user's *other*
     sessions while keeping the caller's current one signed in. Without
     `keep_token`, every session for `user_id` is revoked.
+
+    Prunes expired rows too, for the same reason as `delete_session`.
     """
     keep_digest = _token_digest(keep_token) if keep_token else None
     with locked_update(root) as doc:
-        doc["sessions"] = [
+        doc["sessions"] = _unexpired([
             s for s in doc["sessions"]
             if s["user_id"] != user_id or s["token_sha256"] == keep_digest
-        ]
+        ])
