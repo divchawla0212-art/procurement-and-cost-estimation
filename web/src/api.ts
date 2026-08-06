@@ -1,4 +1,5 @@
 import type {
+  AdminUser,
   ComplianceMatrix,
   ExtractionStatus,
   ProjectDetail,
@@ -7,18 +8,29 @@ import type {
   Statement,
 } from './types'
 
-async function unwrap<T>(res: Response): Promise<T> {
-  if (!res.ok) {
-    let detail = `${res.status} ${res.statusText}`
-    try {
-      const body = await res.json()
-      if (body?.detail) detail = body.detail
-    } catch {
-      /* non-JSON error body; keep status text */
-    }
-    throw new Error(detail)
+/** The server's `detail` if it sent one, else the status line. */
+async function failure(res: Response): Promise<Error> {
+  let detail = `${res.status} ${res.statusText}`
+  try {
+    const body = await res.json()
+    if (body?.detail) detail = body.detail
+  } catch {
+    /* non-JSON error body; keep status text */
   }
+  return new Error(detail)
+}
+
+async function unwrap<T>(res: Response): Promise<T> {
+  if (!res.ok) throw await failure(res)
   return res.json() as Promise<T>
+}
+
+/**
+ * For routes that answer 204 with no body — parsing one as JSON would throw
+ * on success, which is the opposite of what an error path should do.
+ */
+async function expectNoContent(res: Response): Promise<void> {
+  if (!res.ok) throw await failure(res)
 }
 
 function getJson<T>(path: string): Promise<T> {
@@ -110,6 +122,44 @@ export function saveFxRates(
   return sendJson(`/api/projects/${encodeURIComponent(slug)}/fx-rates`, 'PUT', {
     rates,
   })
+}
+
+// --- admin: users and project access -------------------------------------
+// Every one of these is refused for a reviewer by `require_admin` on the
+// server. The admin-only nav entry that leads here is convenience, not a
+// control — these calls would 403 just the same if a reviewer reached them.
+
+export function fetchUsers(): Promise<AdminUser[]> {
+  return getJson('/api/admin/users')
+}
+
+export function createUser(
+  email: string,
+  password: string,
+  role: 'admin' | 'reviewer',
+): Promise<AdminUser> {
+  return sendJson('/api/admin/users', 'POST', { email, password, role })
+}
+
+export function deleteUser(userId: string): Promise<void> {
+  return fetch(`/api/admin/users/${encodeURIComponent(userId)}`, {
+    method: 'DELETE',
+  }).then(expectNoContent)
+}
+
+export function grantProject(userId: string, slug: string): Promise<void> {
+  return sendJson<unknown>(
+    `/api/admin/users/${encodeURIComponent(userId)}/grants`,
+    'POST',
+    { slug },
+  ).then(() => undefined)
+}
+
+export function revokeProject(userId: string, slug: string): Promise<void> {
+  return fetch(
+    `/api/admin/users/${encodeURIComponent(userId)}/grants/${encodeURIComponent(slug)}`,
+    { method: 'DELETE' },
+  ).then(expectNoContent)
 }
 
 export function runIngestion(

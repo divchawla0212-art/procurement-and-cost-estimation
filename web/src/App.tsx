@@ -11,14 +11,21 @@ import { ComplianceMatrix } from './pages/ComplianceMatrix'
 import { ComparativeStatement } from './pages/ComparativeStatement'
 import { ExtractionStatus } from './pages/ExtractionStatus'
 import { Setup } from './pages/Setup'
+import { Admin } from './pages/Admin'
 
-type View = 'dashboard' | 'setup' | 'overview' | 'matrix' | 'statement' | 'extraction'
+type View =
+  | 'dashboard'
+  | 'setup'
+  | 'overview'
+  | 'matrix'
+  | 'statement'
+  | 'extraction'
+  | 'admin'
 
-// `roles` is omitted for every entry today because every screen is available
-// to both roles — Task 11 is what adds an admin-only entry. The filter below
-// is real, not decorative: an item that later gains `roles: ['admin']` is
-// hidden from a reviewer's nav without touching this list's shape. This is
-// presentation only — the server enforces the actual boundary.
+// `roles` is omitted for every screen both roles can reach; the one entry that
+// carries it is hidden from a reviewer's nav. This is presentation only — the
+// server enforces the actual boundary, and every `/api/admin/*` route refuses
+// a reviewer whether or not this list ever mentioned it.
 const NAV: {
   view: View
   index: string
@@ -32,6 +39,13 @@ const NAV: {
   { view: 'matrix', index: '03', label: 'Compliance matrix', needsProject: true },
   { view: 'statement', index: '04', label: 'Comparative statement', needsProject: true },
   { view: 'extraction', index: '05', label: 'Extraction status', needsProject: true },
+  {
+    view: 'admin',
+    index: '06',
+    label: 'Users and access',
+    needsProject: false,
+    roles: ['admin'],
+  },
 ]
 
 export default function App() {
@@ -237,6 +251,14 @@ export default function App() {
             )}
             {view === 'extraction' && active && (
               <ExtractionStatus slug={active.slug} projectName={active.name} />
+            )}
+            {view === 'admin' && user.role === 'admin' && (
+              // The role check is repeated here rather than trusted from the
+              // nav filter: `view` is component state, so a stale 'admin' left
+              // over from a previous session would otherwise render the screen
+              // for whoever signs in next. Its calls would 403, but the screen
+              // should not appear at all.
+              <Admin projects={projects ?? []} meId={user.id} />
             )}
           </div>
         </main>
