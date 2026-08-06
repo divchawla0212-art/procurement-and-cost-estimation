@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react'
 import { fetchProjects } from './api'
 import type { ProjectSummary } from './types'
 import { useAsync } from './useAsync'
+import { useAuth } from './auth/context'
+import type { User } from './auth/context'
+import { Auth } from './pages/Auth'
 import { Dashboard } from './pages/Dashboard'
 import { Overview } from './pages/Overview'
 import { ComplianceMatrix } from './pages/ComplianceMatrix'
@@ -11,7 +14,18 @@ import { Setup } from './pages/Setup'
 
 type View = 'dashboard' | 'setup' | 'overview' | 'matrix' | 'statement' | 'extraction'
 
-const NAV: { view: View; index: string; label: string; needsProject: boolean }[] = [
+// `roles` is omitted for every entry today because every screen is available
+// to both roles — Task 11 is what adds an admin-only entry. The filter below
+// is real, not decorative: an item that later gains `roles: ['admin']` is
+// hidden from a reviewer's nav without touching this list's shape. This is
+// presentation only — the server enforces the actual boundary.
+const NAV: {
+  view: View
+  index: string
+  label: string
+  needsProject: boolean
+  roles?: Array<User['role']>
+}[] = [
   { view: 'dashboard', index: '00', label: 'Dashboard', needsProject: false },
   { view: 'setup', index: '01', label: 'Set up & ingest', needsProject: false },
   { view: 'overview', index: '02', label: 'Overview', needsProject: true },
@@ -21,10 +35,16 @@ const NAV: { view: View; index: string; label: string; needsProject: boolean }[]
 ]
 
 export default function App() {
+  const { user, ready, logout } = useAuth()
   const [tick, setTick] = useState(0)
+  // Nothing is fetched until a session is confirmed: while signed out (or
+  // still booting) the loader resolves to an empty list without hitting the
+  // network, and the moment `user` changes — sign-in, sign-out — this re-runs
+  // because `user` is a dependency, so the roster is never left showing a
+  // stale or unauthenticated fetch's result.
   const { data: projects, error, loading } = useAsync<ProjectSummary[]>(
-    fetchProjects,
-    [tick],
+    () => (user ? fetchProjects() : Promise.resolve([])),
+    [tick, user],
   )
   const [view, setView] = useState<View>('dashboard')
   const [slug, setSlug] = useState<string | null>(null)
@@ -71,6 +91,13 @@ export default function App() {
     reload()
   }
 
+  // Every hook above must run on every render regardless of auth state, so
+  // these gates come after them rather than before.
+  if (!ready) return <div className="boot" />
+  if (!user) return <Auth />
+
+  const visibleNav = NAV.filter((item) => !item.roles || item.roles.includes(user.role))
+
   return (
     <div className="shell">
       <aside className="rail">
@@ -107,7 +134,7 @@ export default function App() {
 
           <div className="rail-label">Screens</div>
           <ul className="rail-nav">
-            {NAV.map((item) => {
+            {visibleNav.map((item) => {
               const disabled = item.needsProject && !slug
               return (
                 <li key={item.view}>
@@ -125,6 +152,16 @@ export default function App() {
               )
             })}
           </ul>
+        </div>
+
+        <div className="rail-account">
+          <div className="rail-who">
+            <span className="rail-email">{user.email}</span>
+            <span className="rail-role">{user.role}</span>
+          </div>
+          <button type="button" className="rail-signout" onClick={() => logout()}>
+            Sign out
+          </button>
         </div>
 
         <div className="rail-foot">

@@ -206,6 +206,41 @@ a { color: var(--accent-ink); text-underline-offset: 2px; }
   color: var(--ink-muted);
 }
 
+/* signed-in account block, above the rail's descriptive footer */
+.rail-account {
+  padding: 0.85rem 1.1rem;
+  border-top: 1px solid var(--ink-line);
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.rail-who { min-width: 0; flex: 1; display: grid; gap: 0.1rem; }
+.rail-email {
+  font-size: 0.82rem;
+  color: #fff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rail-role {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-muted);
+}
+.rail-signout {
+  flex: none;
+  background: transparent;
+  border: 1px solid var(--ink-line);
+  color: var(--ink-text);
+  border-radius: var(--radius-sm);
+  padding: 0.35rem 0.65rem;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.rail-signout:hover { background: rgba(255, 255, 255, 0.06); border-color: var(--ink-muted); }
+
 /* ----------------------------------------------------------------- canvas */
 
 .canvas { display: flex; flex-direction: column; min-width: 0; }
@@ -804,6 +839,32 @@ table.grid.rank .rank-row:hover td { background: var(--accent-soft); }
 .banner--ok { background: var(--pass-soft); border-color: #bfe3d1; color: #145a43; }
 .banner--warn { background: var(--deviation-soft); border-color: #f0d6a8; color: #7a470a; }
 .banner--error { background: var(--fail-soft); border-color: #f2c9c4; color: #8f2820; }
+
+/* ---------------------------------------------------------- boot / auth gate */
+
+/* Shown for the brief window before GET /api/auth/me settles — never long
+   enough to need a spinner, but present so the screen isn't a blank flash. */
+.boot { min-height: 100vh; background: var(--paper); }
+
+.auth-screen {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  background:
+    linear-gradient(180deg, var(--ink) 0%, var(--ink-2) 100%);
+  padding: 1.5rem;
+}
+.auth-card { width: 100%; max-width: 420px; }
+.auth-card .page-head { margin-bottom: 1rem; }
+.auth-card .eyebrow { color: var(--accent); }
+.auth-card .page-head h1 { color: #fff; }
+.auth-card .page-head .sub { color: var(--ink-muted); }
+.auth-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
 
 .muted { color: var(--muted); }
 .mono { font-family: var(--font-mono); }
