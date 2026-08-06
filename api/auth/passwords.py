@@ -30,7 +30,7 @@ def verify_password(password: str, stored: str) -> bool:
             password.encode("utf-8"),
             salt=salt, n=int(n), r=int(r), p=int(p), dklen=len(expected),
         )
-    except (ValueError, TypeError, MemoryError):
+    except (ValueError, TypeError, MemoryError, OverflowError):
         return False
     return hmac.compare_digest(dk, expected)
 

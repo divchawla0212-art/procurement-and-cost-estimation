@@ -1,4 +1,7 @@
 # tests/test_auth_passwords.py
+import hashlib
+from unittest.mock import patch
+
 from api.auth import passwords
 
 
@@ -37,3 +40,14 @@ def test_verify_reads_cost_parameters_from_the_stored_string():
 
 def test_dummy_hash_is_a_valid_digest_that_matches_nothing_useful():
     assert passwords.verify_password("", passwords.DUMMY_HASH) is False
+
+
+def test_verify_rejects_oversized_dklen_without_raising():
+    """OverflowError from scrypt with huge dklen must be caught and return False."""
+    stored = "scrypt$16384$8$1$aa$" + "b" * 1000  # oversized hash_b64
+
+    def mock_scrypt(*args, **kwargs):
+        raise OverflowError("Python int too large to convert to C long")
+
+    with patch("hashlib.scrypt", side_effect=mock_scrypt):
+        assert passwords.verify_password("anything", stored) is False
