@@ -32,6 +32,7 @@ A bug is only `Closed` once two things are true:
 
 | ID | Severity | Area | Summary | Reported | Status |
 |---|---|---|---|---|---|
+| BUG-013 | S3 | auth / api | `POST /api/auth/login` has no rate limit or lockout, so password guessing is unbounded | 2026-08-06 | Open |
 | BUG-012 | S2 | auth / api | No way for an admin to grant a user access to some projects — access is all-or-nothing because no per-user grant exists to hold | 2026-08-06 | Open |
 | BUG-011 | S1 | auth / api / web | Anyone who reaches the platform can read and write **every** project; there is no admin role and no ownership check | 2026-08-06 | Open |
 | BUG-004 | S1 | api | With no `LLM_PROVIDER` set, ingestion silently falls back to the **mock** provider and stores fabricated facts as `ok` | 2026-08-05 | Open |
@@ -656,4 +657,95 @@ $ grep -c "^@app\." api/main.py
 - **Test:** _none yet. Needs a test asserting a granted user sees exactly the
   granted projects, that revoking a grant removes access on the next request,
   and that an admin's view is unaffected by grants._
+- **Verified:** _unfixed_
+
+---
+
+## BUG-013 — Login accepts unlimited password guesses
+
+- **Severity:** S3
+- **Area:** `api/auth/routes.py` (planned), `POST /api/auth/login`
+- **Status:** Open
+- **Reported:** 2026-08-06
+- **Reporter:** raised and deliberately deferred while designing the auth system
+
+### What happens
+
+The authentication design in
+[`docs/superpowers/specs/2026-08-06-auth-user-hierarchy-design.md`](docs/superpowers/specs/2026-08-06-auth-user-hierarchy-design.md)
+specifies no rate limit, no per-account lockout and no failed-attempt counter on
+`POST /api/auth/login`. An attacker who can reach the port can therefore try
+passwords as fast as the server will hash them, against any email they can
+guess.
+
+`hashlib.scrypt` at `n=16384, r=8, p=1` is the only thing slowing this down. That
+is a real cost per attempt and it is why this is S3 rather than S2 — but it is a
+speed bump, not a limit, and it applies equally to the defender: the same cost
+makes the endpoint a cheap denial-of-service target, since each request buys the
+attacker one guess and buys the server one scrypt.
+
+This entry is filed **before the code exists**, so that the gap is recorded at
+the moment it was chosen rather than discovered later as an oversight.
+
+### What should happen
+
+Failed attempts are counted and throttled. The shape is undecided; the spec
+deliberately did not settle it:
+
+| option | cost |
+|---|---|
+| Per-account lockout after N failures | Needs an unlock path, or an admin who can be locked out of their own deployment. |
+| Per-IP throttle | Useless behind a single NAT — the whole client office is one address. |
+| Exponential backoff per account, no hard lock | No unlock path needed, self-healing, but a determined attacker still gets slow progress. |
+
+Whichever is chosen must not let an attacker lock the sole admin out of the
+platform by guessing at their address.
+
+### Reproduce
+
+Not reproducible yet — the login route does not exist. The evidence is the
+design decision:
+
+**Reproduces:** n/a (defect specified, not yet built)
+
+```
+Section 10, "Out of scope", of the auth design:
+
+  Login rate-limiting and account lockout. Real protection, deliberately
+  deferred: it needs failed-attempt state and an unlock path, and this
+  deployment is a single container on a client's network rather than an
+  internet-facing service.
+```
+
+### Environment
+
+- Branch / commit: `claude/build-verification-pr-26cc64` @ `d00bb8f` (design
+  only; no implementation yet)
+- Python / Node: 3.12.3 / v24.15.0
+- Provider: n/a
+- Data: n/a
+
+### Notes
+
+- **2026-08-06** — Severity S3, not S2: `scrypt` at the specified cost
+  parameters makes bulk guessing expensive, and the deployment is a single
+  container on a client's network rather than an internet-facing service. **Re-triage
+  to S2 if** the platform is ever exposed to the internet, or if the deployment
+  model changes to one host serving several client organisations — at that point
+  unbounded guessing against a known admin address is the whole attack.
+- **2026-08-06** — Fix this together with any work that exposes the service more
+  widely, not on its own schedule. It is cheap to add and expensive to need.
+
+### Fix
+
+- **Spec:** none yet — the auth design
+  (`docs/superpowers/specs/2026-08-06-auth-user-hierarchy-design.md`, section 10)
+  records the deferral but does not design the throttle
+- **Plan:** _not yet written_
+- **Ledger:** none — not part of a phase
+- **Design change:** _pending — needs the choice tabled above_
+- **Commit / PR:** _unfixed_
+- **Test:** _none yet. Needs a test asserting the Nth consecutive failed login
+  for one account is rejected without a password check, and that a correct
+  password still succeeds once the window has passed._
 - **Verified:** _unfixed_
