@@ -114,6 +114,31 @@ Invariants, each with a reason it is stated rather than assumed:
   atomically** via `layout.atomic_write_json`. Two admins granting different
   users concurrently must not lose one grant. This is the same class of defect
   as BUG-009 and BUG-010; there is no reason to re-learn it here.
+  **Every *decision* that gates such a write belongs inside that same lock**,
+  not in the caller. Implementation found two that were not — "does this user
+  still exist" before a grant, and "is this the last admin" before a delete —
+  and both were reachable: two admins deleting each other concurrently each
+  read "two admins, fine" and both writes landed on zero admins. A guard read
+  in one critical section and enforced in another is not a guard.
+- **A grant naming a slug with no project is refused, not stored** (settled
+  during implementation; the plan left it open on purpose). Granting ahead of
+  project creation is a real workflow in some products, but not in this one:
+  within a single buyer org the admin creates the project and then grants
+  access to it, so pre-granting buys nothing, while a silently accepted typo
+  produces a reviewer who sees an empty list and an admin reading a grants
+  table that says they should not. The refusal is what lets that table be read
+  as the truth about who can see what. Two consequences follow and are
+  accepted rather than fixed: a grant whose project is **later deleted** is
+  tolerated and inert — there is no project-deletion route, and
+  `list_projects` filters against what is on disk — and because
+  `create_project` derives a slug from the name, **recreating a project under
+  its old name reactivates any stale grant** for that slug. Both matter only
+  to an operator deleting directories by hand.
+  Matched **exactly**, never by asking the filesystem: on Windows and macOS a
+  path check resolves case-insensitively, which would accept `Tender-One`,
+  store it verbatim, and then never match `tender-one` on read — reintroducing
+  the silent failure this rule exists to prevent, on the platforms CI does not
+  run.
 
 Accepted consequence: authenticating a request reads `auth.json`. At a few
 kilobytes this is negligible. If it ever is not, an in-process cache keyed on
