@@ -33,7 +33,6 @@ A bug is only `Closed` once two things are true:
 | ID | Severity | Area | Summary | Reported | Status |
 |---|---|---|---|---|---|
 | BUG-013 | S3 | auth / api | `POST /api/auth/login` has no rate limit or lockout, so password guessing is unbounded | 2026-08-06 | Open |
-| BUG-012 | S2 | auth / api | No way for an admin to grant a user access to some projects — access is all-or-nothing because no per-user grant exists to hold | 2026-08-06 | Open |
 | BUG-004 | S1 | api | With no `LLM_PROVIDER` set, ingestion silently falls back to the **mock** provider and stores fabricated facts as `ok` | 2026-08-05 | Open |
 | BUG-003 | S4 | web | Empty states still tell the user to run ingestion "in the Streamlit portal", which no longer exists | 2026-08-05 | Open |
 | BUG-002 | S3 | api / procurement/pipeline | No way to force a full re-extraction: `run_ingestion(force=True)` is unreachable from the API and the UI | 2026-08-05 | Open |
@@ -43,6 +42,7 @@ A bug is only `Closed` once two things are true:
 
 | ID | Severity | Area | Summary | Closed | Fixed in | Spec / Plan |
 |---|---|---|---|---|---|---|
+| BUG-012 | S2 | auth / api | No way for an admin to grant a user access to some projects — access is all-or-nothing because no per-user grant exists to hold | 2026-08-06 | `850ae2c..HEAD` (Tasks 10–12) | [design](docs/superpowers/specs/2026-08-06-auth-user-hierarchy-design.md) / [plan](docs/superpowers/plans/2026-08-06-auth-user-hierarchy.md) |
 | BUG-011 | S1 | auth / api / web | Anyone who reaches the platform can read and write **every** project; there is no admin role and no ownership check | 2026-08-06 | `c18dd5d..3b9206b` (Tasks 1–9) | [design](docs/superpowers/specs/2026-08-06-auth-user-hierarchy-design.md) / [plan](docs/superpowers/plans/2026-08-06-auth-user-hierarchy.md) |
 
 ---
@@ -577,8 +577,8 @@ for all of them.
 ## BUG-012 — An admin cannot grant a user access to a subset of projects
 
 - **Severity:** S2
-- **Area:** `api/main.py`, `web/src/auth/`
-- **Status:** Open
+- **Area:** `api/auth/store.py`, `api/admin_routes.py`, `web/src/pages/Admin.tsx`
+- **Status:** Closed
 - **Reported:** 2026-08-06
 - **Reporter:** Rahul Jana (client-reported)
 
@@ -666,15 +666,48 @@ $ grep -c "^@app\." api/main.py
 
 ### Fix
 
-- **Spec:** _not yet written — should be the same spec as BUG-011_
-- **Plan:** _not yet written_
-- **Ledger:** none — not part of a phase
-- **Design change:** _pending — needs the four decisions tabled above_
-- **Commit / PR:** _unfixed_
-- **Test:** _none yet. Needs a test asserting a granted user sees exactly the
-  granted projects, that revoking a grant removes access on the next request,
-  and that an admin's view is unaffected by grants._
-- **Verified:** _unfixed_
+- **Spec:** [`docs/superpowers/specs/2026-08-06-auth-user-hierarchy-design.md`](docs/superpowers/specs/2026-08-06-auth-user-hierarchy-design.md)
+  — the same spec as BUG-011, as the ordering note above expected
+- **Plan:** [`docs/superpowers/plans/2026-08-06-auth-user-hierarchy.md`](docs/superpowers/plans/2026-08-06-auth-user-hierarchy.md), Phase 2 (Tasks 10-12)
+- **Ledger:** [`.superpowers/sdd/2026-08-06-auth-user-hierarchy/progress.md`](.superpowers/sdd/2026-08-06-auth-user-hierarchy/progress.md)
+- **Design change:** grants become a real stored relation and gain the API and
+  screen to manage them. `auth.json.grants` holds `{user_id, slug, granted_at,
+  granted_by}` written only through `store.grant` / `store.revoke`
+  (invariant S4: exactly the grants whose user still exists), five
+  `/api/admin/*` routes behind `require_admin`, and `web/src/pages/Admin.tsx`
+  — a per-reviewer, per-project toggle. `granted_slugs`, which BUG-011 shipped
+  reading a table nothing could write, now has a writer.
+  **Three decisions the spec had left open, settled here:** a grant naming a
+  slug with no project is **refused**, not stored (a silently accepted typo
+  produces a reviewer who sees nothing and an admin who cannot tell why); a
+  grant whose project is later deleted is **tolerated and inert** (there is no
+  project-deletion route, and `list_projects` filters against disk); and slug
+  reuse on project recreation can therefore **reactivate** a stale grant.
+- **Commit / PR:** `850ae2c..HEAD` (`feat(auth): add per-user project grants
+  and the admin API`, `fix(auth): decide both grant/delete guards inside the
+  write's lock`, `feat(web): add the admin user and grant management screen`,
+  `test(auth): extend the mutation matrix for grants and close BUG-012`) —
+  Tasks 10-12 of the plan, branch `claude/build-verification-pr-26cc64`
+- **Test:** `tests/test_api_grants.py` (19 tests) carries the fix's own
+  coverage — grant then revoke moves a reviewer's visibility, granting twice
+  is one row, a reviewer is 403'd from every admin route, and the user list
+  never carries `password_hash` (asserted on raw response text, so a
+  serialization change cannot leak it quietly). Two rows there fail without
+  the fix's concurrency half:
+  `test_two_admins_deleting_each_other_at_once_cannot_reach_zero_admins` and
+  `test_a_grant_racing_that_users_deletion_leaves_no_orphan_row` — both pass
+  if the guard merely *exists* and fail the moment it is decided outside the
+  write's lock. Rows 11 and 12 of `tests/test_auth_integration.py` defend S4
+  across two runs: deleting a user takes their grants and sessions with them,
+  and a refused grant does not poison the pair — the same slug is grantable
+  once the project exists.
+- **Verified:** each new row was mutation-checked by reinstating the specific
+  defect (delete the grant cascade → row 11 fails alone; accept unknown slugs
+  → row 12 fails alone; move the grant write outside the lock → row 4 fails
+  alone), then reverted with the source tree confirmed clean. End-to-end in
+  the browser: an admin granted a reviewer one project, that reviewer saw
+  exactly that project with no admin nav entry and a 403 from
+  `GET /api/admin/users`, and after the revoke their list was empty.
 
 ---
 

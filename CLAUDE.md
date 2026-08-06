@@ -25,8 +25,8 @@ untracked fixture directories are present, never in pass/fail:
 
 | where | baseline |
 |---|---|
-| a developer workstation, `data/` and an ingested multi-vendor `projects/` present | **937 passed, 3 skipped, 0 failed** |
-| CI, and any clean checkout | **930 passed, 10 skipped, 0 failed** |
+| a developer workstation, `data/` and an ingested multi-vendor `projects/` present | **958 passed, 3 skipped, 0 failed** |
+| CI, and any clean checkout | **951 passed, 10 skipped, 0 failed** |
 
 Anything else is a real regression.
 
@@ -38,27 +38,27 @@ three skips a workstation already shows are credential guards
 `test_procurement_real_data.py`) and skip in both places.
 
 So the CI row is the workstation row with the four corpus-coverage passes and
-the three `data/` passes turned into skips — `930 = 937 - 4 - 3`,
-`10 = 3 + 4 + 3`; 940 tests either way. When the counts move, measure the
+the three `data/` passes turned into skips — `951 = 958 - 4 - 3`,
+`10 = 3 + 4 + 3`; 961 tests either way. When the counts move, measure the
 workstation row and derive the CI row from it; editing the two rows
 independently is how they drift apart.
 
-**This particular update ran the derivation backwards, because it had to.**
-The checkout that produced these numbers had neither `data/` nor a
-fixture-bearing `projects/`, so the workstation row was not measurable there
-— only the clean/CI row was, at **930 passed, 10 skipped**. The 937/3
-workstation figure above was *derived* from that measurement by adding the
-same 7 back (`937 = 930 + 4 + 3`, `3 = 10 - 4 - 3`), the reverse of the
-normal direction. The arithmetic reconciles either way, since it's the same
-equation read backwards, but reconciling is not the same as measuring:
-**937/3 is an assumption that the four corpus-coverage tests and the three
-`data/`-guarded tests would all still pass on a fixture-bearing checkout, not
-a confirmed result.** The 930/10 row is the one this update actually ran and
+**These numbers ran the derivation backwards, because they had to.** The
+checkout that produced them had neither `data/` nor a fixture-bearing
+`projects/`, so the workstation row was not measurable there — only the
+clean/CI row was, at **951 passed, 10 skipped**. The 958/3 workstation figure
+above was *derived* from that measurement by adding the same 7 back
+(`958 = 951 + 4 + 3`, `3 = 10 - 4 - 3`), the reverse of the normal direction.
+The arithmetic reconciles either way, since it's the same equation read
+backwards, but reconciling is not the same as measuring: **958/3 is an
+assumption that the four corpus-coverage tests and the three `data/`-guarded
+tests would all still pass on a fixture-bearing checkout, not a confirmed
+result.** The 951/10 row is the one that was actually run, and the one to
 trust without qualification. If you have `data/` and a multi-vendor
-`projects/` and get something other than 937/3, that is not necessarily a
-regression — it may just mean 937/3 was wrong and this note was overdue for
-a real measurement; re-run here and update both rows from *that* one, the
-normal way described above.
+`projects/` and get something other than 958/3, that is not necessarily a
+regression — it may just mean the derived row was wrong and this note was
+overdue for a real measurement; re-run here and update both rows from *that*
+one, the normal way described above.
 
 **There is no longer a workstation-only failure.** Until the Streamlit portal
 was removed, `tests/test_portal_app.py::test_missing_api_key_does_not_block_creation`

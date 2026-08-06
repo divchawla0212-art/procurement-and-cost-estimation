@@ -9,7 +9,15 @@ a role change, a deleted file, a restart, or a second concurrent caller
 would, and then makes a second request that must behave differently because
 of the mutation -- not just assert that the mutation happened.
 
-The ten rows, from `.superpowers/sdd/2026-08-06-auth-user-hierarchy/task-9-brief.md`:
+Rows 1-10 come from
+`.superpowers/sdd/2026-08-06-auth-user-hierarchy/task-9-brief.md` (Phase 1);
+rows 11-12 were added by Task 12 once grants had an API to be created
+through. Task 12 also re-pointed rows 2, 3 and 4 at `/api/admin/*`: they
+hand-wrote `auth.json` when nothing else could write it, which proved the
+enforcement side reads the document but not that the only thing which writes
+it in production produces that same shape. Row 5's mutation is a role change,
+for which there is no route in this API at all, so it still edits the
+document directly -- deliberately, not by omission.
 
 | # | mutation between run 1 and run 2                          | invariant | test |
 |---|-------------------------------------------------------------|-----------|------|
@@ -23,6 +31,8 @@ The ten rows, from `.superpowers/sdd/2026-08-06-auth-user-hierarchy/task-9-brief
 | 8 | the process restarts between requests                         | S3        | `test_a_session_survives_a_process_restart` |
 | 9 | `ALLOW_SIGNUP` flips 1 -> 0 between requests                   | --        | `test_disabling_signup_mid_session_blocks_new_signups_not_existing_sessions` |
 | 10| the same email signs up twice concurrently                    | S1        | `test_two_concurrent_signups_for_the_same_email_leave_exactly_one_user` |
+| 11| a user is deleted while holding grants                        | S4        | `test_deleting_a_user_who_holds_grants_leaves_no_grant_behind` |
+| 12| a grant names a slug with no project                          | S4, A2    | `test_a_grant_for_a_slug_with_no_project_is_refused` |
 
 Row 7 is not duplicated here. `tests/test_auth_middleware.py::
 test_every_api_route_outside_the_allowlist_requires_a_session` already sweeps
@@ -93,20 +103,21 @@ def _clients(tmp_path, monkeypatch):
     return admin, reviewer
 
 
-def _grant(tmp_path, user_id: str, slug: str) -> None:
-    """Write a grant directly into `auth.json`.
+def _grant(admin: TestClient, user_id: str, slug: str) -> None:
+    """Grant through the admin API, the way an admin actually would.
 
-    Written before Task 10's admin API existed. Kept pointing at the raw
-    document on purpose: these rows test what the *enforcement* side does
-    with a grant that is present, so reaching them through `store.grant`
-    would make a Task 7 regression depend on Task 10 still working. Task 12
-    owns adding the rows that exercise the API path itself.
+    These rows wrote straight into `auth.json` until Task 10 shipped the
+    route, because there was nothing else to call. Going through the API now
+    is the point of Task 12: a row that hand-writes the document proves the
+    enforcement side reads it, but says nothing about whether the only thing
+    that ever writes it in production produces that same shape.
+
+    Task 7's own suite (`tests/test_api_authorization.py`) still builds its
+    grants by hand, so enforcement regressions are still caught independently
+    of whether this route works.
     """
-    with auth_store.locked_update(str(tmp_path)) as doc:
-        doc["grants"].append({
-            "user_id": user_id, "slug": slug,
-            "granted_at": "2026-08-06T00:00:00+00:00", "granted_by": "u_admin",
-        })
+    res = admin.post(f"/api/admin/users/{user_id}/grants", json={"slug": slug})
+    assert res.status_code == 201, f"grant failed: {res.status_code} {res.text}"
 
 
 # --- Row 1 ------------------------------------------------------------------
@@ -136,12 +147,12 @@ def test_revoked_grant_takes_effect_without_a_re_login(tmp_path, monkeypatch):
     admin, reviewer = _clients(tmp_path, monkeypatch)
     admin.post("/api/projects", json={"name": "Tender One"})
     rev = auth_store.find_by_email(str(tmp_path), REVIEWER_EMAIL)
-    _grant(tmp_path, rev.id, "tender-one")
+    _grant(admin, rev.id, "tender-one")
 
     assert [p["slug"] for p in reviewer.get("/api/projects").json()] == ["tender-one"]  # run 1
 
-    with auth_store.locked_update(str(tmp_path)) as doc:
-        doc["grants"] = [g for g in doc["grants"] if g["user_id"] != rev.id]  # mutation: revoke
+    # mutation: revoke through the route an admin would actually click
+    assert admin.delete(f"/api/admin/users/{rev.id}/grants/tender-one").status_code == 204
 
     assert reviewer.get("/api/projects").json() == []  # run 2, same cookie
 
@@ -157,7 +168,7 @@ def test_a_project_deleted_from_disk_vanishes_despite_a_live_grant(tmp_path, mon
     admin, reviewer = _clients(tmp_path, monkeypatch)
     admin.post("/api/projects", json={"name": "Tender One"})
     rev = auth_store.find_by_email(str(tmp_path), REVIEWER_EMAIL)
-    _grant(tmp_path, rev.id, "tender-one")
+    _grant(admin, rev.id, "tender-one")
 
     assert [p["slug"] for p in reviewer.get("/api/projects").json()] == ["tender-one"]  # run 1
 
@@ -184,11 +195,16 @@ def test_two_concurrent_grants_to_different_users_both_survive(tmp_path, monkeyp
     this fast would almost always just serialize by scheduler luck, and the
     test would pass whether or not the lock actually worked.
 
-    This exercises `api/auth/store.py` directly rather than through the API
-    client pair the other rows use: nothing here is HTTP-shaped, and there is
-    no admin-facing grant endpoint yet (Task 10) to drive this through.
+    Task 12 re-pointed this row at `POST /api/admin/users/{id}/grants`. It
+    drove `store.locked_update` by hand while Task 10's route did not exist,
+    which proved the lock serialized two writers but not that the thing which
+    writes grants in production goes through that lock at all — a route that
+    appended outside it would have left this row green.
     """
     root = str(tmp_path)
+    admin, _ = _clients(tmp_path, monkeypatch)
+    admin.post("/api/projects", json={"name": "Tender One"})
+    admin.post("/api/projects", json={"name": "Tender Two"})
     u1 = auth_store.create_user(root, "g1@t.local", "hash", "reviewer")
     u2 = auth_store.create_user(root, "g2@t.local", "hash", "reviewer")
 
@@ -201,14 +217,13 @@ def test_two_concurrent_grants_to_different_users_both_survive(tmp_path, monkeyp
     monkeypatch.setattr(layout, "atomic_write_json", slow_write)
 
     barrier = threading.Barrier(2)
+    statuses: dict[str, int] = {}
 
     def grant(user_id, slug):
         barrier.wait()
-        with auth_store.locked_update(root) as doc:
-            doc["grants"].append({
-                "user_id": user_id, "slug": slug,
-                "granted_at": "2026-08-06T00:00:00+00:00", "granted_by": "u_admin",
-            })
+        statuses[slug] = admin.post(
+            f"/api/admin/users/{user_id}/grants", json={"slug": slug}
+        ).status_code
 
     t1 = threading.Thread(target=grant, args=(u1.id, "tender-one"))
     t2 = threading.Thread(target=grant, args=(u2.id, "tender-two"))
@@ -217,6 +232,7 @@ def test_two_concurrent_grants_to_different_users_both_survive(tmp_path, monkeyp
     t1.join(timeout=5)
     t2.join(timeout=5)
     assert not t1.is_alive() and not t2.is_alive(), "a thread hung -- the lock deadlocked"
+    assert statuses == {"tender-one": 201, "tender-two": 201}, statuses
 
     grants = {(g["user_id"], g["slug"]) for g in auth_store.read_auth(root)["grants"]}
     assert grants == {(u1.id, "tender-one"), (u2.id, "tender-two")}
@@ -442,3 +458,65 @@ def test_two_concurrent_signups_for_the_same_email_leave_exactly_one_user(tmp_pa
     root = str(tmp_path)
     matches = [u for u in auth_store.read_auth(root)["users"] if u["email"] == "dup@t.local"]
     assert len(matches) == 1
+
+
+# --- Row 11 -----------------------------------------------------------------
+
+def test_deleting_a_user_who_holds_grants_leaves_no_grant_behind(tmp_path, monkeypatch):
+    """Row 11 defends S4: `grants` holds exactly the grants whose user still
+    exists, so removing a user has to take their grants with them.
+
+    A leftover row is not inert forever. Ids are random, so it will not match
+    a future user by accident -- but it is a standing record that someone who
+    is gone still has access to a named project, which is what an admin reads
+    the grants table to find out. Both runs go through the API: the grant is
+    created the way an admin creates one, and the deletion is the route an
+    admin actually clicks, not `store.delete_user` called directly.
+    """
+    admin, reviewer = _clients(tmp_path, monkeypatch)
+    admin.post("/api/projects", json={"name": "Tender One"})
+    rev = auth_store.find_by_email(str(tmp_path), REVIEWER_EMAIL)
+    _grant(admin, rev.id, "tender-one")
+
+    assert [p["slug"] for p in reviewer.get("/api/projects").json()] == ["tender-one"]  # run 1
+    assert len(auth_store.read_auth(str(tmp_path))["grants"]) == 1
+
+    assert admin.delete(f"/api/admin/users/{rev.id}").status_code == 204  # mutation
+
+    doc = auth_store.read_auth(str(tmp_path))                             # run 2
+    assert not any(g["user_id"] == rev.id for g in doc["grants"]), doc["grants"]
+    assert auth_store.find_by_id(str(tmp_path), rev.id) is None
+    # and the cascade reaches sessions too, so the cookie is dead as well
+    assert reviewer.get("/api/projects").status_code == 401
+
+
+# --- Row 12 -----------------------------------------------------------------
+
+def test_a_grant_for_a_slug_with_no_project_is_refused(tmp_path, monkeypatch):
+    """Row 12 defends S4 and A2, and records a decision the plan deliberately
+    left open: **a grant naming a slug with no project is refused, not stored.**
+
+    Both readings were defensible. Granting ahead of project creation is a
+    real workflow in some products; refusing is right in this one, because
+    within a single buyer org the admin creates the project and then grants
+    access to it, so pre-granting buys nothing -- while a silently accepted
+    typo produces a reviewer who sees an empty list and an admin looking at a
+    grants table that says they should not. The refusal is what makes the
+    grants table readable as the truth about who can see what.
+
+    The second run is the point: after the refusal, the same slug must still
+    be grantable once the project exists. A 404 that also poisoned the pair
+    would be a worse bug than the one being prevented.
+    """
+    admin, reviewer = _clients(tmp_path, monkeypatch)
+    rev = auth_store.find_by_email(str(tmp_path), REVIEWER_EMAIL)
+
+    res = admin.post(f"/api/admin/users/{rev.id}/grants", json={"slug": "tender-one"})
+    assert res.status_code == 404, res.text                                # run 1
+    assert auth_store.read_auth(str(tmp_path))["grants"] == []
+    assert reviewer.get("/api/projects").json() == []
+
+    admin.post("/api/projects", json={"name": "Tender One"})               # mutation
+
+    _grant(admin, rev.id, "tender-one")                                    # run 2
+    assert [p["slug"] for p in reviewer.get("/api/projects").json()] == ["tender-one"]
