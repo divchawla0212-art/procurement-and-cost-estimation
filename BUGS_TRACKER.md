@@ -42,7 +42,7 @@ A bug is only `Closed` once two things are true:
 
 | ID | Severity | Area | Summary | Closed | Fixed in | Spec / Plan |
 |---|---|---|---|---|---|---|
-| BUG-012 | S2 | auth / api | No way for an admin to grant a user access to some projects — access is all-or-nothing because no per-user grant exists to hold | 2026-08-06 | `850ae2c..HEAD` (Tasks 10–12) | [design](docs/superpowers/specs/2026-08-06-auth-user-hierarchy-design.md) / [plan](docs/superpowers/plans/2026-08-06-auth-user-hierarchy.md) |
+| BUG-012 | S2 | auth / api | No way for an admin to grant a user access to some projects — access is all-or-nothing because no per-user grant exists to hold | 2026-08-06 | `850ae2c..03778fa` (Tasks 10–12) | [design](docs/superpowers/specs/2026-08-06-auth-user-hierarchy-design.md) / [plan](docs/superpowers/plans/2026-08-06-auth-user-hierarchy.md) |
 | BUG-011 | S1 | auth / api / web | Anyone who reaches the platform can read and write **every** project; there is no admin role and no ownership check | 2026-08-06 | `c18dd5d..3b9206b` (Tasks 1–9) | [design](docs/superpowers/specs/2026-08-06-auth-user-hierarchy-design.md) / [plan](docs/superpowers/plans/2026-08-06-auth-user-hierarchy.md) |
 
 ---
@@ -683,7 +683,7 @@ $ grep -c "^@app\." api/main.py
   grant whose project is later deleted is **tolerated and inert** (there is no
   project-deletion route, and `list_projects` filters against disk); and slug
   reuse on project recreation can therefore **reactivate** a stale grant.
-- **Commit / PR:** `850ae2c..HEAD` (`feat(auth): add per-user project grants
+- **Commit / PR:** `850ae2c..03778fa` (`feat(auth): add per-user project grants
   and the admin API`, `fix(auth): decide both grant/delete guards inside the
   write's lock`, `feat(web): add the admin user and grant management screen`,
   `test(auth): extend the mutation matrix for grants and close BUG-012`) —
