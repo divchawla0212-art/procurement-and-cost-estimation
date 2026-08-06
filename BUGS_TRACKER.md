@@ -32,6 +32,8 @@ A bug is only `Closed` once two things are true:
 
 | ID | Severity | Area | Summary | Reported | Status |
 |---|---|---|---|---|---|
+| BUG-012 | S2 | auth / api | No way for an admin to grant a user access to some projects — access is all-or-nothing because no per-user grant exists to hold | 2026-08-06 | Open |
+| BUG-011 | S1 | auth / api / web | Anyone who reaches the platform can read and write **every** project; there is no admin role and no ownership check | 2026-08-06 | Open |
 | BUG-004 | S1 | api | With no `LLM_PROVIDER` set, ingestion silently falls back to the **mock** provider and stores fabricated facts as `ok` | 2026-08-05 | Open |
 | BUG-003 | S4 | web | Empty states still tell the user to run ingestion "in the Streamlit portal", which no longer exists | 2026-08-05 | Open |
 | BUG-002 | S3 | api / procurement/pipeline | No way to force a full re-extraction: `run_ingestion(force=True)` is unreachable from the API and the UI | 2026-08-05 | Open |
@@ -399,4 +401,259 @@ No key was present in the container. `classified_by: llm` and
   `LLM_PROVIDER` and no keys returns 400 and leaves the store untouched. Note
   the suite itself depends on `mock` being selectable, so the fix must keep an
   explicit path to it._
+- **Verified:** _unfixed_
+
+---
+
+## BUG-011 — Everyone who reaches the platform can read and write every project
+
+- **Severity:** S1
+- **Area:** `api/main.py`, `web/src/App.tsx`, `web/src/auth/`
+- **Status:** Open
+- **Reported:** 2026-08-06
+- **Reporter:** Rahul Jana (client-reported)
+
+### What happens
+
+There is no notion of *who* a request is from, anywhere in the system, and no
+notion of which projects a person is entitled to.
+
+**On the API — the authoritative surface.** None of the 16 routes in
+`api/main.py` takes a caller identity. There is no `Depends(...)` security
+dependency, no `Authorization` header is read, and no session is looked up.
+`list_projects` (`api/main.py:113`) is the whole of the access decision:
+
+```python
+@app.get("/api/projects")
+def list_projects() -> list[dict]:
+    return [_project_summary(p) for p in proj.list_projects(ROOT)]
+```
+
+It enumerates every project under `ROOT` for every caller. The same holds for
+the mutating routes — `POST /api/projects/{slug}/ingest`,
+`PUT /api/projects/{slug}/fx-rates`,
+`PUT /api/projects/{slug}/vendors/{vendor}/feedback`,
+`POST /api/projects/{slug}/vendors` — so an anonymous caller can not only read
+every tender's vendor pricing, they can overwrite the authoritative store.
+
+**On the web client — cosmetic only.** The mock auth added on branch
+`authentication` (PR #7) gates rendering with one line,
+`if (!user) return <Auth />` (`web/src/App.tsx:79`). Once past it, the project
+switcher is populated straight from `GET /api/projects`, so every signed-in user
+sees every project. The gate is client-side, so it is not a control at all:
+`curl` reaches the same data without ever loading the SPA.
+
+**No role exists to check.** `User` carries a single field
+(`web/src/auth/context.ts:3-5`):
+
+```ts
+export interface User {
+  email: string
+}
+```
+
+There is no `role`, no `admin` flag, and no server-side user record —
+`AuthProvider` stores accounts as plaintext `{email, password}` in
+`localStorage` under `te_users` (`web/src/auth/AuthProvider.tsx:16-36`). The
+file says so itself at line 9: "SECURITY NOTE: this is a UI/demo convenience,
+NOT real auth."
+
+### What should happen
+
+Only an admin sees every project. A non-admin sees exactly the projects they
+have been granted, and the decision is made **on the server**, per request,
+against an authenticated identity — never in the SPA.
+
+That requires three things this codebase does not yet have:
+
+1. A real authentication backend — server-side accounts, hashed passwords,
+   tokens — replacing the `localStorage` mock outright.
+2. A role on the user record, with `admin` as a distinct, assignable value.
+3. An ownership/grant check inside the API, so `list_projects` returns a
+   filtered set and every `{slug}` route rejects a slug the caller has no claim
+   to with `403` rather than serving it.
+
+Point 3 is the load-bearing one: without it, points 1 and 2 still leave every
+project readable by anyone who can call the API directly.
+
+The per-user grant model that a non-admin's access is read from is tracked
+separately as BUG-012; this entry covers the missing admin boundary and the
+absent server-side check that BUG-012 depends on.
+
+### Reproduce
+
+The API-level reproduction needs no browser and no account, and works on `main`
+as well as on the `authentication` branch:
+
+1. Start the stack: `PROCUREMENT_HOST_PORT=8300 docker compose up -d`
+2. `curl -s http://localhost:8300/api/projects`
+
+**Reproduces:** always
+
+```
+$ curl -s http://localhost:8000/api/projects | python -c "import json,sys; print([p['slug'] for p in json.load(sys.stdin)])"
+['coverage-floor-t7', 'gas-07', 'gas-14', 'gas-15', 'gas-7', 'gas-v1',
+ 'gas-v2', 'phase4-acceptance', 'phase4b-acceptance', 'phase4c-shipped-defaults']
+
+Ten projects, no credentials presented, no header sent.
+```
+
+Via the UI, on the `authentication` branch:
+
+1. Open the app and press **Sign up**.
+2. Register any email and password — nothing validates the address, and no
+   approval step exists.
+3. Read the project switcher in the rail.
+
+```
+Observed: the switcher lists all ten projects for a brand-new self-registered
+account. Every review screen, every export, and the ingest action are reachable
+for all of them.
+```
+
+### Environment
+
+- Branch / commit: `main` @ `596cb86`; also `authentication` @ `b919830` (PR #7),
+  which adds the mock login without changing any of the above
+- Python / Node: 3.12.3 / v24.15.0
+- Provider: any — the defect is in the access path, not the extraction path
+- Data: any `projects/` directory holding more than one project
+
+### Notes
+
+- **2026-08-06** — Severity is S1 rather than S2 because the exposure is
+  bidirectional. Read access leaks one tender's vendor pricing to anyone
+  evaluating another, which is a confidentiality breach in its own right; write
+  access means an unauthenticated caller can `POST /ingest` or `PUT /fx-rates`
+  against a project they have nothing to do with, which puts wrong numbers in
+  front of a reviewer making an award decision. The store invariants in
+  `CLAUDE.md` all assume the writer is entitled to write.
+- **2026-08-06** — Do not fix this in the SPA. `web/src/App.tsx:79` is where the
+  symptom is visible, but a client-side gate cannot be a control: the data is
+  served by the API, and the API is what has to say no. A fix that only filters
+  the switcher would close the report while leaving `curl` fully effective.
+- **2026-08-06** — This blocks any multi-tenant or multi-client deployment.
+  Single-operator local use is the only configuration in which the current
+  behaviour is acceptable, and nothing in the product says so.
+- **2026-08-06** — Related: BUG-004 is the other route by which an
+  unauthenticated `POST /ingest` corrupts a store. They should probably be
+  fixed in the same pass over the ingest endpoint.
+
+### Fix
+
+- **Spec:** _not yet written — needs a design covering the auth backend, the
+  role model, and the API-side authorization check together_
+- **Plan:** _not yet written_
+- **Ledger:** none — not part of a phase
+- **Design change:** _pending — this introduces server-side identity, which the
+  system does not currently have at all_
+- **Commit / PR:** _unfixed_
+- **Test:** _none yet. Needs an API test asserting `GET /api/projects` as a
+  non-admin returns only that user's projects, and that a `{slug}` route for an
+  unentitled project returns 403 — not 404, which would leak existence, and not
+  200._
+- **Verified:** _unfixed_
+
+---
+
+## BUG-012 — An admin cannot grant a user access to a subset of projects
+
+- **Severity:** S2
+- **Area:** `api/main.py`, `web/src/auth/`
+- **Status:** Open
+- **Reported:** 2026-08-06
+- **Reporter:** Rahul Jana (client-reported)
+
+### What happens
+
+Access is all-or-nothing, and there is no mechanism by which it could be
+anything else. Nothing in the system records that user *X* may see project *Y*:
+
+- No grant/membership store exists. `projects/<slug>/store/` holds documents,
+  facts, requirements and FX rates — no principal is named in any snapshot, and
+  `procurement/store/snapshots.py` has no collection for one.
+- The user record has no place to hold grants — `User` is `{ email }`
+  (`web/src/auth/context.ts:3-5`), and the persisted form is
+  `{ email, password }` (`web/src/auth/AuthProvider.tsx:16-19`).
+- There is no admin surface to make a grant from. The nav in `web/src/App.tsx`
+  has six screens — dashboard, setup, overview, compliance, statement,
+  extraction status — and no user-management screen.
+- There is no API to carry a grant: of the 16 routes in `api/main.py`, none is
+  a user, role, membership or invitation route.
+
+So even after an admin boundary exists, the only two states available are "sees
+everything" and "sees nothing". A reviewer who should see one tender must be
+given every tender, or kept out of the platform entirely.
+
+### What should happen
+
+An admin can grant and revoke a named user's access to a named project, and a
+non-admin's view — the project list, every `{slug}` route, and every export —
+is computed from those grants server-side.
+
+Undecided, and to settle in the spec rather than here:
+
+| question | why it matters |
+|---|---|
+| Are grants per-project, or per-group-of-projects? | Per-project is simpler; a client with forty tenders will ask for groups. |
+| Is there a read-only grant distinct from a read-write one? | Ingest and FX edits change the award numbers; review does not. Collapsing them means anyone who can look can also overwrite. |
+| Where do grants live? | A store snapshot inherits the invariants in `CLAUDE.md`. An `index/` table does not, and `index/store.db` is explicitly "derived and disposable" — so grants cannot live there. |
+| What happens to a project whose only grantee is deleted? | An orphaned project no non-admin can reach is a support call. |
+
+### Reproduce
+
+Not reproducible as a sequence of steps — the capability is absent, so there is
+nothing to drive. The evidence is the absence itself. Run from a checkout of
+`authentication` (PR #7), where `web/src/auth/` exists; on `main` drop that path
+and the result is the same:
+
+**Reproduces:** always (capability absent)
+
+```
+$ grep -rniE "\b(role|admin|permission|grant|member|owner|acl)\b" api/main.py web/src/auth/
+$ echo $?
+1           # no matches anywhere in the API or the auth module
+
+$ grep -c "^@app\." api/main.py
+16          # 16 routes — 15 project routes plus /api/health, and not one
+            # user, role or membership route among them
+```
+
+### Environment
+
+- Branch / commit: `main` @ `596cb86`; also `authentication` @ `b919830` (PR #7)
+- Python / Node: 3.12.3 / v24.15.0
+- Provider: n/a — no provider involvement
+- Data: n/a — independent of project contents
+
+### Notes
+
+- **2026-08-06** — Filed as a bug at the reporter's request. It is more
+  precisely a missing capability than a defect in shipped behaviour: nothing
+  here worked before and regressed. Recording it as a bug is fine, but whoever
+  schedules it should treat it as a feature-sized piece of work — it needs a
+  data model, an API, an admin UI and a migration for existing projects, none
+  of which exist.
+- **2026-08-06** — **Ordering: BUG-011 first.** This entry is the grant model;
+  BUG-011 is the server-side check that would consult it. Building grants on
+  top of an API that never authorizes anything produces a permissions screen
+  that changes nothing, which is worse than no screen at all — it reads as a
+  control while `curl` still returns every project. Whoever picks these up
+  should expect one spec covering both.
+- **2026-08-06** — Severity S2 rather than S1: no wrong number reaches a
+  reviewer through this gap alone, and no data is lost. The exposure is
+  BUG-011's. What is broken here is that the only workaround for a user who
+  needs one tender is to grant them all of them — which is not a workaround,
+  it is the S1.
+
+### Fix
+
+- **Spec:** _not yet written — should be the same spec as BUG-011_
+- **Plan:** _not yet written_
+- **Ledger:** none — not part of a phase
+- **Design change:** _pending — needs the four decisions tabled above_
+- **Commit / PR:** _unfixed_
+- **Test:** _none yet. Needs a test asserting a granted user sees exactly the
+  granted projects, that revoking a grant removes access on the next request,
+  and that an admin's view is unaffected by grants._
 - **Verified:** _unfixed_
