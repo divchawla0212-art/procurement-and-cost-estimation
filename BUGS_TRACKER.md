@@ -43,7 +43,7 @@ A bug is only `Closed` once two things are true:
 
 | ID | Severity | Area | Summary | Closed | Fixed in | Spec / Plan |
 |---|---|---|---|---|---|---|
-| BUG-011 | S1 | auth / api / web | Anyone who reaches the platform can read and write **every** project; there is no admin role and no ownership check | 2026-08-06 | `c18dd5d..`*this commit* (Tasks 1–9) | [design](docs/superpowers/specs/2026-08-06-auth-user-hierarchy-design.md) / [plan](docs/superpowers/plans/2026-08-06-auth-user-hierarchy.md) |
+| BUG-011 | S1 | auth / api / web | Anyone who reaches the platform can read and write **every** project; there is no admin role and no ownership check | 2026-08-06 | `c18dd5d..3b9206b` (Tasks 1–9) | [design](docs/superpowers/specs/2026-08-06-auth-user-hierarchy-design.md) / [plan](docs/superpowers/plans/2026-08-06-auth-user-hierarchy.md) |
 
 ---
 
@@ -552,7 +552,7 @@ for all of them.
   that derives the visible project set per request from role and grants
   (`api/auth/deps.py`, A2/A3) — replacing the client-side `localStorage` mock
   auth described in "What happens" above outright, per D1/D5/D7 of the design.
-- **Commit / PR:** `c18dd5d..`*this commit* (`test(auth): add the two-run
+- **Commit / PR:** `c18dd5d..3b9206b` (`test(auth): add the two-run
   mutation matrix and close BUG-011`) — Tasks 1-9 of the plan, branch
   `claude/build-verification-pr-26cc64`
 - **Test:** `tests/test_auth_middleware.py::

@@ -182,8 +182,11 @@ def test_two_concurrent_grants_to_different_users_both_survive(tmp_path, monkeyp
     forced to overlap in real time. Without the injected delay, two threads
     this fast would almost always just serialize by scheduler luck, and the
     test would pass whether or not the lock actually worked.
+
+    This exercises `api/auth/store.py` directly rather than through the API
+    client pair the other rows use: nothing here is HTTP-shaped, and there is
+    no admin-facing grant endpoint yet (Task 10) to drive this through.
     """
-    admin, reviewer = _clients(tmp_path, monkeypatch)
     root = str(tmp_path)
     u1 = auth_store.create_user(root, "g1@t.local", "hash", "reviewer")
     u2 = auth_store.create_user(root, "g2@t.local", "hash", "reviewer")
