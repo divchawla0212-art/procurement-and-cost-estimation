@@ -329,6 +329,14 @@ def test_a_session_survives_a_process_restart(tmp_path):
     interpreter, so any module-level cache a broken implementation kept
     sessions in would still be there. Only ending the process and starting a
     new one proves the session survives strictly because it was on disk.
+
+    This repo has no `pytest-timeout` (adding one would be a new runtime
+    dependency, which the global constraints forbid), so a genuinely hung
+    `uvicorn` subprocess here is bounded only by this test's own internal
+    deadlines -- `_start_server`'s 15s health-check poll and
+    `_stop_server`'s 5s `terminate`/`kill` waits -- not by any external
+    harness timeout. If this test ever hangs the whole suite instead of
+    failing cleanly, look there first.
     """
     root = str(tmp_path)
     port1 = _free_port()
