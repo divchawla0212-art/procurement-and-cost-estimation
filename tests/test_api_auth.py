@@ -60,6 +60,21 @@ def test_login_sets_an_httponly_cookie(tmp_path, monkeypatch):
     assert "te_session=" in cookie
     assert "HttpOnly" in cookie
     assert "SameSite=Lax" in cookie
+    # Plain-HTTP request (TestClient's default scheme): `Secure` must be
+    # absent, or the documented plain-HTTP docker-compose deployment breaks.
+    assert "Secure" not in cookie
+
+
+def test_login_over_https_marks_the_cookie_secure(tmp_path, monkeypatch):
+    """`Secure` is derived from the request scheme, not hardcoded either way."""
+    client = _client(tmp_path, monkeypatch)
+    client.post("/api/auth/signup", json={"email": "a@b.com", "password": "longenough"})
+    client.cookies.clear()
+    https_client = TestClient(client.app, base_url="https://testserver")
+    res = https_client.post("/api/auth/login", json={"email": "a@b.com", "password": "longenough"})
+    assert res.status_code == 200
+    cookie = res.headers["set-cookie"]
+    assert "Secure" in cookie
 
 
 def test_wrong_password_and_unknown_email_give_the_same_answer(tmp_path, monkeypatch):
