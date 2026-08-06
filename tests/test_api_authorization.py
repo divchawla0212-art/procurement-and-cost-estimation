@@ -72,3 +72,16 @@ def test_a_granted_reviewer_reads_and_may_record_feedback(tmp_path, monkeypatch)
                               "granted_at": "2026-08-06T00:00:00+00:00", "granted_by": "u_admin"})
     assert [p["slug"] for p in reviewer.get("/api/projects").json()] == ["tender-one"]
     assert reviewer.get("/api/projects/tender-one/summary").status_code == 200
+
+
+def test_ungranted_reviewer_gets_403_on_the_feedback_write(tmp_path, monkeypatch):
+    """The feedback route is guarded by require_project_access like the reads,
+    not merely by require_admin — an ungranted reviewer is refused here too,
+    before save_feedback ever looks for a vendor."""
+    admin, reviewer = _clients(tmp_path, monkeypatch)
+    admin.post("/api/projects", json={"name": "Tender One"})
+    resp = reviewer.put(
+        "/api/projects/tender-one/vendors/acme/feedback",
+        json={"text": "looks fine", "reason": "spot check"},
+    )
+    assert resp.status_code == 403
