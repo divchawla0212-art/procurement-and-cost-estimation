@@ -1,3 +1,5 @@
+from fastapi.testclient import TestClient
+
 from api.auth import bootstrap, store
 
 
@@ -33,3 +35,26 @@ def test_does_not_seed_when_users_already_exist(tmp_path, monkeypatch):
     monkeypatch.setenv("ADMIN_PASSWORD", "bootstrappw")
     assert bootstrap.seed_admin_if_empty(str(tmp_path)) is None
     assert [u["role"] for u in store.read_auth(str(tmp_path))["users"]] == ["reviewer"]
+
+
+def test_startup_hook_seeds_admin_when_app_boots(tmp_path, monkeypatch):
+    """Integration test: verify startup hook actually runs via app lifespan.
+
+    Bare TestClient() does not run lifespan; only `with TestClient(app) as c:` does.
+    This test verifies that the seed call is reached and executed on app startup.
+    """
+    monkeypatch.setenv("PROCUREMENT_PROJECTS_ROOT", str(tmp_path))
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.setenv("ADMIN_EMAIL", "startup@admin.com")
+    monkeypatch.setenv("ADMIN_PASSWORD", "bootstrappw")
+
+    import api.main as api_main
+    monkeypatch.setattr(api_main, "ROOT", str(tmp_path))
+
+    # Context manager enters the lifespan, which calls the startup hook
+    with TestClient(api_main.app) as client:
+        # After startup, the admin should exist
+        auth = store.read_auth(str(tmp_path))
+        assert len(auth["users"]) == 1
+        assert auth["users"][0]["email"] == "startup@admin.com"
+        assert auth["users"][0]["role"] == "admin"

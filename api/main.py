@@ -11,6 +11,7 @@ import os
 import shutil
 import tempfile
 import zipfile
+from contextlib import asynccontextmanager
 
 from fastapi import (
     Body,
@@ -72,7 +73,14 @@ def _provider_ready(provider: str) -> bool:
     return needed is None or bool(os.getenv(needed))
 
 
-app = FastAPI(title="Procurement Review API", version="0.2.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan: seed admin on startup."""
+    bootstrap.seed_admin_if_empty(ROOT)
+    yield
+
+
+app = FastAPI(title="Procurement Review API", version="0.2.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -84,11 +92,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(auth_router)
-
-
-@app.on_event("startup")
-def _seed_admin_on_startup():
-    bootstrap.seed_admin_if_empty(ROOT)
 
 
 def _project_summary(p) -> dict:
