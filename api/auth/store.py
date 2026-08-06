@@ -7,11 +7,13 @@ are populated by later tasks, but the empty document already reserves their
 keys so those tasks have somewhere to write without touching this file's
 shape again.
 """
+import hashlib
+import hmac
 import os
 import secrets
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Iterator
 
 from procurement.store import layout
@@ -29,6 +31,8 @@ from api.auth.models import User
 _LOCK = threading.Lock()
 
 _EMPTY = {"version": 1, "users": [], "grants": [], "sessions": []}
+
+SESSION_TTL_SECONDS = 604800  # 7 days, absolute — no sliding refresh
 
 
 class EmailTaken(Exception):
@@ -140,3 +144,96 @@ def delete_user(root: str, user_id: str) -> None:
         doc["users"] = [u for u in doc["users"] if u["id"] != user_id]
         doc["grants"] = [g for g in doc["grants"] if g["user_id"] != user_id]
         doc["sessions"] = [s for s in doc["sessions"] if s["user_id"] != user_id]
+
+
+def _token_digest(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _unexpired(rows: list[dict]) -> list[dict]:
+    """Drop rows whose `expires_at` has passed.
+
+    Called on every write (S3: "exactly") so an expired row does not merely
+    stop resolving on read — it leaves the file on the next mutation.
+    """
+    now = _now()
+    return [r for r in rows if datetime.fromisoformat(r["expires_at"]) > now]
+
+
+def _user_from_row(doc: dict, user_id: str) -> User | None:
+    """Look up the user for a session row within an already-loaded document.
+
+    Returns `None` when the referenced user is gone, so a session that
+    somehow outlives its user fails closed rather than resolving to a
+    partially-built user. `delete_user` already cascades to sessions, so this
+    is defence in depth, not the primary mechanism.
+    """
+    for record in doc["users"]:
+        if record["id"] == user_id:
+            return _to_user(record)
+    return None
+
+
+def create_session(root: str, user_id: str, *, ttl_seconds: int = SESSION_TTL_SECONDS) -> str:
+    """Create a session and return its plaintext token.
+
+    Only `sha256(token)` is written to disk — the plaintext exists solely in
+    this return value, for the caller (Task 4's login route) to place in an
+    HttpOnly cookie. It can never be recovered from a leaked `auth.json`.
+    """
+    token = secrets.token_urlsafe(32)
+    expires = _now() + timedelta(seconds=ttl_seconds)
+    with locked_update(root) as doc:
+        # Prune on write: expiry-on-read alone would let the file grow without bound.
+        doc["sessions"] = _unexpired(doc["sessions"])
+        doc["sessions"].append({
+            "token_sha256": _token_digest(token),
+            "user_id": user_id,
+            "expires_at": expires.isoformat(),
+        })
+    return token
+
+
+def resolve_session(root: str, token: str) -> User | None:
+    """Return the session's user, or `None` if the token is missing, unknown,
+    expired, or its user no longer exists."""
+    if not token:
+        return None
+    digest = _token_digest(token)
+    doc = read_auth(root)
+    now = _now()
+    for row in doc["sessions"]:
+        if not hmac.compare_digest(row["token_sha256"], digest):
+            continue
+        if datetime.fromisoformat(row["expires_at"]) <= now:
+            return None
+        return _user_from_row(doc, row["user_id"])
+    return None
+
+
+def delete_session(root: str, token: str) -> None:
+    """Log out: invalidate exactly the session for this token."""
+    digest = _token_digest(token)
+    with locked_update(root) as doc:
+        doc["sessions"] = [
+            s for s in doc["sessions"] if s["token_sha256"] != digest
+        ]
+
+
+def delete_sessions_for(root: str, user_id: str, *, keep_token: str | None = None) -> None:
+    """Revoke a user's sessions, optionally keeping one.
+
+    Used by the password-change flow (Task 4): revoking the user's *other*
+    sessions while keeping the caller's current one signed in. Without
+    `keep_token`, every session for `user_id` is revoked.
+    """
+    keep_digest = _token_digest(keep_token) if keep_token else None
+    with locked_update(root) as doc:
+        doc["sessions"] = [
+            s for s in doc["sessions"]
+            if s["user_id"] != user_id or s["token_sha256"] == keep_digest
+        ]
