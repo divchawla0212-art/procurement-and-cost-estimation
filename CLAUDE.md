@@ -93,8 +93,9 @@ dev`.
 
 ## Store invariants — violating these corrupts award decisions
 
-The snapshots under `projects/<slug>/store/` are the **only** authoritative
-store; `index/store.db` is derived and disposable.
+There are **two** authoritative stores, with separate rules. For project data:
+the snapshots under `projects/<slug>/store/`; `index/store.db` is derived and
+disposable. For accounts: `<ROOT>/auth.json` — see the section after this one.
 
 - Every write goes through `procurement/store/snapshots.py`. Never hand-roll a
   snapshot write.
@@ -112,6 +113,32 @@ store; `index/store.db` is derived and disposable.
   the model reads, code decides. Never ask an extractor whether a vendor complies.
 - A failed extraction never blanks previously-good stored data, and always
   records why in `DocumentRecord.notes`.
+
+## Auth invariants — `<ROOT>/auth.json`
+
+Users, sessions and grants live in one document so a single lock and a single
+atomic write keep all three consistent. Written **only** from
+`api/auth/store.py`; routes never touch the file.
+
+- Every write is a read-modify-write inside `locked_update`. **And so is every
+  decision that gates one.** A check made in the caller and a write made in
+  the store are two critical sections, not one: two admins deleting each other
+  concurrently each read "two admins, fine" and both writes land on zero
+  admins. Both guards this subsystem shipped wrong were *reads* outside the
+  lock, not writes — `store.delete_user` and `store.grant` show the shape.
+- `grants` holds exactly the grants whose user still exists. `delete_user`
+  cascades to grants and sessions in the same write. (A grant whose *project*
+  is gone is deliberately tolerated and inert — `list_projects` filters
+  against disk.)
+- Sessions persist `sha256(token)` only. `password_hash` is never a field on
+  `User`, so it cannot reach a response body; `store.password_hash_for` is the
+  one reader of the digest.
+- Roles are `admin` and `reviewer`, and **no route changes a role** — it is
+  set once at creation. Signup always creates a reviewer.
+- A project slug is matched against `list_projects` (which reads `os.listdir`),
+  never by asking the filesystem whether a path exists. Windows and macOS
+  resolve paths case-insensitively; CI does not, so that class of bug cannot
+  fail on CI.
 
 ## Planning convention
 

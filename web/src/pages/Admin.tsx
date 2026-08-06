@@ -11,7 +11,6 @@ import { useAsync } from '../useAsync'
 import { MIN_PASSWORD } from '../auth/context'
 import {
   Card,
-  EmptyState,
   ErrorState,
   LoadingState,
   PageHeader,
@@ -21,7 +20,7 @@ export interface AdminProps {
   /**
    * The signed-in admin's project list, which for an admin is every project —
    * the same list the rail's switcher shows. Passed in rather than fetched
-   * again so the checkboxes here and the switcher there can never disagree.
+   * again so the toggles here and the switcher there can never disagree.
    */
   projects: ProjectSummary[]
   /** The caller's own id, so the row for it can say why it has no Remove. */
@@ -35,11 +34,22 @@ function formatDate(iso: string): string {
 
 export function Admin({ projects, meId }: AdminProps) {
   const [tick, setTick] = useState(0)
-  const { data: users, error, loading } = useAsync<AdminUser[]>(fetchUsers, [tick])
+  // `keepPreviousData` because every mutation on this screen re-runs this
+  // loader. Blanking the list would unmount the very chip that was just
+  // clicked, so keyboard focus would land back on <body> after each toggle
+  // and a screen reader would never hear the aria-pressed change — it would
+  // hear the table disappear. Every run loads the same collection, so there
+  // is no stale-identity hazard in holding the old rows for a moment.
+  const { data: users, error, loading } = useAsync<AdminUser[]>(
+    fetchUsers,
+    [tick],
+    { keepPreviousData: true },
+  )
 
-  // One in-flight key at a time, so a chip that is mid-request is the only
-  // control that goes disabled. Keyed by `${userId}:${slug}` for grants and
-  // by the plain user id for a removal.
+  // The key of the control with a request in flight — `${userId}:${slug}` for
+  // a grant, the plain user id for a removal — so only that control goes
+  // disabled. Two overlapping clicks are harmless (grant is idempotent,
+  // revoke is a no-op), so this disables rather than serializes.
   const [busy, setBusy] = useState<string | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
   const [confirming, setConfirming] = useState<string | null>(null)
@@ -67,13 +77,23 @@ export function Admin({ projects, meId }: AdminProps) {
     } catch (err) {
       setFailure((err as Error).message)
     } finally {
-      setBusy(null)
+      // Clear only if this call is still the one holding the key — a later
+      // click that overtook it must not have its own control re-enabled by
+      // an earlier request finishing.
+      setBusy((cur) => (cur === key ? null : cur))
     }
   }
 
   function toggleGrant(user: AdminUser, slug: string) {
+    const key = `${user.id}:${slug}`
+    // The chip is marked `aria-disabled` rather than `disabled` while its
+    // request is in flight, so the guard against a second click has to live
+    // here — a truly disabled button would refuse the click for us, but it
+    // would also be dropped from the tab order mid-interaction, which blurs
+    // it and drops the keyboard user back to the top of the page.
+    if (busy === key) return Promise.resolve()
     const granted = user.grants.includes(slug)
-    return run(`${user.id}:${slug}`, () =>
+    return run(key, () =>
       granted ? revokeProject(user.id, slug) : grantProject(user.id, slug),
     )
   }
@@ -97,7 +117,8 @@ export function Admin({ projects, meId }: AdminProps) {
     }
   }
 
-  if (loading) return <LoadingState label="Loading users…" />
+  // Only the first load blanks the screen; a refresh keeps the table up.
+  if (loading && !users) return <LoadingState label="Loading users…" />
   if (error) return <ErrorState message={error} />
   if (!users) return null
 
@@ -215,19 +236,26 @@ export function Admin({ projects, meId }: AdminProps) {
                           {projects.map((p) => {
                             const on = user.grants.includes(p.slug)
                             const key = `${user.id}:${p.slug}`
+                            // Named for the person as well as the project.
+                            // The visible text is just the project, which
+                            // reads identically in every row, and a `title`
+                            // does not become the accessible name when the
+                            // button already has text — so without the
+                            // aria-label a screen reader announces the same
+                            // "Tender One, pressed" for every reviewer.
+                            const label = on
+                              ? `Remove ${user.email}'s access to ${p.name}`
+                              : `Give ${user.email} access to ${p.name}`
                             return (
                               <button
                                 key={p.slug}
                                 type="button"
                                 className={on ? 'chip on' : 'chip'}
                                 aria-pressed={on}
-                                disabled={busy === key}
+                                aria-label={label}
+                                aria-disabled={busy === key}
                                 onClick={() => toggleGrant(user, p.slug)}
-                                title={
-                                  on
-                                    ? `Remove ${user.email}'s access to ${p.name}`
-                                    : `Give ${user.email} access to ${p.name}`
-                                }
+                                title={label}
                               >
                                 {p.name}
                               </button>
@@ -281,11 +309,6 @@ export function Admin({ projects, meId }: AdminProps) {
             </tbody>
           </table>
         </div>
-        {users.length === 0 && (
-          <EmptyState title="No users yet">
-            Add one above, or let people sign up themselves.
-          </EmptyState>
-        )}
       </Card>
     </>
   )

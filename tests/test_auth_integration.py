@@ -510,6 +510,11 @@ def test_a_grant_for_a_slug_with_no_project_is_refused(tmp_path, monkeypatch):
     """
     admin, reviewer = _clients(tmp_path, monkeypatch)
     rev = auth_store.find_by_email(str(tmp_path), REVIEWER_EMAIL)
+    # A *different* project exists throughout, so the reviewer's empty list
+    # below means "the refused grant bought nothing" rather than "there was
+    # nothing to see anyway" -- which would read the same with no projects at
+    # all, and would still read the same if the filter were broken open.
+    admin.post("/api/projects", json={"name": "Tender Two"})
 
     res = admin.post(f"/api/admin/users/{rev.id}/grants", json={"slug": "tender-one"})
     assert res.status_code == 404, res.text                                # run 1
