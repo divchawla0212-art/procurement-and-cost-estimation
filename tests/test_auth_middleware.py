@@ -35,6 +35,13 @@ def test_every_api_route_outside_the_allowlist_requires_a_session(tmp_path, monk
     assert checked > 0, "the route sweep matched nothing — the probe is broken, not passing"
 
 
+def test_the_allowlist_is_exactly_these_three_paths():
+    """The sweep above *skips* PUBLIC_PATHS, so widening the allowlist is a way
+    to green it while opening a route back up. Pin the set so that move has to
+    edit a test that says out loud what it is doing."""
+    assert PUBLIC_PATHS == {"/api/health", "/api/auth/login", "/api/auth/signup"}
+
+
 def test_allowlisted_paths_stay_reachable_without_a_session(tmp_path, monkeypatch):
     client = _anon_client(tmp_path, monkeypatch)
     assert client.get("/api/health").status_code == 200
