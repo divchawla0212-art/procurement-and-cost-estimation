@@ -93,8 +93,8 @@ def signup(body: Credentials, request: Request, response: Response) -> dict:
     password_hash = passwords.hash_password(body.password)
     try:
         user = store.create_user(root, body.email, password_hash, role="reviewer")
-    except store.EmailTaken:
-        raise HTTPException(409, "An account with this email already exists.")
+    except store.EmailTaken as exc:
+        raise HTTPException(409, "An account with this email already exists.") from exc
     set_session_cookie(response, store.create_session(root, user.id), request)
     return user.model_dump()
 
@@ -132,7 +132,7 @@ def change_password(body: PasswordChange, request: Request) -> dict:
     root = store_root(request)
     stored = store.password_hash_for(root, user.id)
     if stored is None or not passwords.verify_password(body.current, stored):
-        raise HTTPException(401, "Invalid email or password.")
+        raise HTTPException(401, "Current password is incorrect.")
     new_hash = passwords.hash_password(body.next)
     with store.locked_update(root) as doc:
         for record in doc["users"]:
