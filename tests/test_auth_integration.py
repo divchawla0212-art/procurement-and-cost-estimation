@@ -96,10 +96,11 @@ def _clients(tmp_path, monkeypatch):
 def _grant(tmp_path, user_id: str, slug: str) -> None:
     """Write a grant directly into `auth.json`.
 
-    Task 10's admin API to create grants does not exist yet -- this task's
-    brief is explicit that rows needing one write straight through
-    `store.locked_update`, the way `tests/test_api_authorization.py` already
-    does.
+    Written before Task 10's admin API existed. Kept pointing at the raw
+    document on purpose: these rows test what the *enforcement* side does
+    with a grant that is present, so reaching them through `store.grant`
+    would make a Task 7 regression depend on Task 10 still working. Task 12
+    owns adding the rows that exercise the API path itself.
     """
     with auth_store.locked_update(str(tmp_path)) as doc:
         doc["grants"].append({

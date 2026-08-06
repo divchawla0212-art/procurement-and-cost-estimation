@@ -1,6 +1,10 @@
+import threading
+import time
+
 from fastapi.testclient import TestClient
 
 from api.auth import store as auth_store
+from procurement.store import layout
 
 
 def _clients(tmp_path, monkeypatch):
@@ -172,6 +176,155 @@ def test_an_admin_may_delete_another_admin_when_not_the_last(tmp_path, monkeypat
     assert res.status_code == 201
     second = auth_store.find_by_email(str(tmp_path), "second-admin@t.local")
     assert admin.delete(f"/api/admin/users/{second.id}").status_code == 204
+
+
+def test_two_admins_deleting_each_other_at_once_cannot_reach_zero_admins(tmp_path, monkeypatch):
+    """The never-zero-admins rule, at the only moment it is reachable.
+
+    Sequentially the self-delete guard already covers every path to an
+    admin-less deployment, because the caller is an admin and so the only
+    "last admin" they can name is themselves. Concurrently it does not: two
+    admins deleting *each other* both pass that guard. If the admin count is
+    read outside the write's lock, both threads read "two admins, fine" and
+    both writes land on zero.
+
+    Same forcing technique as the Task 9 matrix rows: a barrier releases both
+    threads together and a delay injected into the write itself holds each
+    read-modify-write window open long enough to overlap for real.
+    """
+    admin_a, _ = _clients(tmp_path, monkeypatch)
+    root = str(tmp_path)
+    admin_a.post("/api/admin/users", json={
+        "email": "admin-b@t.local", "password": "testpassword", "role": "admin",
+    })
+    admin_b = TestClient(admin_a.app)
+    admin_b.post("/api/auth/login", json={"email": "admin-b@t.local", "password": "testpassword"})
+
+    a = auth_store.find_by_email(root, "admin@t.local")
+    b = auth_store.find_by_email(root, "admin-b@t.local")
+
+    real_write = layout.atomic_write_json
+
+    def slow_write(path, doc):
+        time.sleep(0.05)
+        real_write(path, doc)
+
+    monkeypatch.setattr(layout, "atomic_write_json", slow_write)
+
+    barrier = threading.Barrier(2)
+    statuses: dict[str, int] = {}
+
+    def delete(client, label, target_id):
+        barrier.wait()
+        statuses[label] = client.delete(f"/api/admin/users/{target_id}").status_code
+
+    threads = [
+        threading.Thread(target=delete, args=(admin_a, "a_deletes_b", b.id)),
+        threading.Thread(target=delete, args=(admin_b, "b_deletes_a", a.id)),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    admins = [u for u in auth_store.list_users(root) if u.role == "admin"]
+    assert len(admins) >= 1, f"deployment left with no admin; statuses were {statuses}"
+    # Exactly one of the two is refused, and with the 409 the rule owns —
+    # not, say, a 500 from a write that raced and lost.
+    assert sorted(statuses.values()) == [204, 409], statuses
+
+
+def test_a_grant_racing_that_users_deletion_leaves_no_orphan_row(tmp_path, monkeypatch):
+    """S4 head-on: `grants` holds exactly the grants whose user still exists.
+
+    A user-exists check made before the write is a check made in a different
+    critical section. The delete prunes what is present when it runs, so an
+    append that lands afterwards is a row it already had no chance to prune.
+    Both threads are released together with the write slowed, so the grant's
+    read-modify-write really does span the delete.
+    """
+    admin, _ = _clients(tmp_path, monkeypatch)
+    root = str(tmp_path)
+    admin.post("/api/projects", json={"name": "Tender One"})
+    rev = auth_store.find_by_email(root, "rev@t.local")
+
+    real_write = layout.atomic_write_json
+
+    def slow_write(path, doc):
+        time.sleep(0.05)
+        real_write(path, doc)
+
+    monkeypatch.setattr(layout, "atomic_write_json", slow_write)
+
+    barrier = threading.Barrier(2)
+    results: dict[str, int] = {}
+
+    def do(label, fn):
+        barrier.wait()
+        results[label] = fn()
+
+    threads = [
+        threading.Thread(target=do, args=("grant", lambda: admin.post(
+            f"/api/admin/users/{rev.id}/grants", json={"slug": "tender-one"}).status_code)),
+        threading.Thread(target=do, args=("delete", lambda: admin.delete(
+            f"/api/admin/users/{rev.id}").status_code)),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    doc = auth_store.read_auth(root)
+    live_ids = {u["id"] for u in doc["users"]}
+    assert all(g["user_id"] in live_ids for g in doc["grants"]), (
+        f"orphan grant survived; results were {results}, grants {doc['grants']}"
+    )
+
+
+def test_a_slug_differing_only_in_case_is_refused(tmp_path, monkeypatch):
+    """A regression guard for Windows and macOS specifically.
+
+    Case-insensitive filesystems resolve "Tender-One" to the real project, so
+    an existence check that asks the filesystem answers yes and the grant is
+    then stored verbatim — where `granted_slugs` compares it against
+    "tender-one" and never matches. The admin sees 201, the reviewer sees
+    nothing, and neither can tell why. On Linux/CI this passes either way, so
+    it can only fail on a developer workstation.
+    """
+    admin, reviewer = _clients(tmp_path, monkeypatch)
+    admin.post("/api/projects", json={"name": "Tender One"})
+    rev = auth_store.find_by_email(str(tmp_path), "rev@t.local")
+
+    res = admin.post(f"/api/admin/users/{rev.id}/grants", json={"slug": "Tender-One"})
+    assert res.status_code == 404, res.text
+    assert auth_store.read_auth(str(tmp_path))["grants"] == []
+    assert reviewer.get("/api/projects").json() == []
+
+
+def test_the_user_list_carries_each_users_grants(tmp_path, monkeypatch):
+    """The admin screen draws a checkbox per project per reviewer, so the list
+    has to say which are already ticked."""
+    admin, _ = _clients(tmp_path, monkeypatch)
+    admin.post("/api/projects", json={"name": "Tender One"})
+    admin.post("/api/projects", json={"name": "Tender Two"})
+    rev = auth_store.find_by_email(str(tmp_path), "rev@t.local")
+    admin.post(f"/api/admin/users/{rev.id}/grants", json={"slug": "tender-two"})
+
+    by_email = {u["email"]: u for u in admin.get("/api/admin/users").json()}
+    assert by_email["rev@t.local"]["grants"] == ["tender-two"]
+    assert by_email["admin@t.local"]["grants"] == []
+
+
+def test_an_admin_can_create_users_while_public_signup_is_closed(tmp_path, monkeypatch):
+    """`ALLOW_SIGNUP=0` closes *public* self-registration. Closing it is
+    exactly when an admin needs to add people by hand, and this route is
+    already behind require_admin, so there is no escalation to guard."""
+    admin, _ = _clients(tmp_path, monkeypatch)
+    monkeypatch.setenv("ALLOW_SIGNUP", "0")
+    assert admin.post("/api/auth/signup", json={
+        "email": "public@t.local", "password": "testpassword"}).status_code == 403
+    assert admin.post("/api/admin/users", json={
+        "email": "byhand@t.local", "password": "testpassword"}).status_code == 201
 
 
 def test_revoking_a_grant_that_never_existed_is_a_no_op(tmp_path, monkeypatch):

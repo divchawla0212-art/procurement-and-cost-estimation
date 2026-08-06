@@ -13,10 +13,10 @@ from pydantic import BaseModel, Field, field_validator
 from api.auth import passwords, store
 from api.auth.deps import require_admin
 from api.auth.models import User
+from api.auth.routes import Credentials
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
-MIN_PASSWORD = 8
 ROLES = {"admin", "reviewer"}
 
 
@@ -32,35 +32,32 @@ def store_root(request: Request) -> str:
 
 
 def _project_exists(slug: str) -> bool:
-    """Existence check for a project slug, reusing `api/main.py`'s
-    `_load_or_404` rather than a second, divergent existence check.
+    """Whether `slug` names a real project, matched exactly.
 
-    An unsafe slug and a missing project both mean "no" for this purpose —
-    either way there is nothing to grant access to.
+    Deliberately NOT `api/main.py`'s `_load_or_404`, which answers by asking
+    the filesystem: on Windows and macOS that resolves case-insensitively, so
+    a grant for "Tender-One" would be accepted and then stored verbatim,
+    where `granted_slugs` compares it against the real "tender-one" and never
+    matches. The admin sees 201 and the reviewer still sees nothing — exactly
+    the silent failure that refusing unknown slugs exists to prevent, arrived
+    at by a different route. `list_projects` reads slugs off `os.listdir`, so
+    comparing against those is case-exact on every platform.
     """
     import api.main as api_main
-    try:
-        api_main._load_or_404(slug)
-        return True
-    except HTTPException:
-        return False
+    from procurement import project as proj
+    return slug in {p.slug for p in proj.list_projects(api_main.ROOT)}
 
 
-class NewUser(BaseModel):
-    # `str`, not pydantic's EmailStr: email-validator is not installed and the
-    # project's global constraints forbid adding it. Mirrors
-    # `api/auth/routes.py`'s `Credentials` shape check.
-    email: str = Field(min_length=3, max_length=254)
-    password: str = Field(min_length=MIN_PASSWORD)
+class NewUser(Credentials):
+    """Signup's shape check plus a role.
+
+    Subclasses `Credentials` rather than restating the email and password
+    rules: two copies of an input-validation rule drift, and the one thing
+    this model adds is the one thing signup must never have — `role` is
+    absent from `Credentials` precisely so a self-registration cannot elect
+    its own privilege.
+    """
     role: str = "reviewer"
-
-    @field_validator("email")
-    @classmethod
-    def _looks_like_an_address(cls, v: str) -> str:
-        local, _, domain = v.strip().partition("@")
-        if not local or "." not in domain or domain.startswith(".") or domain.endswith("."):
-            raise ValueError("not an email address")
-        return v
 
     @field_validator("role")
     @classmethod
@@ -76,11 +73,30 @@ class GrantBody(BaseModel):
 
 @router.get("/users")
 def list_users(request: Request, _: User = Depends(require_admin)) -> list[dict]:
-    return [u.model_dump() for u in store.list_users(store_root(request))]
+    """Every user with the slugs they are granted.
+
+    The grants ride along rather than living behind a second route: the admin
+    screen renders a per-project checkbox per reviewer, so it needs the
+    current state of every grant to draw one screen, and both come out of a
+    single read of `auth.json` here.
+    """
+    root = store_root(request)
+    grants = store.grants_by_user(root)
+    return [
+        {**u.model_dump(), "grants": grants.get(u.id, [])}
+        for u in store.list_users(root)
+    ]
 
 
 @router.post("/users", status_code=201)
 def create_user(body: NewUser, request: Request, _: User = Depends(require_admin)) -> dict:
+    """Create an account directly, bypassing `ALLOW_SIGNUP`.
+
+    Deliberate: that flag closes *public* self-registration, and closing it
+    is exactly when an admin needs to be able to add people by hand. The
+    privilege escalation it guards against is not reachable here — this route
+    is already behind `require_admin`.
+    """
     root = store_root(request)
     password_hash = passwords.hash_password(body.password)
     try:
@@ -96,26 +112,21 @@ def delete_user(user_id: str, request: Request, caller: User = Depends(require_a
     target = store.find_by_id(root, user_id)
     if target is None:
         raise HTTPException(404, "no such user")
-    # The self-delete guard is the one that carries the weight. It is also
-    # what keeps the deployment out of the admin-less inert state that
-    # bootstrap.seed_admin_if_empty warns about: the caller is always an
-    # admin, so a target who is the *last* admin can only ever be the caller.
+    # An authorization rule about the caller, so it belongs here rather than
+    # in the store: deleting your own account takes your own admin role with
+    # it even when other admins remain.
     if target.id == caller.id:
         raise HTTPException(409, "cannot delete your own account")
-    # Hence the check below is unreachable through this route today —
-    # deleting it leaves the whole suite green, which is stated plainly here
-    # rather than left for a reader to discover. It is kept as the guard that
-    # states the actual invariant (never zero admins) rather than a proxy for
-    # it, so a later route that can lower the admin count without being a
-    # self-delete — a role change, a bulk import — fails closed instead of
-    # silently bricking the deployment. Any such route must also test it.
-    if target.role == "admin":
-        admins = [u for u in store.list_users(root) if u.role == "admin"]
-        if len(admins) <= 1:
-            raise HTTPException(409, "cannot delete the last administrator")
-    # store.delete_user cascades to grants and sessions in one locked write —
-    # call it rather than reimplementing that cascade here.
-    store.delete_user(root, user_id)
+    # The never-zero-admins rule is NOT checked here. Counting admins in this
+    # process and deleting in another would be two critical sections, and two
+    # admins deleting each other at the same instant would each read "two
+    # admins, fine" and both writes would land. store.delete_user decides it
+    # inside the same lock that does the write, and cascades to grants and
+    # sessions there too.
+    try:
+        store.delete_user(root, user_id)
+    except store.LastAdmin as exc:
+        raise HTTPException(409, "cannot delete the last administrator") from exc
 
 
 @router.post("/users/{user_id}/grants", status_code=201)
@@ -123,11 +134,16 @@ def create_grant(
     user_id: str, body: GrantBody, request: Request, caller: User = Depends(require_admin)
 ) -> dict:
     root = store_root(request)
-    if store.find_by_id(root, user_id) is None:
-        raise HTTPException(404, "no such user")
     if not _project_exists(body.slug):
         raise HTTPException(404, f"no such project: {body.slug}")
-    store.grant(root, user_id, body.slug, granted_by=caller.id)
+    # The user's existence is checked by store.grant inside the lock, not
+    # here — S4 says grants hold only rows whose user still exists, and a
+    # pre-check here could pass just before that user is deleted, leaving an
+    # orphan row that the delete had already finished pruning.
+    try:
+        store.grant(root, user_id, body.slug, granted_by=caller.id)
+    except store.UnknownUser as exc:
+        raise HTTPException(404, "no such user") from exc
     return {"user_id": user_id, "slug": body.slug}
 
 

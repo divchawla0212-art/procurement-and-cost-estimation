@@ -39,6 +39,23 @@ class EmailTaken(Exception):
     """A user with this normalized email already exists."""
 
 
+class UnknownUser(Exception):
+    """No user with this id exists.
+
+    Raised from inside the lock, so a caller cannot act on a user that was
+    deleted between its own existence check and its write.
+    """
+
+
+class LastAdmin(Exception):
+    """This write would leave the deployment with no administrator.
+
+    Recovering from that needs someone to hand-edit `auth.json`, since every
+    `/api/admin/*` route requires an admin to reach it — the same inert state
+    `bootstrap.seed_admin_if_empty` warns about, arrived at by accident.
+    """
+
+
 def auth_path(root: str) -> str:
     return os.path.join(root, "auth.json")
 
@@ -161,18 +178,38 @@ def grant(root: str, user_id: str, slug: str, granted_by: str) -> None:
     """Give `user_id` access to `slug`. Idempotent: a second grant for the
     same (user, slug) pair is not a second row.
 
-    The duplicate check runs inside the lock, not before it — checking
-    outside would let two concurrent grants both read "not yet granted" and
-    both append, leaving two rows for one (user, slug) pair. A single revoke
-    would then remove only one of them and access would silently persist.
+    Both checks run inside the lock, and both have to. The existence check is
+    S4 itself: a grant racing that user's deletion would otherwise re-add a
+    row for a user who no longer exists, since `delete_user` prunes what is
+    there at the moment it runs and cannot prune an append that comes after.
+    The duplicate check keeps two concurrent grants from both reading "not
+    yet granted" and both appending — duplicates are not a privilege leak
+    (`revoke` filters every matching row, so one revoke still removes them
+    all) but they grow the file without bound and make the audit trail read
+    as if access had been granted twice by two different admins.
     """
     with locked_update(root) as doc:
+        if not any(u["id"] == user_id for u in doc["users"]):
+            raise UnknownUser(user_id)
         if any(g["user_id"] == user_id and g["slug"] == slug for g in doc["grants"]):
             return
         doc["grants"].append({
             "user_id": user_id, "slug": slug,
             "granted_at": _now().isoformat(), "granted_by": granted_by,
         })
+
+
+def grants_by_user(root: str) -> dict[str, list[str]]:
+    """Every grant, grouped by user id, from one read of the document.
+
+    The admin user list needs each user's grants to render a per-project
+    checkbox with its current state; calling `granted_slugs` per user would
+    re-read `auth.json` once per row.
+    """
+    grouped: dict[str, list[str]] = {}
+    for g in read_auth(root)["grants"]:
+        grouped.setdefault(g["user_id"], []).append(g["slug"])
+    return {user_id: sorted(slugs) for user_id, slugs in grouped.items()}
 
 
 def revoke(root: str, user_id: str, slug: str) -> None:
@@ -185,8 +222,20 @@ def revoke(root: str, user_id: str, slug: str) -> None:
 
 
 def delete_user(root: str, user_id: str) -> None:
-    """Remove the user and everything that points at them, in one write."""
+    """Remove the user and everything that points at them, in one write.
+
+    Refuses to remove the only remaining admin, and decides that inside the
+    lock. Counting admins in the caller and deleting here would be two
+    separate critical sections: two admins deleting each other at the same
+    instant would each read "two admins, fine" and both writes would land,
+    leaving zero. Raising here leaves the document untouched — `locked_update`
+    writes only on a clean exit.
+    """
     with locked_update(root) as doc:
+        target = next((u for u in doc["users"] if u["id"] == user_id), None)
+        if target is not None and target["role"] == "admin":
+            if len([u for u in doc["users"] if u["role"] == "admin"]) <= 1:
+                raise LastAdmin(user_id)
         doc["users"] = [u for u in doc["users"] if u["id"] != user_id]
         doc["grants"] = [g for g in doc["grants"] if g["user_id"] != user_id]
         doc["sessions"] = [s for s in doc["sessions"] if s["user_id"] != user_id]

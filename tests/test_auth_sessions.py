@@ -45,9 +45,13 @@ def test_expired_sessions_are_pruned_on_the_next_write(tmp_path):
 
 
 def test_deleting_a_user_removes_their_sessions(tmp_path):
-    """S3: a session must not outlive the account it authenticates."""
+    """S3: a session must not outlive the account it authenticates.
+
+    A reviewer, not `_user`'s default admin: `delete_user` refuses to remove
+    the last admin, and this test is about the session cascade, not that rule.
+    """
     root = str(tmp_path)
-    user = _user(root)
+    user = _user(root, role="reviewer")
     token = store.create_session(root, user.id)
     store.delete_user(root, user.id)
     assert store.resolve_session(root, token) is None
