@@ -1,10 +1,10 @@
 """The `/api/auth/*` routes: signup, login, logout, me, password change.
 
-The fail-closed authentication middleware arrives in Task 6. Until then,
-`/me`, `/logout` and `/password` resolve the session themselves from the
-cookie via `_require_session`, which is written so Task 6's middleware slots
-in without a rewrite: it prefers `request.state.user` when present and only
-falls back to reading the cookie itself when that attribute is absent.
+`api/auth/middleware.py` now challenges every `/api/` path outside its
+allowlist, so `/me`, `/logout` and `/password` are already authenticated by
+the time they run and `_require_session` simply reads `request.state.user`.
+Its cookie fallback is kept as defence in depth: these routes stay correct on
+their own terms if they are ever mounted on an app without that middleware.
 """
 import os
 
@@ -72,10 +72,9 @@ def clear_session_cookie(response: Response) -> None:
 
 
 def _require_session(request: Request) -> User:
-    # Task 6's middleware sets request.state.user. Prefer it when present so
-    # these routes do not re-read auth.json on every call once it lands; fall
-    # back to resolving the cookie ourselves, which is what makes these
-    # routes correct before that middleware exists.
+    # The authentication middleware sets request.state.user. Prefer it, so
+    # these routes do not re-read auth.json on every call; fall back to
+    # resolving the cookie ourselves, which keeps them correct standalone.
     user = getattr(request.state, "user", None)
     if user is not None:
         return user

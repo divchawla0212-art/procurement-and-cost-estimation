@@ -28,6 +28,7 @@ from fastapi.staticfiles import StaticFiles
 import dotenv
 
 from api.auth import bootstrap
+from api.auth import middleware as auth_middleware
 from api.auth.routes import router as auth_router
 from procurement import project as proj
 from procurement.coverage import build_extraction_status, rollup
@@ -81,6 +82,12 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Procurement Review API", version="0.2.0", lifespan=lifespan)
+# Registered BEFORE the CORS block on purpose, and the order is load-bearing.
+# Starlette inserts each middleware at position 0 and wraps in reverse, so the
+# last registered ends up outermost. Auth first therefore leaves CORS outside
+# it, and a 401 still comes back with the headers a cross-origin browser needs
+# to read the status instead of surfacing as an opaque CORS failure.
+auth_middleware.install(app)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[

@@ -6,13 +6,15 @@ import zipfile
 
 from fastapi.testclient import TestClient
 
+from tests.auth_helpers import signed_in_admin
+
 
 def _client(tmp_path, monkeypatch) -> TestClient:
     monkeypatch.setenv("PROCUREMENT_PROJECTS_ROOT", str(tmp_path))
     monkeypatch.setenv("LLM_PROVIDER", "mock")
     import api.main as api_main
     monkeypatch.setattr(api_main, "ROOT", str(tmp_path))
-    return TestClient(api_main.app)
+    return signed_in_admin(TestClient(api_main.app), tmp_path)
 
 
 def _make_zip(paths: dict[str, bytes]) -> bytes:
