@@ -34,7 +34,6 @@ A bug is only `Closed` once two things are true:
 |---|---|---|---|---|---|
 | BUG-013 | S3 | auth / api | `POST /api/auth/login` has no rate limit or lockout, so password guessing is unbounded | 2026-08-06 | Open |
 | BUG-012 | S2 | auth / api | No way for an admin to grant a user access to some projects — access is all-or-nothing because no per-user grant exists to hold | 2026-08-06 | Open |
-| BUG-011 | S1 | auth / api / web | Anyone who reaches the platform can read and write **every** project; there is no admin role and no ownership check | 2026-08-06 | Open |
 | BUG-004 | S1 | api | With no `LLM_PROVIDER` set, ingestion silently falls back to the **mock** provider and stores fabricated facts as `ok` | 2026-08-05 | Open |
 | BUG-003 | S4 | web | Empty states still tell the user to run ingestion "in the Streamlit portal", which no longer exists | 2026-08-05 | Open |
 | BUG-002 | S3 | api / procurement/pipeline | No way to force a full re-extraction: `run_ingestion(force=True)` is unreachable from the API and the UI | 2026-08-05 | Open |
@@ -44,7 +43,7 @@ A bug is only `Closed` once two things are true:
 
 | ID | Severity | Area | Summary | Closed | Fixed in | Spec / Plan |
 |---|---|---|---|---|---|---|
-| — | — | — | — | — | — | — |
+| BUG-011 | S1 | auth / api / web | Anyone who reaches the platform can read and write **every** project; there is no admin role and no ownership check | 2026-08-06 | `c18dd5d..`*this commit* (Tasks 1–9) | [design](docs/superpowers/specs/2026-08-06-auth-user-hierarchy-design.md) / [plan](docs/superpowers/plans/2026-08-06-auth-user-hierarchy.md) |
 
 ---
 
@@ -410,7 +409,7 @@ No key was present in the container. `classified_by: llm` and
 
 - **Severity:** S1
 - **Area:** `api/main.py`, `web/src/App.tsx`, `web/src/auth/`
-- **Status:** Open
+- **Status:** Closed
 - **Reported:** 2026-08-06
 - **Reporter:** Rahul Jana (client-reported)
 
@@ -542,18 +541,36 @@ for all of them.
 
 ### Fix
 
-- **Spec:** _not yet written — needs a design covering the auth backend, the
-  role model, and the API-side authorization check together_
-- **Plan:** _not yet written_
-- **Ledger:** none — not part of a phase
-- **Design change:** _pending — this introduces server-side identity, which the
-  system does not currently have at all_
-- **Commit / PR:** _unfixed_
-- **Test:** _none yet. Needs an API test asserting `GET /api/projects` as a
-  non-admin returns only that user's projects, and that a `{slug}` route for an
-  unentitled project returns 403 — not 404, which would leak existence, and not
-  200._
-- **Verified:** _unfixed_
+- **Spec:** [`docs/superpowers/specs/2026-08-06-auth-user-hierarchy-design.md`](docs/superpowers/specs/2026-08-06-auth-user-hierarchy-design.md)
+- **Plan:** [`docs/superpowers/plans/2026-08-06-auth-user-hierarchy.md`](docs/superpowers/plans/2026-08-06-auth-user-hierarchy.md), Phase 1 (Tasks 1-9)
+- **Ledger:** [`.superpowers/sdd/2026-08-06-auth-user-hierarchy/progress.md`](.superpowers/sdd/2026-08-06-auth-user-hierarchy/progress.md)
+- **Design change:** none beyond what the spec already called for — real
+  server-side accounts and hashed passwords behind `api/auth/store.py`
+  (`auth.json`, S1-S3), a `role` on `User` (`admin` / `reviewer`), fail-closed
+  session middleware on every `/api/` path outside a three-entry allowlist
+  (`api/auth/middleware.py`, A1), and a `require_project_access` dependency
+  that derives the visible project set per request from role and grants
+  (`api/auth/deps.py`, A2/A3) — replacing the client-side `localStorage` mock
+  auth described in "What happens" above outright, per D1/D5/D7 of the design.
+- **Commit / PR:** `c18dd5d..`*this commit* (`test(auth): add the two-run
+  mutation matrix and close BUG-011`) — Tasks 1-9 of the plan, branch
+  `claude/build-verification-pr-26cc64`
+- **Test:** `tests/test_auth_middleware.py::
+  test_every_api_route_outside_the_allowlist_requires_a_session` fails without
+  the fix: it sweeps every route in `app.routes` outside `PUBLIC_PATHS` and
+  asserts 401 with no session, so removing or narrowing the fail-closed
+  middleware makes it fail, naming the specific route left open. The per-role
+  filtering half (A2/A3 — an admin sees every project, a reviewer sees exactly
+  their grants, `{slug}` refuses with 403 not 404) is covered by
+  `tests/test_api_authorization.py`. Task 9's
+  `tests/test_auth_integration.py` additionally defends both across state
+  changes a single request can't see: a revoked grant, a project deleted from
+  disk, a promotion to admin, and a process restart, all without a re-login.
+- **Verified:** the reproduction in "What happens" no longer reproduces —
+  `GET /api/projects` 401s with no session and returns only the caller's
+  admin-or-granted set otherwise; the ten-row mutation matrix (Task 9) confirms
+  that boundary holds across two requests, not just one, for every hazard the
+  matrix names.
 
 ---
 
