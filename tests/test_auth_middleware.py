@@ -47,8 +47,40 @@ def test_allowlisted_paths_stay_reachable_without_a_session(tmp_path, monkeypatc
     assert client.get("/api/health").status_code == 200
 
 
-def test_preflight_is_not_challenged(tmp_path, monkeypatch):
-    """Trap 2: an OPTIONS preflight carries no cookie and must not 401."""
+def test_options_reaches_the_app_without_a_session(tmp_path, monkeypatch):
+    """Trap 2, for real: this is the probe that actually reaches the OPTIONS branch.
+
+    A *browser* preflight cannot test that branch. CORSMiddleware is outermost
+    (Trap 1, and correct), and its __call__ answers any OPTIONS carrying both
+    `Origin` and `Access-Control-Request-Method` from `preflight_response`
+    without ever invoking the app it wraps — so such a request never reaches
+    the auth middleware at all.
+
+    Omitting `Origin` is what makes this a real test: CORSMiddleware returns
+    early via `await self.app(...)` when origin is None, so the request lands
+    on the auth middleware and the OPTIONS bypass is the only thing standing
+    between it and a 401. Deleting that bypass turns this 405 into a 401.
+
+    405 is the expected pass-through result: the request reaches the router,
+    which has no OPTIONS handler declared for this path. The assertion that
+    matters is `!= 401` — it was not challenged.
+    """
+    client = _anon_client(tmp_path, monkeypatch)
+    res = client.options("/api/projects")
+    assert res.status_code != 401, "the OPTIONS bypass is not being reached"
+    assert res.status_code == 405
+
+
+def test_a_browser_preflight_succeeds(tmp_path, monkeypatch):
+    """The end-to-end browser scenario — closed by CORS ordering, not by the
+    OPTIONS branch.
+
+    Kept deliberately, and deliberately *not* named as the Trap 2 test: it
+    passes even with the middleware's OPTIONS bypass deleted, because
+    CORSMiddleware answers it first. What it does pin is that a real
+    cross-origin preflight against a protected path still succeeds, which is
+    the property a browser depends on.
+    """
     client = _anon_client(tmp_path, monkeypatch)
     res = client.options(
         "/api/projects",
@@ -56,6 +88,7 @@ def test_preflight_is_not_challenged(tmp_path, monkeypatch):
                  "Access-Control-Request-Method": "GET"},
     )
     assert res.status_code < 400
+    assert res.headers.get("access-control-allow-origin") == "http://localhost:5173"
 
 
 def test_a_401_still_carries_cors_headers(tmp_path, monkeypatch):
