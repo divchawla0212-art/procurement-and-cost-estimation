@@ -26,6 +26,7 @@ from fastapi.staticfiles import StaticFiles
 
 import dotenv
 
+from api.auth.routes import router as auth_router
 from procurement import project as proj
 from procurement.coverage import build_extraction_status, rollup
 from procurement.feedback import save_feedback
@@ -81,6 +82,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(auth_router)
 
 
 def _project_summary(p) -> dict:
