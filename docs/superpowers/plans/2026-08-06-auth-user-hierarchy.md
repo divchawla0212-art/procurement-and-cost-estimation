@@ -331,7 +331,8 @@ def delete_user(root: str, user_id: str) -> None:
 
 `find_by_email` and `find_by_id` return `User | None` and must **not** include
 `password_hash` in what they return — that field is read only by
-`api/auth/routes.py` through a dedicated `_password_hash_for(root, user_id)` helper,
+`api/auth/routes.py` through a dedicated `password_hash_for(root, user_id) -> str | None`
+helper — public, not underscore-prefixed, because it is called across modules —
 so a stray `User` in a response body can never carry it.
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -1182,11 +1183,14 @@ line in each with an admin seed and login, leaving every other line untouched:
 ```python
     client = TestClient(api_main.app)
     client.post("/api/auth/signup", json={"email": "admin@test.local", "password": "testpassword"})
-    # The first signup on an empty store would be a reviewer; promote directly in
-    # the store, which is the only place role is settable.
+    # Signup always creates a reviewer; promote in the store, the only place role
+    # is settable. Address the row by email, never by index — list order is not
+    # stable, and this is the same rule invariant S1 states.
     from api.auth import store as auth_store
     with auth_store.locked_update(str(tmp_path)) as doc:
-        doc["users"][0]["role"] = "admin"
+        for row in doc["users"]:
+            if row["email"] == "admin@test.local":
+                row["role"] = "admin"
     return client
 ```
 
@@ -1260,8 +1264,11 @@ def _clients(tmp_path, monkeypatch):
 
     admin = TestClient(api_main.app)
     admin.post("/api/auth/signup", json={"email": "admin@t.local", "password": "testpassword"})
+    # By email, never by index — S1's rule, and the reviewer signs up next.
     with auth_store.locked_update(str(tmp_path)) as doc:
-        doc["users"][0]["role"] = "admin"
+        for row in doc["users"]:
+            if row["email"] == "admin@t.local":
+                row["role"] = "admin"
 
     reviewer = TestClient(api_main.app)
     reviewer.post("/api/auth/signup", json={"email": "rev@t.local", "password": "testpassword"})
