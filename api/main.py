@@ -28,6 +28,7 @@ from fastapi.staticfiles import StaticFiles
 
 import dotenv
 
+from api.admin_routes import router as admin_router
 from api.auth import bootstrap
 from api.auth import middleware as auth_middleware
 from api.auth import store as auth_store
@@ -103,6 +104,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(auth_router)
+app.include_router(admin_router)
 
 
 def _project_summary(p) -> dict:

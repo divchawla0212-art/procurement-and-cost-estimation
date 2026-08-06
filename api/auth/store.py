@@ -143,10 +143,45 @@ def granted_slugs(root: str, user_id: str) -> set[str]:
 
     Reads `auth.json` fresh on every call — never cached at login or on the
     session — so a grant made or revoked between two requests takes effect on
-    the very next one. No grant can exist until Task 10's admin API writes
-    one, so this correctly returns an empty set for every reviewer today.
+    the very next one.
     """
     return {g["slug"] for g in read_auth(root)["grants"] if g["user_id"] == user_id}
+
+
+def list_users(root: str) -> list[User]:
+    """Every registered user, scrubbed of `password_hash` by `_to_user`.
+
+    The only way `api/admin_routes.py`'s user list reaches `auth.json` —
+    routes never read the file directly.
+    """
+    return [_to_user(record) for record in read_auth(root)["users"]]
+
+
+def grant(root: str, user_id: str, slug: str, granted_by: str) -> None:
+    """Give `user_id` access to `slug`. Idempotent: a second grant for the
+    same (user, slug) pair is not a second row.
+
+    The duplicate check runs inside the lock, not before it — checking
+    outside would let two concurrent grants both read "not yet granted" and
+    both append, leaving two rows for one (user, slug) pair. A single revoke
+    would then remove only one of them and access would silently persist.
+    """
+    with locked_update(root) as doc:
+        if any(g["user_id"] == user_id and g["slug"] == slug for g in doc["grants"]):
+            return
+        doc["grants"].append({
+            "user_id": user_id, "slug": slug,
+            "granted_at": _now().isoformat(), "granted_by": granted_by,
+        })
+
+
+def revoke(root: str, user_id: str, slug: str) -> None:
+    """Remove any grant of `slug` to `user_id`. A no-op if none existed."""
+    with locked_update(root) as doc:
+        doc["grants"] = [
+            g for g in doc["grants"]
+            if not (g["user_id"] == user_id and g["slug"] == slug)
+        ]
 
 
 def delete_user(root: str, user_id: str) -> None:
