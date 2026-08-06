@@ -1,6 +1,8 @@
 from fastapi.testclient import TestClient
 
 from api.auth import store as auth_store
+from procurement.store import snapshots
+from procurement.store.models import VendorFacts
 
 ADMIN_ONLY = [
     ("POST", "/api/projects"),
@@ -63,15 +65,32 @@ def test_admin_reaches_the_admin_only_routes(tmp_path, monkeypatch):
 
 
 def test_a_granted_reviewer_reads_and_may_record_feedback(tmp_path, monkeypatch):
-    """D4: reviewers keep the review-write; grants are honoured the moment they exist."""
+    """D4: reviewers keep the review-write; grants are honoured the moment they exist.
+
+    This must actually perform the PUT, not just reach a read route: D4 is the
+    one reason the feedback route is guarded by require_project_access instead
+    of require_admin, and a test that stops at a GET can't tell the two apart.
+    """
     admin, reviewer = _clients(tmp_path, monkeypatch)
     admin.post("/api/projects", json={"name": "Tender One"})
+    # A vendor with stored facts, so the write 200s instead of 404ing for the
+    # unrelated reason of "no such vendor" — see test_api_feedback.py's
+    # _ingested, which does the same thing via a full pipeline run; a bare
+    # VendorFacts snapshot is all this route's guard needs.
+    snapshots.save_facts(str(tmp_path), "tender-one", VendorFacts(vendor="acme"))
     rev = auth_store.find_by_email(str(tmp_path), "rev@t.local")
     with auth_store.locked_update(str(tmp_path)) as doc:
         doc["grants"].append({"user_id": rev.id, "slug": "tender-one",
                               "granted_at": "2026-08-06T00:00:00+00:00", "granted_by": "u_admin"})
     assert [p["slug"] for p in reviewer.get("/api/projects").json()] == ["tender-one"]
     assert reviewer.get("/api/projects/tender-one/summary").status_code == 200
+
+    res = reviewer.put(
+        "/api/projects/tender-one/vendors/acme/feedback",
+        json={"text": "FULLY COMPLIED", "reason": "spot check"},
+    )
+    assert res.status_code == 200
+    assert snapshots.load_facts(str(tmp_path), "tender-one", "acme").technical_feedback == "FULLY COMPLIED"
 
 
 def test_ungranted_reviewer_gets_403_on_the_feedback_write(tmp_path, monkeypatch):
