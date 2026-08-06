@@ -138,6 +138,17 @@ def password_hash_for(root: str, user_id: str) -> str | None:
     return None
 
 
+def granted_slugs(root: str, user_id: str) -> set[str]:
+    """The set of project slugs this user has been granted access to.
+
+    Reads `auth.json` fresh on every call — never cached at login or on the
+    session — so a grant made or revoked between two requests takes effect on
+    the very next one. No grant can exist until Task 10's admin API writes
+    one, so this correctly returns an empty set for every reviewer today.
+    """
+    return {g["slug"] for g in read_auth(root)["grants"] if g["user_id"] == user_id}
+
+
 def delete_user(root: str, user_id: str) -> None:
     """Remove the user and everything that points at them, in one write."""
     with locked_update(root) as doc:
