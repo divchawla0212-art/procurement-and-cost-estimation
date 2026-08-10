@@ -32,7 +32,6 @@ A bug is only `Closed` once two things are true:
 
 | ID | Severity | Area | Summary | Reported | Status |
 |---|---|---|---|---|---|
-| BUG-010 | S1 | procurement/pipeline, procurement/renormalize, procurement/feedback | `facts.json` has BUG-009's defect and none of its guard: a run holds a vendor's facts across an entire LLM extraction, then saves them back over anything written meanwhile — a reviewer's note, or a corrected FX rate's totals | 2026-08-05 | Open |
 | BUG-007 | S3 | web / api / procurement/pipeline | After a run ends `done_with_failures`, the only retry controls are project-wide — nothing re-extracts one document, or one vendor's documents | 2026-08-05 | Open |
 | BUG-006 | S3 | web / api | Extraction reports no live progress: a 12-minute run shows one static banner, while the per-document events that would fill it are already being written to disk | 2026-08-05 | Open |
 
@@ -40,6 +39,7 @@ A bug is only `Closed` once two things are true:
 
 | ID | Severity | Area | Summary | Closed | Fixed in | Spec / Plan |
 |---|---|---|---|---|---|---|
+| BUG-010 | S1 | procurement/pipeline, procurement/renormalize, procurement/feedback | `facts.json` had BUG-009's defect and none of its guard: a run held a vendor's facts across an entire LLM extraction, then saved them back over anything written meanwhile — a reviewer's note, or a corrected FX rate's totals | 2026-08-06 | `1a6bc60`, `797bb19`, `639af24`, `867bc7b`, `8ee8890`, `9ec3043` | [spec](docs/superpowers/specs/2026-08-05-facts-concurrent-write-design.md) / [plan](docs/superpowers/plans/2026-08-05-facts-concurrent-write.md) |
 | BUG-009 | S3 | api, procurement/project | Every `project.json` writer was an unguarded read-modify-write, so a `PUT /fx-rates` that returned 200 was discarded by a run finishing in the same window | 2026-08-05 | `d2bfefe` | none — see the Fix block |
 | BUG-008 | S3 | procurement/store, api | Nothing serialised two ingestion runs, and `atomic_write_json` shared one fixed `.tmp` name, so concurrent writers interleaved into one snapshot | 2026-08-05 | `5080a2c` | none — see the Fix block; measured, not designed up front |
 | BUG-005 | S1 | procurement/normalize | A project ships with no FX rates, and an unconfigured currency is silently converted at 1.0 — a EUR bid is ranked as if €1 = $1 | 2026-08-05 | `3dc1e5f`, `cb8e673` | [spec](docs/superpowers/specs/2026-08-05-fx-rate-normalization-design.md) / [plan](docs/superpowers/plans/2026-08-05-fx-rate-normalization.md) |
@@ -1394,8 +1394,9 @@ A  natural: fx-rates hammered throughout a run
 
 - **Severity:** S1
 - **Area:** `procurement/pipeline.py`, `procurement/renormalize.py`, `procurement/feedback.py`
-- **Status:** Open
+- **Status:** Closed
 - **Reported:** 2026-08-05
+- **Closed:** 2026-08-06
 - **Reporter:** found while closing BUG-009 — noted there as untested, then tested
 
 ### What happens
@@ -1530,3 +1531,133 @@ trials where the stored total is a WRONG NUMBER (not a blank): 8/8
   one is, `tests/test_project_concurrency.py` is the file it belongs beside;
   the forcing helper there is not needed, since the window is wide enough to
   hit by simply issuing the write during a run.
+- **2026-08-06** — **Correction to the report above: `base` was re-loaded PER
+  DOCUMENT, not once per run.** The table says `pipeline.py:833-942` reads
+  `base = load_facts(...)` and writes a whole `VendorFacts`, which reads as one
+  read/write pair spanning the run. It sat inside the per-document loop, so a
+  vendor with four documents had four load-extract-save cycles, each one its
+  own lost-write window. That makes the defect *more* reachable than reported
+  (four windows per vendor, not one) and it is why the fix converts the loop
+  body rather than wrapping the run.
+- **2026-08-06** — **Correction to the severity reasoning: the run-start
+  `project` copy is the more dangerous half, not `technical_feedback`.** The
+  report leads with the lost note. A lost note is recoverable — the reviewer
+  can see it is missing and write it again. The stale `project.fx_rates` read
+  at run start stores a *plausible wrong number*: `1080.0` sits in the store
+  while the project holds the rate that produces `1150.0`, the comparative
+  statement ranks on it, and nothing anywhere indicates a stale figure. That is
+  the half that decides an award wrongly and in silence, and it is the reason
+  this entry is S1.
+
+### Fix
+
+- **Spec:** [`docs/superpowers/specs/2026-08-05-facts-concurrent-write-design.md`](docs/superpowers/specs/2026-08-05-facts-concurrent-write-design.md)
+- **Plan:** [`docs/superpowers/plans/2026-08-05-facts-concurrent-write.md`](docs/superpowers/plans/2026-08-05-facts-concurrent-write.md)
+- **Design change:** the open question in the report — hold a lock across the
+  extraction, or re-read and merge — was settled as **re-read and merge, with
+  a written-down ownership rule**. `procurement/store/snapshots.py` grows two
+  primitives:
+
+  - `update_facts(root, slug, vendor, *, create=False)` — a context manager
+    holding a per-`(slug, vendor)` lock across load, mutation and save, and
+    **re-reading inside the lock**. A caller assigns only the fields it owns;
+    every field it leaves alone keeps whatever is stored now, which is the
+    whole point. `create=False` raises `LookupError` when nothing is stored,
+    as a parameter rather than a check at the call site — a check outside the
+    lock is a TOCTOU, since a vendor can be pruned between it and the acquire.
+    It does **not** bump `generation`; `transaction` still does that, once per
+    write transaction.
+  - `facts_lock(root, slug, vendor)` — the bare lock, for the one writer whose
+    write is conditional on the facts being *absent*
+    (`migrate.migrate_dataset_json`) and so cannot be a read-modify-write.
+
+  The ownership rule, now enforced by the call sites rather than by comment:
+  `save_feedback` writes only `technical_feedback`; `renormalize` writes only
+  `normalized`, recomputed inside the lock from a project re-read there;
+  `run_ingestion`'s extraction save writes `commercial`, `technical`,
+  `deviations`, `overrides`, `quotation_doc_id` and `normalized`, and **never
+  assigns `technical_feedback` at all**; `_prune_orphan_facts` writes only the
+  collections it prunes.
+
+  Three consequences worth stating:
+  - **The lock never spans an LLM call.** The extraction runs outside it and
+    the merge happens under it, so a reviewer's feedback save waits
+    microseconds, not the minutes the report's design note worried about.
+  - **Per vendor, not per project.** Two vendors' facts are separate files with
+    no cross-field rule between them, and a per-project lock would serialise a
+    run against itself for nothing. `5d28b21` is the probe that fails under a
+    per-project lock, added because the first version of the lock test passed
+    under either.
+  - **A plain `Lock`, deliberately not an `RLock`**, for `update_project`'s
+    reason one file over: re-entering would let an inner update save and an
+    outer then save its own older copy over the top — the very lost write this
+    exists to prevent, only harder to see.
+
+  Scope limit, unchanged from BUG-008 and BUG-009: in-process, matching the
+  shipped single-worker image. Two containers on one volume are still
+  unserialised.
+- **Commit / PR:** `1a6bc60` (the primitive), `5d28b21` (the per-project-lock
+  probe), `797bb19` (feedback), `639af24` + `867bc7b` (renormalize), `8ee8890`
+  (the run's extraction save), `9ec3043` (the prune and the legacy import); the
+  concurrent mutation matrix lands in this entry's own commit.
+- **Test:** `tests/test_facts_concurrency.py` — twelve rows, each naming the
+  invariant it defends and which task owns it. Per-task TDD structurally
+  produced single-writer tests; **every defect this entry names needs two
+  writers to see**, so this file is where they are observed together. Run-side
+  rows issue the competing write from inside a patched `extract_bid` (the
+  window *is* the extraction, so no hook is needed and nothing races);
+  short-window rows use `_hold_facts_write`, the `_hold_first_project_write`
+  shape from `tests/test_project_concurrency.py` retargeted at a facts path.
+  Every rate-sensitive row calls `_assert_rate_sensitive` **before** asserting
+  its outcome — see the 0/8 note above; a row written against the stock mock's
+  `currency=""`, `base_price=0.0` cannot fail whatever the code does.
+
+  The matrix was mutation-checked by reinstating each defect one at a time:
+
+  | reinstated defect | rows that failed |
+  |---|---|
+  | `technical_feedback` carried off a pre-extraction copy in the run's save | H1, the failed re-extraction, the failure-then-success recovery, the deleted-document prune (4 rows) |
+  | normalize from the run-start `project` rather than an in-lock re-read | the FX-set-mid-run row, the FX-corrected-mid-run row, the newer-revision row (3 rows) |
+  | `update_facts`'s `load_facts` moved outside the lock | the feedback-in-flight row, the renormalize-race row, and Task 1's own `test_update_facts_re_reads_inside_the_lock` |
+  | `generation` bumped inside `update_facts` | the generation row, and four of Task 1's own tests in `test_store_snapshots.py` |
+  | `renormalize` writing the pre-pass's value instead of recomputing in-lock | the renormalize-race row, and Task 3's own two recompute tests |
+  | `migrate` checking existence outside the lock | Task 5's `test_migration_does_not_overwrite_facts_a_run_stored_meanwhile` |
+
+  Six of six caught, each by the row that claims it, and every probe reverted
+  immediately. **A row that still passes with its defect reinstated is not
+  testing what it claims** — one such was found and fixed during this check:
+  the first form of the renormalize probe left the in-lock
+  `if fresh == facts.normalized: continue` guard computing the *correct* value,
+  so the wrong value was never reached and the row passed. The faithful probe
+  (the pre-pass value used for both the comparison and the write) fails it.
+
+  One row of the six behaves differently from the plan's prediction and is
+  recorded rather than papered over: the plan expected the feedback-in-flight
+  row to fail under the `technical_feedback` probe too. It does not, and it
+  cannot — that row's competing writer is a feedback save that blocks on the
+  vendor lock and therefore always writes the note *last*, so the run's stale
+  copy is overwritten either way. The row is sensitive to its own probe (the
+  load moved outside the lock), which is the defect it was written for, and H1
+  covers the `technical_feedback` direction.
+
+  One deviation from PLAN-TEMPLATE Rule 2, declared rather than faked: five of
+  the nine pre-declared mutation rows are extraction-*cache* mutations between
+  two runs. This work changes no prompt, extractor, provider or cache-keying
+  code, so re-testing them here would duplicate
+  `tests/test_pipeline_incremental.py` verbatim. They stay there; that file is
+  confirmed green (23 passed). While confirming it,
+  `test_pruning_does_not_disturb_feedback_or_overrides` was found to assert
+  nothing about `overrides` despite its name — half its title was untested. It
+  now stores an `Override` and asserts it comes back byte-identical, conflict
+  flag and `extracted_value` included.
+- **Verified:** yes. Python **980 passed / 3 skipped / 0 failed** on a
+  workstation (`win32 / python 3.12.3`, `data/` and `projects/` present), which
+  derives the CI row as 973 passed / 10 skipped; web **36 passed / 36** plus a
+  clean `npm run build`. The report's H1 and H2 probes can no longer be run as
+  written — they hook a `save_facts` call the fix removed from that path — and
+  `tests/test_facts_concurrency.py` replaces them, with the vacuity guard the
+  H2 note above insists on built into every rate-sensitive row.
+- **Not fixed here:** cross-process concurrency. Every lock in this fix, like
+  BUG-008's and BUG-009's, is a `threading.Lock` in one interpreter. A second
+  API worker, or a second container on the same volume, reintroduces the whole
+  class. Worth its own entry when multi-worker deployment is on the table.

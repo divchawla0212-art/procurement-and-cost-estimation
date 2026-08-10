@@ -445,8 +445,20 @@ def test_pruning_does_not_disturb_feedback_or_overrides(tmp_path):
     doc_id = next(d.doc_id for d in snapshots.load_documents(root, "p")
                   if d.path.endswith(_DATASHEET))
 
+    # A human correction, recorded against the value the extraction produces,
+    # so `reconcile` agrees with it and it must come back byte-identical --
+    # conflict flag and extracted_value included. The prune writes `technical`,
+    # `deviations` and (when the quotation link dies) `commercial`; `overrides`
+    # is one of the fields it must leave exactly as it found them.
+    override = Override(field_path="commercial.freight_included",
+                        value=not stored.commercial["freight_included"],
+                        extracted_value=stored.commercial["freight_included"],
+                        author="buyer", at="2026-08-05T00:00:00Z",
+                        reason="freight quoted separately in the cover letter")
     with snapshots.update_facts(root, "p", "KERUI") as f:
         f.technical_feedback = "a reviewer's note"
+        f.overrides = [override]
+    before = snapshots.load_facts(root, "p", "KERUI").overrides[0].model_dump()
 
     os.remove(tmp_path / "p" / "vendors" / "KERUI" / _DATASHEET)
     run_ingestion(root, "p", RfqClient(), force=True)
@@ -456,6 +468,11 @@ def test_pruning_does_not_disturb_feedback_or_overrides(tmp_path):
         "pruning must not carry a stale copy back over the reviewer's note"
     assert not any(f.get("doc_id") == doc_id for f in stored.technical), \
         "the deleted datasheet's fact must actually be pruned"
+    # The overrides half of this test's name, which used to go unasserted.
+    assert len(stored.overrides) == 1, \
+        f"pruning dropped the reviewer's override: {stored.overrides}"
+    assert stored.overrides[0].model_dump() == before, \
+        f"pruning disturbed the override: {stored.overrides[0].model_dump()} != {before}"
 
 
 def test_pruning_skips_a_vendor_whose_facts_vanish_between_precheck_and_lock(
