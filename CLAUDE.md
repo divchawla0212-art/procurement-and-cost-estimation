@@ -25,8 +25,8 @@ untracked fixture directories are present, never in pass/fail:
 
 | where | baseline |
 |---|---|
-| a developer workstation, `data/` and an ingested multi-vendor `projects/` present | **873 passed, 3 skipped, 0 failed** |
-| CI, and any clean checkout | **866 passed, 10 skipped, 0 failed** |
+| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **898 passed, 3 skipped, 0 failed** |
+| CI, and any clean checkout | **889 passed, 12 skipped, 0 failed** |
 
 Anything else is a real regression.
 
@@ -37,11 +37,23 @@ three skips a workstation already shows are credential guards
 (`test_anthropic_client.py`, `test_bedrock_client.py`,
 `test_procurement_real_data.py`) and skip in both places.
 
-So the CI row is the workstation row with the four corpus-coverage passes and
-the three `data/` passes turned into skips — `866 = 873 - 4 - 3`,
-`10 = 3 + 4 + 3`; 876 tests either way. When the counts move, measure the
-workstation row and derive the CI row from it; editing the two rows
-independently is how they drift apart.
+There is now a **third** environmental gate, and it splits the two rows further
+apart than the sentence above describes. Two tests in
+`test_datasheet_row_recall.py` are guarded on the `pdftotext` CLI, which comes
+from poppler-utils; `.github/workflows/tests.yml` does not install it, so they
+pass on a workstation that has it and skip in CI.
+
+So the CI row is the workstation row with the four corpus-coverage passes, the
+three `data/` passes and the two `pdftotext` passes turned into skips —
+`889 = 898 - 4 - 3 - 2`, `12 = 3 + 4 + 3 + 2`; 901 tests either way. When the
+counts move, measure the workstation row and derive the CI row from it; editing
+the two rows independently is how they drift apart.
+
+Both rows above were derived, not both measured: the environment they were last
+taken in had `pdftotext` but neither `data/` nor `projects/`, and measured
+**891 passed, 10 skipped** there. The workstation row is that plus the seven
+fixture-gated passes; the CI row is that minus the two `pdftotext` passes. If
+you can measure the real workstation row, do, and re-derive CI from it.
 
 **There is no longer a workstation-only failure.** Until the Streamlit portal
 was removed, `tests/test_portal_app.py::test_missing_api_key_does_not_block_creation`

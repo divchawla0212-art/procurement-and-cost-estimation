@@ -86,10 +86,18 @@ def parse_pdf(path: str, tier: str | None = None) -> str:
             "`llama-cloud-services` are both deprecated.") from exc
 
     client = LlamaCloud()           # reads LLAMA_CLOUD_API_KEY itself
-    uploaded = client.files.create(file=open(path, "rb"), purpose="parse")
+    with open(path, "rb") as fh:
+        uploaded = client.files.create(file=fh, purpose="parse")
+    # `expand` is required and must be a non-empty sequence: without it the
+    # call returns a job handle whose `.markdown` is unpopulated rather than
+    # raising, so the arm would silently read every document as empty.
     result = client.parsing.parse(tier=tier, version="latest",
-                                  file_id=uploaded.id)
-    text = result.markdown or ""
+                                  file_id=uploaded.id, expand=["markdown"])
+    text = getattr(result, "markdown", None) or ""
+    if not text.strip():
+        raise RuntimeError(
+            f"LlamaParse returned no markdown for {os.path.basename(path)} at "
+            f"tier {tier!r}; refusing to cache an empty parse")
 
     os.makedirs(os.path.dirname(cached) or ".", exist_ok=True)
     with open(cached, "w", encoding="utf-8") as fh:

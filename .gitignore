@@ -233,3 +233,9 @@ projects/
 
 # Isolated worktrees for feature work
 .worktrees/
+
+# Parser A/B outputs: a results dump and the LlamaParse markdown cache. The
+# cache is keyed by file hash and costs credits to refill, so it is worth
+# keeping locally and worth never committing.
+parser-ab-results.json
+.llamaparse-cache/

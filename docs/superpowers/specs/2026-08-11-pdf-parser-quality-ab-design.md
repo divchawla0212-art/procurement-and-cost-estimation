@@ -185,14 +185,40 @@ run, and therefore different verdict counts. Three controls, in order of how
 much they cost:
 
 1. Model and prompt version pinned identically across arms.
-2. `LLM_TEMPERATURE` pinned to 0 by the harness.
+2. ~~`LLM_TEMPERATURE` pinned to 0 by the harness.~~ **Unavailable — see below.**
 3. MKON's drift read as the noise floor.
 
-`AnthropicClient.classify_structure` does not currently accept a temperature —
-it calls `messages.create` with model, max_tokens, tools and messages only.
-Rather than change what every caller does as a side effect of an experiment,
-temperature is read from an `LLM_TEMPERATURE` environment variable that
-defaults to unset, and unset means today's behaviour exactly.
+`AnthropicClient.classify_structure` did not accept a temperature — it called
+`messages.create` with model, max_tokens, tools and messages only. Rather than
+change what every caller does as a side effect of an experiment, temperature is
+read from an `LLM_TEMPERATURE` environment variable that defaults to unset, and
+unset means today's behaviour exactly.
+
+### Correction: temperature is not available on Claude 5
+
+The first run of the harness pinned `LLM_TEMPERATURE=0` as designed, and every
+extraction in every arm failed:
+
+```
+400 invalid_request_error: `temperature` is deprecated for this model
+```
+
+on `claude-sonnet-5`. Worse than the failure was its shape — with no facts
+extracted and no requirements extracted, the run reported `needs_human=0` for
+all three arms and a cheerful "control holds", which reads as a flawless
+result and was a total failure.
+
+Two things follow, and both are now in the code:
+
+- The harness does **not** set `LLM_TEMPERATURE`. The env var stays, because it
+  is valid for providers and models that accept one, but Claude 5 is not among
+  them. Determinism control #2 is simply unavailable here, which leaves the
+  MKON control as the only defence against reading noise as signal — the reason
+  it earns its place in a three-document corpus.
+- The harness refuses to report a run whose requirement count is zero, and
+  flags any arm that extracted zero facts as a failure rather than printing it
+  as a clean row of zeros. A metric that reads best when the pipeline is most
+  broken is worse than no metric.
 
 One run per arm. A three-run distribution per arm is a worthwhile follow-up,
 but starting there spends triple before establishing that noise is even a
