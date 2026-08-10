@@ -14,6 +14,7 @@ import {
   ErrorState,
   LoadingState,
   PageHeader,
+  PasswordField,
 } from '../components/primitives'
 
 export interface AdminProps {
@@ -163,12 +164,11 @@ export function Admin({ projects, meId }: AdminProps) {
           </div>
           <div className="form-row">
             <label htmlFor="new-password">Password</label>
-            <input
+            <PasswordField
               id="new-password"
               className="field"
-              type="password"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={setPassword}
               minLength={MIN_PASSWORD}
               autoComplete="new-password"
               required

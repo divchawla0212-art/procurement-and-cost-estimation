@@ -758,6 +758,33 @@ table.grid.rank .rank-row:hover td { background: var(--accent-soft); }
 .input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .hint { font-size: 0.8rem; color: var(--muted); margin: 0; }
 
+/* password field with a reveal toggle */
+.pw { position: relative; display: block; }
+/* Room for the button, so a long password never runs underneath it.
+   `width: 100%` because wrapping the input in `.pw` takes it out of its
+   row's stretch: `.field` carries only a min-width, so it collapsed to
+   240px inside the wrapper while the email input beside it filled the row,
+   and the button — positioned against the wrapper — landed outside it. */
+.pw-input { padding-right: 2.6rem; width: 100%; }
+.pw-eye {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0.25rem;
+  display: grid;
+  place-items: center;
+  width: 2.1rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.pw-eye:hover { color: var(--accent-ink); }
+.pw-eye[aria-pressed='true'] { color: var(--accent-ink); }
+.pw-eye:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
 /* -------------------------------------------------------------- dropzone */
 
 .dropzone {

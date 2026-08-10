@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { FormEvent, JSX } from 'react'
 import { MIN_PASSWORD, useAuth } from '../auth/context'
-import { Card, PageHeader } from '../components/primitives'
+import { Card, PageHeader, PasswordField } from '../components/primitives'
 
 type Mode = 'login' | 'signup'
 
@@ -77,16 +77,14 @@ export function Auth(): JSX.Element {
             </div>
             <div className="form-row">
               <label htmlFor="auth-password">Password</label>
-              <input
+              <PasswordField
                 id="auth-password"
-                className="input"
-                type="password"
                 autoComplete={isLogin ? 'current-password' : 'new-password'}
                 required
                 minLength={isLogin ? undefined : MIN_PASSWORD}
                 disabled={submitting}
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={setPassword}
               />
               {passwordHint && (
                 <p className="hint" style={{ color: 'var(--fail)' }}>
