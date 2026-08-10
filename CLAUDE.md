@@ -25,8 +25,8 @@ untracked fixture directories are present, never in pass/fail:
 
 | where | baseline |
 |---|---|
-| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **898 passed, 3 skipped, 0 failed** |
-| CI, and any clean checkout | **889 passed, 12 skipped, 0 failed** |
+| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **900 passed, 3 skipped, 0 failed** |
+| CI, and any clean checkout | **891 passed, 12 skipped, 0 failed** |
 
 Anything else is a real regression.
 
@@ -45,13 +45,13 @@ pass on a workstation that has it and skip in CI.
 
 So the CI row is the workstation row with the four corpus-coverage passes, the
 three `data/` passes and the two `pdftotext` passes turned into skips —
-`889 = 898 - 4 - 3 - 2`, `12 = 3 + 4 + 3 + 2`; 901 tests either way. When the
+`891 = 900 - 4 - 3 - 2`, `12 = 3 + 4 + 3 + 2`; 903 tests either way. When the
 counts move, measure the workstation row and derive the CI row from it; editing
 the two rows independently is how they drift apart.
 
 Both rows above were derived, not both measured: the environment they were last
 taken in had `pdftotext` but neither `data/` nor `projects/`, and measured
-**891 passed, 10 skipped** there. The workstation row is that plus the seven
+**893 passed, 10 skipped** there. The workstation row is that plus the seven
 fixture-gated passes; the CI row is that minus the two `pdftotext` passes. If
 you can measure the real workstation row, do, and re-derive CI from it.
 

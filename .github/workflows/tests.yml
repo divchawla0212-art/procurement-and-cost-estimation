@@ -8,7 +8,7 @@
 # blast radius to fork PRs. The trade is stated plainly: the live-provider paths
 # are not exercised here.
 #
-# Expected on a clean checkout: 889 passed, 12 skipped, 0 failed.
+# Expected on a clean checkout: 891 passed, 12 skipped, 0 failed.
 #
 # Twelve skips are expected, not a defect: three need provider credentials,
 # three need a `data/` sample directory that is not tracked in git, four need an
@@ -18,7 +18,7 @@
 # arithmetic relating them.
 #
 # Note that a local run legitimately differs and is not a regression: a
-# workstation with all of the above shows 898 passed, 3 skipped.
+# workstation with all of the above shows 900 passed, 3 skipped.
 
 name: tests
 
