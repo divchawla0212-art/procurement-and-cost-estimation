@@ -121,7 +121,8 @@ def _rel_path(pdir: str, path: str) -> str:
     return os.path.relpath(path, pdir).replace(os.sep, "/")
 
 
-def _read_and_guard(path: str, doc: DocumentRecord, pdf_fallback=None) -> str:
+def _read_and_guard(path: str, doc: DocumentRecord, pdf_fallback=None,
+                    pdf_reader: str | None = None) -> str:
     """Read one document's text and apply the no-readable-text guard.
 
     Returns the text, and records the outcome on `doc`: `text_source` always,
@@ -138,7 +139,8 @@ def _read_and_guard(path: str, doc: DocumentRecord, pdf_fallback=None) -> str:
     facts write to protect - so this returns rather than deciding.
     """
     try:
-        text, text_source = read_text_with_source(path, llm_fallback=pdf_fallback)
+        text, text_source = read_text_with_source(path, llm_fallback=pdf_fallback,
+                                                  pdf_reader=pdf_reader)
     except Exception as exc:
         text, text_source = "", "unreadable"
         doc.extraction_status = "failed"
@@ -285,7 +287,7 @@ def inventory_rfq_documents(root: str, slug: str) -> list[DocumentRecord]:
 
 def _classify_pass(root: str, slug: str, docs: list[DocumentRecord],
                    prior_docs: dict[str, DocumentRecord], client,
-                   run_id: str) -> None:
+                   run_id: str, pdf_reader: str | None = None) -> None:
     """Assign doc_class/classified_by/classified_with to every document.
 
     Shared by the vendor and RFQ passes on purpose. classified_by is part of
@@ -311,7 +313,8 @@ def _classify_pass(root: str, slug: str, docs: list[DocumentRecord],
         if classify_by_rules(full) is None:
             # only the leftovers cost a text read; rules decide the rest free
             try:
-                head = read_text(full, llm_fallback=None)[:500]
+                head = read_text(full, llm_fallback=None,
+                                 pdf_reader=pdf_reader)[:500]
             except Exception:
                 head = ""
         doc.doc_class, doc.classified_by = classify_document(full, client, head)
@@ -353,7 +356,8 @@ def _reaching_documents(pdir: str, docs: list[DocumentRecord],
                         prior_docs: dict[str, DocumentRecord],
                         inferred_quotes: set[str],
                         quote_rel_by_vendor: dict[str, str],
-                        pdf_fallback=None, force: bool = False
+                        pdf_fallback=None, force: bool = False,
+                        pdf_reader: str | None = None
                         ) -> tuple[dict[str, str], set[str]]:
     """(text by doc_id, the doc_ids that reach an extractor) for the vendor pass.
 
@@ -402,7 +406,7 @@ def _reaching_documents(pdir: str, docs: list[DocumentRecord],
             continue
 
         texts[doc.doc_id] = _read_and_guard(os.path.join(pdir, doc.path), doc,
-                                            pdf_fallback)
+                                            pdf_fallback, pdf_reader=pdf_reader)
         if doc.extraction_status != "failed":
             reaching.add(doc.doc_id)
     return texts, reaching
@@ -610,7 +614,17 @@ def _run_rfq_pass(root: str, slug: str, client,
 
 
 def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
-                  force: bool = False) -> dict:
+                  force: bool = False, pdf_reader: str | None = None) -> dict:
+    """`pdf_reader` names a single PDF reader for the *vendor* side only, for
+    the parser A/B (see docs/superpowers/specs/2026-08-11-pdf-parser-quality-ab
+    -design.md). None is production: today's pdftotext -> pypdf -> LLM chain.
+
+    Deliberately not applied to the RFQ pass. Compliance verdicts are counted
+    per requirement x vendor, so the requirement set is the denominator of the
+    metric the experiment reports; letting an arm re-read the client documents
+    would let the denominator move between arms and make the three flag counts
+    incomparable. The arms vary what we read the *bids* with, and nothing else.
+    """
     migrate.migrate_dataset_json(root, slug)
 
     project = load_project(root, slug)
@@ -624,7 +638,8 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
 
     # Pass 1: classify. Rules decide most of it for free; text is read only
     # for the leftovers the rules declined.
-    _classify_pass(root, slug, fresh_docs, prior_docs, client, run_id)
+    _classify_pass(root, slug, fresh_docs, prior_docs, client, run_id,
+                   pdf_reader=pdf_reader)
 
     # Pass 2: lineage, so an obsolete revision is never extracted.
     fresh_docs = resolve_supersession(fresh_docs)
@@ -677,7 +692,7 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
     # this phase shipped for an under-documented vendor.
     doc_texts, reaching = _reaching_documents(
         pdir, fresh_docs, prior_docs, inferred_quotes, quote_rel_by_vendor,
-        pdf_fallback=pdf_fallback, force=force)
+        pdf_fallback=pdf_fallback, force=force, pdf_reader=pdf_reader)
 
     # The one structure that answers "which extractors does this document
     # feed": computed here, from the live document set, the selection above and
@@ -817,7 +832,8 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
             # needs the text now.
             text = doc_texts.get(doc.doc_id)
             if text is None:
-                text = _read_and_guard(full, doc, pdf_fallback)
+                text = _read_and_guard(full, doc, pdf_fallback,
+                                       pdf_reader=pdf_reader)
             if doc.extraction_status == "failed":
                 documents.append(doc)
                 failed += 1
