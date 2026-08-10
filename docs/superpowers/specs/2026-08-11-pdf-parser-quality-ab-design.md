@@ -129,10 +129,26 @@ environment without the optional dependency cannot fail to import `loaders`. It
 caches parsed output to disk keyed by file SHA-256, so re-running an arm does
 not re-bill and does not re-introduce parser-side variance.
 
-Markdown rather than plain text for the LlamaParse arm: markdown renders table
-rows as pipe-delimited lines, which is the shape `chunking.py` already splits on
-and the same shape `read_xlsx_text` produces for the MKON sheet. Handing
-LlamaParse's own strength back as plain text would handicap the arm under test.
+Markdown rather than plain text for the LlamaParse arm, so the arm is not
+handicapped by being asked for flat text.
+
+**Correction on what "markdown" means here.** The design assumed markdown would
+render table rows as pipe-delimited lines — the shape `chunking.py` splits on
+and the shape `read_xlsx_text` produces for the MKON sheet. It does not. The
+`agentic` tier emits **HTML** tables (`<table><tbody><tr><td>`), one cell per
+line, so a table row is many lines rather than one. The result is still
+line-oriented enough for `chunking.py` to split safely, and models read HTML
+tables well, so the arm stands — but the stated rationale was wrong and the
+output is not the format the sentence above describes.
+
+This also booby-traps the measurement. Raw character counts flatter the arm
+enormously, and so does the `normalize()` used for row recall, because both
+count the tag names: `<table><tbody><tr><td>` normalizes to `tabletbodytrtd`.
+On the ADPOWER spec that reads as LlamaParse recovering 23,997 alphanumeric
+characters against pdftotext's 17,540 — **+37%**. Strip the markup and the true
+figures are 17,721 against 17,540: **about 1%**. Any comparison involving the
+LlamaParse arm must strip tags first. This is the same trap as the `-layout`
+padding above, one format over.
 
 ## What is measured
 

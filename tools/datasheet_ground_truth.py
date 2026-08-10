@@ -24,6 +24,23 @@ _PARAMETER_NUMBER = re.compile(r"^\d+\.\d+")
 
 _NOISE = re.compile(r"[^a-z0-9]+")
 
+_MARKUP = re.compile(r"<[^>]+>")
+
+
+def content_length(text: str) -> int:
+    """Alphanumeric characters of actual content, with any markup removed.
+
+    The only character count safe to compare across arms, and both of the other
+    obvious ones are traps. Raw length rewards `pdftotext -layout` for the
+    spaces it pads columns with -- it returns 3x pypdf's characters on the KERUI
+    datasheet and exactly the same 20,855 alphanumerics. Alphanumeric length
+    alone then rewards LlamaParse for its HTML table markup, because
+    `<table><tbody><tr><td>` normalizes to `tabletbodytrtd`: on the ADPOWER spec
+    that inflates 17,721 real characters to 23,997, turning a 1% edge over
+    pdftotext into an apparent 37% one.
+    """
+    return len(normalize(_MARKUP.sub(" ", text)))
+
 # Below this many normalized characters a name is not evidence of anything: at
 # 4-5 characters a substring search starts matching by accident, and a scorer
 # that counts accidents flatters whichever arm emitted the most text. Measured

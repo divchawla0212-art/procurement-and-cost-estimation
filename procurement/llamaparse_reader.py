@@ -93,11 +93,26 @@ def parse_pdf(path: str, tier: str | None = None) -> str:
     # raising, so the arm would silently read every document as empty.
     result = client.parsing.parse(tier=tier, version="latest",
                                   file_id=uploaded.id, expand=["markdown"])
-    text = getattr(result, "markdown", None) or ""
+
+    # `result.markdown` is a Markdown object, not a string: it holds `.pages`,
+    # each a page with its own `.markdown`, `.page_number` and `.success`.
+    # Joining on a blank line keeps the page boundary as a line break, which is
+    # what `chunking.py` splits on.
+    pages = getattr(result.markdown, "pages", None) or []
+    failed = [p.page_number for p in pages if not getattr(p, "success", True)]
+    text = "\n\n".join(p.markdown or "" for p in pages)
+
     if not text.strip():
         raise RuntimeError(
             f"LlamaParse returned no markdown for {os.path.basename(path)} at "
             f"tier {tier!r}; refusing to cache an empty parse")
+    if failed:
+        # Loud, and uncached. A partial parse silently cached as if whole would
+        # make this arm look worse than the parser actually is, permanently --
+        # every later run would read the truncated text straight from disk.
+        raise RuntimeError(
+            f"LlamaParse failed on page(s) {failed} of "
+            f"{os.path.basename(path)}; refusing to cache a partial parse")
 
     os.makedirs(os.path.dirname(cached) or ".", exist_ok=True)
     with open(cached, "w", encoding="utf-8") as fh:

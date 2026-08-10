@@ -26,7 +26,8 @@ from procurement.project import (create_project, list_vendor_dirs,
                                  load_project, save_project)
 from procurement.store import snapshots
 from shared.llm.factory import get_client
-from tools.datasheet_ground_truth import parameters, recall, recall_unordered
+from tools.datasheet_ground_truth import (content_length, parameters, recall,
+                                          recall_unordered)
 
 ARMS = ("pdftotext", "pypdf", "llamaparse")
 
@@ -141,7 +142,9 @@ def _row_recall(arm: str) -> dict:
     return {"parameters": len(names),
             "contiguous": len(contiguous),
             "unordered": len(unordered),
-            "chars": len(text)}
+            "raw_chars": len(text),
+            # The only count comparable across arms -- see content_length.
+            "content_chars": content_length(text)}
 
 
 def run_arm(root: str, arm: str, client) -> dict:
@@ -201,7 +204,11 @@ def _report(results: list[dict], control_drift: bool) -> str:
             row += f"{r['flags']['by_vendor'][v]['needs_human']:>12}"
         out.append(row)
 
-    if control_drift:
+    if len(results) < 2:
+        out += ["", "only one arm completed, so the control says nothing: a "
+                    "single value cannot drift. Treat these numbers as "
+                    "unvalidated."]
+    elif control_drift:
         out += ["", "!! THE CONTROL DRIFTED. " + CONTROL_VENDOR + " is read by "
                 "openpyxl in every arm, so its needs_human count must be",
                 "   identical across arms. It is not, which means run-to-run "
@@ -213,12 +220,18 @@ def _report(results: list[dict], control_drift: bool) -> str:
                     f"every arm, so differences above are not sampling noise."]
 
     out += ["", "row recall against the ground-truth datasheet (no LLM)", ""]
-    head = (f"{'arm':<12}{'contiguous':>12}{'all words':>12}{'chars':>10}")
+    head = (f"{'arm':<12}{'contiguous':>12}{'all words':>12}{'content':>10}"
+            f"{'raw':>10}")
     out += [head, "-" * len(head)]
     for r in results:
         rc = r["recall"]
         out.append(f"{r['arm']:<12}{rc['contiguous']:>7}/{rc['parameters']:<4}"
-                   f"{rc['unordered']:>7}/{rc['parameters']:<4}{rc['chars']:>10}")
+                   f"{rc['unordered']:>7}/{rc['parameters']:<4}"
+                   f"{rc['content_chars']:>10}{rc['raw_chars']:>10}")
+    out += ["", "  'content' = alphanumerics with markup stripped, the only "
+                "count comparable across arms.",
+            "  'raw' rewards pdftotext's -layout padding and LlamaParse's HTML "
+            "table tags; shown to make that visible."]
     return "\n".join(out)
 
 
@@ -277,7 +290,7 @@ def main(argv=None) -> int:
 
     control = {r["flags"]["by_vendor"][CONTROL_VENDOR]["needs_human"]
                for r in results}
-    drift = len(control) > 1
+    drift = len(results) > 1 and len(control) > 1
 
     report = _report(results, drift) if results else "no arm completed"
     if failures:

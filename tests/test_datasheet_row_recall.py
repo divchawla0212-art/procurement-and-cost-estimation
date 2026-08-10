@@ -12,8 +12,9 @@ import shutil
 import pytest
 
 from procurement.loaders import _pdftotext, _pypdf
-from tools.datasheet_ground_truth import (MIN_NORMALIZED_CHARS, normalize,
-                                          parameters, recall, recall_unordered)
+from tools.datasheet_ground_truth import (MIN_NORMALIZED_CHARS, content_length,
+                                          normalize, parameters, recall,
+                                          recall_unordered)
 
 _ROOT = os.path.dirname(os.path.dirname(__file__))
 _XLSX = os.path.join(
@@ -91,6 +92,31 @@ def test_pdftotext_loses_almost_nothing_even_where_it_interleaves():
     assert len(unordered) / len(kept) >= 0.95, (
         f"pdftotext lost content outright: only {len(unordered)}/{len(kept)} "
         f"parameters have all their words present anywhere in the text")
+
+
+def test_html_table_markup_is_not_counted_as_content():
+    """The second counting trap, and the one that nearly inflated a 1% edge
+    into a 37% one.
+
+    LlamaParse's agentic tier emits HTML tables, and `<table><tbody><tr><td>`
+    normalizes to `tabletbodytrtd` -- so plain alphanumeric length credits the
+    arm for its own markup. On the ADPOWER spec that read as 23,997 characters
+    against pdftotext's 17,540; with tags stripped it is 17,721.
+    """
+    plain = "Rated Continuous Power at Site Ambient"
+    as_html = ("<table><tbody><tr><td>Rated Continuous Power at Site "
+               "Ambient</td></tr></tbody></table>")
+    assert content_length(as_html) == content_length(plain)
+    # and the naive count is exactly the trap being guarded against
+    assert len(normalize(as_html)) > len(normalize(plain))
+
+
+def test_markup_stripping_does_not_break_recall():
+    """A parameter inside a table cell is still recovered contiguously."""
+    names = ["Rated Continuous Power at Site Ambient"]
+    as_html = ("<table><tr><td>Rated Continuous Power at Site Ambient</td>"
+               "<td>525 kW</td></tr></table>")
+    assert recall(as_html, names)[0] == names
 
 
 @pytest.mark.skipif(shutil.which("pdftotext") is None,
