@@ -19,19 +19,33 @@ first, and pypdf only if pdftotext returns under 200 characters, and an LLM
 transcription only if both fall short. `pdftotext` is present on the
 development workstation, so pypdf almost never runs.
 
-Measured on the two PDFs in this corpus:
-
-| document | pdftotext | pypdf |
-|---|---|---|
-| KERUI datasheet (14pp) | 80,722 chars / 772 lines | 26,397 chars / 664 lines |
-| ADPOWER spec (6pp) | 60,688 chars / 497 lines | 20,595 chars / 461 lines |
-
-pypdf recovers roughly a third of what pdftotext does. A two-arm
-pypdf-vs-LlamaParse test would therefore benchmark LlamaParse against a reader
-the pipeline does not use, and a LlamaParse win would not justify changing
-`loaders.py` — because the thing it beat is not the thing running today.
+A two-arm pypdf-vs-LlamaParse test would therefore benchmark LlamaParse against
+a reader the pipeline does not use, and a LlamaParse win would not justify
+changing `loaders.py` — because the thing it beat is not the thing running
+today.
 
 So the experiment runs **three arms**: pypdf, pdftotext, LlamaParse.
+
+### Correction: character yield is not quality
+
+The first draft of this spec justified the third arm with a character count —
+pdftotext returning 80,722 characters on the KERUI datasheet against pypdf's
+26,397, "roughly three times as much". That reasoning was wrong, and it is left
+here because it is the exact trap this experiment exists to avoid.
+
+Strip the whitespace and both readers return **the same 20,855 alphanumeric
+characters** from that document. The 3× gap is padding inserted by
+`pdftotext -layout` to position columns, not text pypdf failed to find. On the
+ADPOWER spec pdftotext does recover genuinely more — 17,540 alphanumeric
+characters against 16,617, about 6% — which is a real but far smaller edge than
+the raw counts suggest.
+
+`test_layout_padding_is_not_mistaken_for_recovered_text` pins this, so no
+future floor in the suite can be built on raw character yield.
+
+The third arm survives the correction, on the argument that was always the
+primary one: pdftotext is what production runs, so it is the only baseline a
+decision to switch could be made against.
 
 ## Corpus
 
@@ -134,14 +148,35 @@ Per arm, after `run_ingestion`, from `build_matrix` and
 
 ## Row recall — the deterministic half
 
-Read column B (`DESCRIPTION`) of the MKON sheet for every row carrying a
-`Sr.No`, giving roughly 360 parameter names. For each arm's KERUI text, count
-how many of those names appear, normalized with `compliance.py`'s existing
+Read column B (`DESCRIPTION`) of the MKON sheet for every row whose `Sr.No` is
+a sub-number (`1.1`, not the bare `1` of a section banner), giving **236**
+scorable parameter names after dropping 16 too short to search for safely. For
+each arm's KERUI text, count how many appear, normalized with `compliance.py`'s
 `_norm`.
 
-No LLM, no key, no network. This is the number that explains *why* an arm wins
-rather than merely that it did, and it is the only part of the experiment that
-can run in CI.
+No LLM, no key, no network, and the corpus is tracked, so this runs in CI.
+
+**Two numbers, not one.** A single contiguous-substring recall conflates two
+different failures, as the first measurement showed:
+
+| reader | contiguous | all words present |
+|---|---|---|
+| pypdf | 236/236 (100%) | 236/236 (100%) |
+| pdftotext | 216/236 (91.5%) | 235/236 (99.6%) |
+
+pdftotext lost exactly one parameter. The other 19 it emitted in pieces, because
+`-layout` renders a tall wrapped cell beside its neighbours and splices the row
+number and the requirement column into the middle of a long description. So
+`recall` (contiguous) and `recall_unordered` (all words somewhere) are reported
+as a pair: they agree when a reader lost content and diverge when it only
+rearranged it.
+
+Which failure matters more to the extractor is genuinely unsettled. The
+pipeline's own `_docx_lines` argues for keeping a row's cells together, on the
+grounds that splitting a clause from its unit invites the model to pair the
+wrong number with the wrong unit — by that argument pdftotext's interleaving is
+a feature. The `needs_human` counts adjudicate; these two numbers only explain
+the verdict.
 
 ## Non-determinism
 

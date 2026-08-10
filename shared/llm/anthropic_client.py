@@ -18,6 +18,28 @@ def max_output_tokens() -> int:
         return DEFAULT_MAX_TOKENS
 
 
+def sampling_temperature() -> float | None:
+    """The sampling temperature to send, or None to send none at all.
+
+    Opt-in, because "unset" and "0" mean different things here and only one of
+    them is today's behaviour. The parser A/B pins this to 0 so that a
+    difference in `needs_human` counts between arms is attributable to the PDF
+    reader rather than to run-to-run sampling drift; nothing else sets it, and
+    with it unset the request is byte-for-byte what it was before.
+
+    Returns None on an unparseable value rather than raising, matching
+    `max_output_tokens`: a malformed env var should not abort a run that is
+    otherwise fine.
+    """
+    raw = (os.getenv("LLM_TEMPERATURE") or "").strip()
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
 def check_truncated(stop_reason: str | None, model: str) -> None:
     """Raise when a response was cut off mid-structure.
 
@@ -298,13 +320,21 @@ class AnthropicClient:
     ) -> dict:
         client = anthropic.Anthropic(api_key=self._api_key)
         tool = self._build_tool(output_schema)
-        message = client.messages.create(
-            model=self.model,
-            max_tokens=max_output_tokens(),
-            tools=[tool],
-            tool_choice={"type": "tool", "name": "emit_structure"},
-            messages=[{"role": "user", "content": f"{prompt}\n\n{context_text}"}],
-        )
+        kwargs = {
+            "model": self.model,
+            "max_tokens": max_output_tokens(),
+            "tools": [tool],
+            "tool_choice": {"type": "tool", "name": "emit_structure"},
+            "messages": [{"role": "user",
+                          "content": f"{prompt}\n\n{context_text}"}],
+        }
+        # Added only when set: `temperature=None` is not the same request as no
+        # temperature at all, and 0.0 is falsy, so neither `or` nor a plain
+        # truthiness test can carry this correctly.
+        temperature = sampling_temperature()
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        message = client.messages.create(**kwargs)
         # before reading the block: a truncated tool call still arrives as a
         # tool_use block, just with the object cut short
         check_truncated(message.stop_reason, self.model)
