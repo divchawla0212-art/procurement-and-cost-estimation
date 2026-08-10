@@ -118,16 +118,23 @@ def _flag_counts(root: str, slug: str) -> dict:
     matrix = build_matrix(root, slug)
     total = {"needs_human": 0, "review": 0, "unanswered": 0,
              "matched": 0, "not_matched": 0}
+    # Every verdict per vendor, not only the needs_human ones. The control
+    # check depends on this: MKON's needs_human total was identical (149) in
+    # the first two arms while 25 cells churned between `review` and
+    # `unanswered` underneath it and two passes became fails -- on text that is
+    # byte-identical in every arm. A control that watches only the total
+    # reports "no drift" through exactly that.
     by_vendor: dict[str, dict] = {
-        v: {"needs_human": 0, "review": 0, "unanswered": 0}
+        v: {"needs_human": 0, "review": 0, "unanswered": 0,
+            "pass": 0, "fail": 0, "deviation": 0}
         for v in matrix.vendors}
     for row in matrix.rows:
         for vendor, cell in row.cells.items():
             total[cell.group] = total.get(cell.group, 0) + 1
+            by_vendor[vendor][cell.verdict] = (
+                by_vendor[vendor].get(cell.verdict, 0) + 1)
             if cell.group == "needs_human":
                 by_vendor[vendor]["needs_human"] += 1
-                by_vendor[vendor][cell.verdict] = (
-                    by_vendor[vendor].get(cell.verdict, 0) + 1)
                 total[cell.verdict] = total.get(cell.verdict, 0) + 1
     return {"total": total, "by_vendor": by_vendor,
             "requirements": len(matrix.rows), "vendors": list(matrix.vendors)}
@@ -173,7 +180,36 @@ def run_arm(root: str, arm: str, client) -> dict:
     return result
 
 
-def _report(results: list[dict], control_drift: bool) -> str:
+_VERDICTS = ("review", "unanswered", "pass", "fail", "deviation")
+
+
+def _control_drift(results: list[dict]) -> int:
+    """Cells that moved between verdicts on the control vendor, worst pair.
+
+    The noise floor, in the unit the experiment reports. MKON is read by
+    openpyxl in every arm, so its text is byte-identical and every cell that
+    changes verdict between arms changed for reasons that have nothing to do
+    with any PDF reader.
+
+    Measured on the whole verdict vector rather than the needs_human total,
+    because the total hid it completely: MKON scored 149 in both the pdftotext
+    and pypdf arms while 25 cells swapped between `review` and `unanswered`
+    and two `pass` cells became `fail`. Any difference between arms smaller
+    than this number is not evidence of anything.
+    """
+    if len(results) < 2:
+        return 0
+    vectors = [tuple(r["flags"]["by_vendor"][CONTROL_VENDOR].get(v, 0)
+                     for v in _VERDICTS) for r in results]
+    worst = 0
+    for i, a in enumerate(vectors):
+        for b in vectors[i + 1:]:
+            # Half the L1 distance: one cell moving verdict changes two counts.
+            worst = max(worst, sum(abs(x - y) for x, y in zip(a, b)) // 2)
+    return worst
+
+
+def _report(results: list[dict], control_drift: int) -> str:
     out = ["", "=" * 72, "PDF PARSER A/B -- review flags per arm", "=" * 72, ""]
     header = (f"{'arm':<12}{'needs_human':>12}{'review':>9}{'unanswered':>12}"
               f"{'facts':>8}{'doc fails':>11}")
@@ -209,15 +245,27 @@ def _report(results: list[dict], control_drift: bool) -> str:
                     "single value cannot drift. Treat these numbers as "
                     "unvalidated."]
     elif control_drift:
-        out += ["", "!! THE CONTROL DRIFTED. " + CONTROL_VENDOR + " is read by "
-                "openpyxl in every arm, so its needs_human count must be",
-                "   identical across arms. It is not, which means run-to-run "
-                "model variance is at least",
-                "   as large as the drift shown -- no smaller difference "
-                "between arms is evidence of anything."]
+        spread = max(r["flags"]["by_vendor"][v]["needs_human"] for r in results
+                     for v in vendors if v != CONTROL_VENDOR) - \
+                 min(r["flags"]["by_vendor"][v]["needs_human"] for r in results
+                     for v in vendors if v != CONTROL_VENDOR)
+        out += ["",
+                f"!! NOISE FLOOR = {control_drift} cells. {CONTROL_VENDOR} is "
+                f"read by openpyxl in every arm, so its text is",
+                f"   byte-identical -- yet {control_drift} of its cells changed "
+                f"verdict between arms. That is pure",
+                "   run-to-run model variance.",
+                "",
+                f"   No difference between arms smaller than {control_drift} "
+                f"cells is evidence of anything.",
+                f"   Watch the verdict split, not the needs_human total: the "
+                f"total can sit still while",
+                f"   cells churn underneath it, which is exactly what "
+                f"{CONTROL_VENDOR} did.",
+                f"   (observed per-vendor spread across arms: {spread} cells)"]
     else:
-        out += ["", f"control holds: {CONTROL_VENDOR} scored identically in "
-                    f"every arm, so differences above are not sampling noise."]
+        out += ["", f"control holds: every verdict count for {CONTROL_VENDOR} "
+                    f"is identical in every arm."]
 
     out += ["", "row recall against the ground-truth datasheet (no LLM)", ""]
     head = (f"{'arm':<12}{'contiguous':>12}{'all words':>12}{'content':>10}"
@@ -288,9 +336,7 @@ def main(argv=None) -> int:
             failures[arm] = f"{type(exc).__name__}: {exc}"
             print(f"  ARM FAILED: {failures[arm]}", file=sys.stderr)
 
-    control = {r["flags"]["by_vendor"][CONTROL_VENDOR]["needs_human"]
-               for r in results}
-    drift = len(results) > 1 and len(control) > 1
+    drift = _control_drift(results)
 
     report = _report(results, drift) if results else "no arm completed"
     if failures:
