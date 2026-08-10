@@ -6,6 +6,9 @@ Two Python packages over one shared LLM layer (`procurement/`, `cost_estimation/
   requirements/vendors, run ingestion, then review the compliance matrix and
   comparative statement
 
+Recent fixes and additions are in [`CHANGELOG.md`](CHANGELOG.md); open bugs are
+tracked in [`BUGS_TRACKER.md`](BUGS_TRACKER.md).
+
 ## Setup
 
 Starting from a machine with nothing installed? See [`docs/SETUP.md`](docs/SETUP.md).
