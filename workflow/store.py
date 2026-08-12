@@ -1,7 +1,15 @@
 from datetime import date, datetime, timezone
 
 from workflow.models.project import Item, Project
-from workflow.models.rfq import RfqRecord, StageTransition
+from workflow.models.rfq import (
+    Attachment,
+    RfqRecord,
+    ShortlistEntry,
+    StageTransition,
+    TbeTemplate,
+    TechnicalPackage,
+    VdrlLine,
+)
 from workflow.stages import Stage, is_allowed
 
 
@@ -14,6 +22,11 @@ class WorkflowStore:
         self._projects: dict[str, Project] = {}
         self._items: dict[str, Item] = {}
         self._rfqs: dict[str, RfqRecord] = {}
+        self._packages: dict[str, TechnicalPackage] = {}
+        self._shortlists: dict[str, list[ShortlistEntry]] = {}
+        self._shortlist_approvals: dict[str, str] = {}
+        self._tbe: dict[str, TbeTemplate] = {}
+        self._vdrl: dict[str, list[VdrlLine]] = {}
 
     # -- projects ---------------------------------------------------------
 
@@ -164,3 +177,111 @@ class WorkflowStore:
         updated = rfq.model_copy(update={"stage": target, "history": [*rfq.history, entry]})
         self._rfqs[rfq_id] = updated
         return updated
+
+    # -- artifacts --------------------------------------------------------
+
+    def set_technical_package(
+        self,
+        rfq_id: str,
+        revision: str,
+        basis_of_design: str,
+        attachments: list[Attachment],
+    ) -> TechnicalPackage:
+        if rfq_id not in self._rfqs:
+            raise KeyError(f"Unknown RFQ: {rfq_id}")
+        package = TechnicalPackage(
+            rfq_id=rfq_id,
+            revision=revision,
+            basis_of_design=basis_of_design,
+            attachments=list(attachments),
+        )
+        self._packages[rfq_id] = package
+        return package
+
+    def get_technical_package(self, rfq_id: str) -> TechnicalPackage | None:
+        return self._packages.get(rfq_id)
+
+    def freeze_package(self, rfq_id: str, by: str) -> TechnicalPackage:
+        """A package can only be frozen when every attachment names a definite
+        revision — "latest" is not a revision a vendor can bid against."""
+        package = self._packages.get(rfq_id)
+        if package is None:
+            raise KeyError(f"No technical package for RFQ: {rfq_id}")
+        missing = [a.doc_code for a in package.attachments if not a.revision]
+        if missing:
+            raise ValueError(
+                f"Cannot freeze: attachments without a definite revision: {', '.join(missing)}"
+            )
+        frozen = package.model_copy(
+            update={"frozen_at": datetime.now(timezone.utc), "frozen_by": by}
+        )
+        self._packages[rfq_id] = frozen
+        return frozen
+
+    def add_shortlist_entry(
+        self,
+        rfq_id: str,
+        vendor_name: str,
+        prequal_status: str,
+        scope_code_fit: bool,
+        included: bool,
+        override_by: str | None = None,
+        override_reason: str | None = None,
+    ) -> ShortlistEntry:
+        if rfq_id not in self._rfqs:
+            raise KeyError(f"Unknown RFQ: {rfq_id}")
+        entry = ShortlistEntry(
+            rfq_id=rfq_id,
+            vendor_name=vendor_name,
+            prequal_status=prequal_status,
+            scope_code_fit=scope_code_fit,
+            included=included,
+            override_by=override_by,
+            override_reason=override_reason,
+        )
+        self._shortlists.setdefault(rfq_id, []).append(entry)
+        return entry
+
+    def shortlist_for(self, rfq_id: str) -> list[ShortlistEntry]:
+        return list(self._shortlists.get(rfq_id, []))
+
+    def approve_shortlist(self, rfq_id: str, by: str) -> None:
+        if rfq_id not in self._rfqs:
+            raise KeyError(f"Unknown RFQ: {rfq_id}")
+        if not self._shortlists.get(rfq_id):
+            raise ValueError("Cannot approve an empty shortlist")
+        self._shortlist_approvals[rfq_id] = by
+
+    def is_shortlist_approved(self, rfq_id: str) -> bool:
+        return rfq_id in self._shortlist_approvals
+
+    def set_tbe_template(
+        self,
+        rfq_id: str,
+        criteria: list[str],
+        source_rfq_reference: str | None = None,
+    ) -> TbeTemplate:
+        if rfq_id not in self._rfqs:
+            raise KeyError(f"Unknown RFQ: {rfq_id}")
+        template = TbeTemplate(
+            rfq_id=rfq_id, criteria=list(criteria), source_rfq_reference=source_rfq_reference
+        )
+        self._tbe[rfq_id] = template
+        return template
+
+    def get_tbe_template(self, rfq_id: str) -> TbeTemplate | None:
+        return self._tbe.get(rfq_id)
+
+    def add_vdrl_line(
+        self, rfq_id: str, doc_code: str, title: str, doc_type: str, mandatory: bool = True
+    ) -> VdrlLine:
+        if rfq_id not in self._rfqs:
+            raise KeyError(f"Unknown RFQ: {rfq_id}")
+        line = VdrlLine(
+            rfq_id=rfq_id, doc_code=doc_code, title=title, doc_type=doc_type, mandatory=mandatory
+        )
+        self._vdrl.setdefault(rfq_id, []).append(line)
+        return line
+
+    def vdrl_for(self, rfq_id: str) -> list[VdrlLine]:
+        return list(self._vdrl.get(rfq_id, []))

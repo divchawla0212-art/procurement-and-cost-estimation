@@ -8,6 +8,7 @@ from datetime import date
 
 import pytest
 
+from workflow.models.rfq import Attachment
 from workflow.stages import Stage
 from workflow.store import WorkflowStore
 
@@ -220,3 +221,115 @@ def test_creating_an_rfq_against_a_foreign_item_raises():
     foreign = make_item(store, b.id)
     with pytest.raises(ValueError, match="does not belong"):
         make_rfq(store, a.id, [foreign.id])
+
+
+def seed_rfq(store: WorkflowStore):
+    p = make_project(store)
+    item = make_item(store, p.id)
+    return make_rfq(store, p.id, [item.id])
+
+
+def test_technical_package_stores_attachments_at_revisions():
+    store = make_store()
+    rfq = seed_rfq(store)
+    store.set_technical_package(
+        rfq.id,
+        revision="Rev. B",
+        basis_of_design="129 wellhead tie-ins, CGF, 16in export line to ASAB",
+        attachments=[Attachment(doc_code="HAL-PID-001", title="P&ID export line", revision="Rev. C")],
+    )
+    pkg = store.get_technical_package(rfq.id)
+    assert pkg.revision == "Rev. B"
+    assert pkg.attachments[0].doc_code == "HAL-PID-001"
+    assert pkg.frozen_at is None
+
+
+def test_freezing_a_package_records_who_and_when():
+    store = make_store()
+    rfq = seed_rfq(store)
+    store.set_technical_package(
+        rfq.id,
+        revision="Rev. B",
+        basis_of_design="basis",
+        attachments=[Attachment(doc_code="HAL-PID-001", title="P&ID", revision="Rev. C")],
+    )
+    frozen = store.freeze_package(rfq.id, by="lead.engineer@example.com")
+    assert frozen.frozen_at is not None
+    assert frozen.frozen_by == "lead.engineer@example.com"
+
+
+def test_freezing_is_blocked_when_an_attachment_has_no_revision():
+    store = make_store()
+    rfq = seed_rfq(store)
+    store.set_technical_package(
+        rfq.id,
+        revision="Rev. B",
+        basis_of_design="basis",
+        attachments=[Attachment(doc_code="HAL-PID-001", title="P&ID", revision=None)],
+    )
+    with pytest.raises(ValueError, match="definite revision"):
+        store.freeze_package(rfq.id, by="lead.engineer@example.com")
+
+
+def test_shortlist_entries_record_inclusion_and_override():
+    store = make_store()
+    rfq = seed_rfq(store)
+    store.add_shortlist_entry(rfq.id, vendor_name="Galfar", prequal_status="Qualified",
+                              scope_code_fit=True, included=True)
+    store.add_shortlist_entry(rfq.id, vendor_name="OQC", prequal_status="Under review",
+                              scope_code_fit=False, included=False)
+    entries = store.shortlist_for(rfq.id)
+    assert len(entries) == 2
+    assert [e.included for e in entries] == [True, False]
+
+
+def test_shortlist_approval_is_recorded():
+    store = make_store()
+    rfq = seed_rfq(store)
+    store.add_shortlist_entry(rfq.id, vendor_name="Galfar", prequal_status="Qualified",
+                              scope_code_fit=True, included=True)
+    assert store.is_shortlist_approved(rfq.id) is False
+    store.approve_shortlist(rfq.id, by="procurement@example.com")
+    assert store.is_shortlist_approved(rfq.id) is True
+
+
+def test_approving_an_empty_shortlist_is_rejected():
+    store = make_store()
+    rfq = seed_rfq(store)
+    with pytest.raises(ValueError, match="empty shortlist"):
+        store.approve_shortlist(rfq.id, by="procurement@example.com")
+
+
+def test_tbe_template_records_its_source_when_pulled_from_a_past_project():
+    store = make_store()
+    rfq = seed_rfq(store)
+    store.set_tbe_template(rfq.id, criteria=["Throughput", "Materials", "Delivery"],
+                           source_rfq_reference="ADP-RFQ-2025-008")
+    tbe = store.get_tbe_template(rfq.id)
+    assert tbe.criteria == ["Throughput", "Materials", "Delivery"]
+    assert tbe.source_rfq_reference == "ADP-RFQ-2025-008"
+
+
+def test_vdrl_lines_accumulate_for_an_rfq():
+    store = make_store()
+    rfq = seed_rfq(store)
+    store.add_vdrl_line(rfq.id, doc_code="RFQ-014-GA-001", title="Skid GA drawing",
+                        doc_type="GA Drawing", mandatory=True)
+    store.add_vdrl_line(rfq.id, doc_code="RFQ-014-DS-001", title="Datasheet",
+                        doc_type="Datasheet", mandatory=True)
+    assert len(store.vdrl_for(rfq.id)) == 2
+
+
+def test_artifacts_reject_an_unknown_rfq():
+    """Every artifact writer binds to a live RFQ id — no orphan artifacts."""
+    store = make_store()
+    with pytest.raises(KeyError):
+        store.add_vdrl_line("rfq_missing", doc_code="GA", title="GA", doc_type="Doc")
+    with pytest.raises(KeyError):
+        store.add_shortlist_entry("rfq_missing", vendor_name="Galfar",
+                                  prequal_status="Qualified", scope_code_fit=True, included=True)
+    with pytest.raises(KeyError):
+        store.set_tbe_template("rfq_missing", criteria=["Throughput"])
+    with pytest.raises(KeyError):
+        store.set_technical_package("rfq_missing", revision="Rev. A",
+                                    basis_of_design="basis", attachments=[])
