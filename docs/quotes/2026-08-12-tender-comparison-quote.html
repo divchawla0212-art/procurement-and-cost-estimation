@@ -1,0 +1,293 @@
+<!--
+  Client-facing commercial quotation - Tender Comparison Platform.
+
+  Canonical source for the published artifact:
+    https://claude.ai/code/artifact/b7a8a508-62d2-42dc-895a-2f73ee2796c6
+  Republishing from this path REQUIRES passing that URL, or a second
+  artifact is minted instead of updating the existing one.
+
+  Figures derive from docs/superpowers/specs/2026-08-12-usage-based-pricing-design.md
+  (SS2 cost basis, SS3 commercial model). Change them together or they drift.
+
+  Six [ BRACKETED ] placeholders must be replaced before sending.
+-->
+<title>Quotation — Tender Comparison Platform</title>
+<style>
+  :root{
+    --ground:#F6F7F8; --card:#FFFFFF; --ink:#12171C; --muted:#59636D;
+    --rule:#D9DEE3; --rule-strong:#B4BCC4; --accent:#14506B; --signal:#8F3F16;
+    --wash:#EDF1F3;
+    --sans:"Segoe UI Variable Display","Segoe UI",ui-sans-serif,-apple-system,system-ui,sans-serif;
+    --serif:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
+    --mono:"Cascadia Mono",Consolas,ui-monospace,"SF Mono","Liberation Mono",monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --ground:#101418; --card:#161B21; --ink:#E8EBEE; --muted:#98A2AC;
+      --rule:#262D34; --rule-strong:#39424B; --accent:#63B2CB; --signal:#D98A5A;
+      --wash:#192127;
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#101418; --card:#161B21; --ink:#E8EBEE; --muted:#98A2AC;
+    --rule:#262D34; --rule-strong:#39424B; --accent:#63B2CB; --signal:#D98A5A;
+    --wash:#192127;
+  }
+  :root[data-theme="light"]{
+    --ground:#F6F7F8; --card:#FFFFFF; --ink:#12171C; --muted:#59636D;
+    --rule:#D9DEE3; --rule-strong:#B4BCC4; --accent:#14506B; --signal:#8F3F16;
+    --wash:#EDF1F3;
+  }
+
+  *{box-sizing:border-box}
+  body{background:var(--ground);color:var(--ink);font-family:var(--sans);
+       font-size:15px;line-height:1.55;margin:0;padding:28px 20px 64px;
+       -webkit-font-smoothing:antialiased}
+  .doc{max-width:53rem;margin:0 auto;background:var(--card);
+       border:1px solid var(--rule);padding:44px 48px 40px;
+       display:flex;flex-direction:column;gap:30px}
+
+  /* ---- masthead ---- */
+  .masthead{display:flex;flex-direction:column;gap:18px;
+            border-bottom:2px solid var(--rule-strong);padding-bottom:20px}
+  .issuer{font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;
+          font-weight:600;color:var(--accent)}
+  .masthead h1{font-family:var(--serif);font-size:2.15rem;line-height:1.1;
+               margin:0;font-weight:400;text-wrap:balance;letter-spacing:-.01em}
+  .masthead h1 span{display:block;font-size:.95rem;font-family:var(--sans);
+                    color:var(--muted);margin-top:8px;letter-spacing:0}
+  .meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(9.5rem,1fr));
+        gap:14px 24px;margin:0}
+  .meta div{display:flex;flex-direction:column;gap:3px}
+  .meta dt{font-size:.66rem;letter-spacing:.11em;text-transform:uppercase;
+           color:var(--muted);font-weight:600}
+  .meta dd{margin:0;font-family:var(--mono);font-size:.84rem;
+           font-variant-numeric:tabular-nums}
+
+  /* ---- clauses ---- */
+  .clause{display:flex;flex-direction:column;gap:12px}
+  .clause > h2{display:flex;align-items:baseline;gap:11px;margin:0;
+               font-size:.94rem;letter-spacing:.02em;font-weight:600;
+               padding-bottom:8px;border-bottom:1px solid var(--rule)}
+  .clause > h2::before{content:attr(data-no);font-family:var(--mono);
+               font-size:.78rem;color:var(--accent);font-weight:400}
+  .clause p{margin:0;max-width:62ch;color:var(--muted)}
+  .clause p strong{color:var(--ink);font-weight:600}
+
+  /* ---- tables ---- */
+  .tw{overflow-x:auto}
+  table{border-collapse:collapse;width:100%;font-size:.87rem}
+  th,td{text-align:left;padding:9px 12px 9px 0;border-bottom:1px solid var(--rule);
+        vertical-align:baseline}
+  thead th{font-size:.66rem;letter-spacing:.11em;text-transform:uppercase;
+           color:var(--muted);font-weight:600;border-bottom:1px solid var(--rule-strong)}
+  td.num,th.num{text-align:right;font-family:var(--mono);
+                font-variant-numeric:tabular-nums;padding-right:0;white-space:nowrap}
+  tbody tr:last-child td{border-bottom:none}
+  tr.pick td{background:var(--wash);font-weight:600;color:var(--ink)}
+  tr.pick td:first-child{box-shadow:inset 3px 0 0 var(--accent);padding-left:11px}
+  .tag{font-size:.63rem;letter-spacing:.09em;text-transform:uppercase;
+       color:var(--accent);font-weight:700;margin-left:8px}
+  .was{color:var(--muted);text-decoration:line-through;font-weight:400;
+       margin-right:7px;font-size:.82em}
+
+  /* ---- total ---- */
+  .total{display:flex;flex-wrap:wrap;justify-content:space-between;
+         align-items:baseline;gap:14px;border-top:2px solid var(--rule-strong);
+         border-bottom:2px solid var(--rule-strong);padding:16px 0}
+  .total .lbl{font-size:.7rem;letter-spacing:.12em;text-transform:uppercase;
+              color:var(--muted);font-weight:600}
+  .total .fig{font-family:var(--mono);font-size:1.85rem;font-weight:600;
+              font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+  .total .sub{font-size:.8rem;color:var(--muted);width:100%;margin-top:-4px}
+
+  /* ---- value statement ---- */
+  .value{font-family:var(--serif);font-size:1.12rem;line-height:1.5;
+         border-left:2px solid var(--signal);padding:2px 0 2px 20px;margin:0;
+         max-width:58ch}
+  .value b{color:var(--signal);font-weight:600;font-family:var(--mono);
+           font-size:.92em;font-variant-numeric:tabular-nums}
+
+  /* ---- lists ---- */
+  ul.plain{margin:0;padding:0;list-style:none;display:grid;
+           grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));gap:7px 26px}
+  ul.plain li{position:relative;padding-left:17px;color:var(--muted);font-size:.87rem}
+  ul.plain li::before{content:"";position:absolute;left:0;top:.6em;width:7px;
+                      height:1px;background:var(--accent)}
+  ul.plain li b{color:var(--ink);font-weight:600}
+
+  ol.terms{margin:0;padding-left:1.35em;display:flex;flex-direction:column;gap:7px}
+  ol.terms li{color:var(--muted);font-size:.87rem;padding-left:3px}
+  ol.terms li b{color:var(--ink);font-weight:600}
+  ol.terms::marker{font-family:var(--mono)}
+
+  /* ---- signature ---- */
+  .sign{display:grid;grid-template-columns:1fr 1fr;gap:32px;margin-top:4px}
+  .sign div{border-top:1px solid var(--rule-strong);padding-top:7px;
+            font-size:.68rem;letter-spacing:.1em;text-transform:uppercase;
+            color:var(--muted);font-weight:600}
+  .sign div span{display:block;height:34px}
+
+  mark.ph{background:color-mix(in srgb,var(--signal) 16%,transparent);
+          color:inherit;padding:1px 5px;border-radius:2px;
+          border-bottom:1px dashed var(--signal);font-weight:600}
+
+  .foot{font-size:.73rem;color:var(--muted);border-top:1px solid var(--rule);
+        padding-top:14px;max-width:64ch}
+
+  @media (max-width:640px){
+    body{padding:14px 10px 40px}
+    .doc{padding:28px 22px 30px;gap:26px}
+    .masthead h1{font-size:1.7rem}
+    .sign{grid-template-columns:1fr;gap:22px}
+  }
+  @media print{
+    @page{margin:14mm}
+    body{background:#fff;padding:0;font-size:10.5pt}
+    .doc{border:none;padding:0;max-width:none;gap:20px}
+    .clause,.total,.value{break-inside:avoid}
+    mark.ph{background:none;border-bottom:1px solid #999}
+  }
+</style>
+
+<article class="doc">
+
+  <header class="masthead">
+    <div class="issuer"><mark class="ph">[ YOUR COMPANY ]</mark></div>
+    <h1>Tender Comparison Platform
+      <span>Commercial quotation — annual subscription with usage-based credits</span>
+    </h1>
+    <dl class="meta">
+      <div><dt>Quotation ref</dt><dd><mark class="ph">[ REF ]</mark></dd></div>
+      <div><dt>Date</dt><dd>12 Aug 2026</dd></div>
+      <div><dt>Valid until</dt><dd>11 Sep 2026</dd></div>
+      <div><dt>Prepared for</dt><dd><mark class="ph">[ CLIENT ]</mark></dd></div>
+    </dl>
+  </header>
+
+  <section class="clause">
+    <h2 data-no="1.">Scope of supply</h2>
+    <p>A hosted platform that ingests a complete tender package — every vendor
+    folder, in whatever mix of formats it arrives in — and returns a traceable
+    comparative statement. Each document is classified, revision lineage is
+    resolved so superseded issues never contaminate the comparison, and
+    technical parameters, commercial terms and deviations are extracted with
+    every figure traceable to the page it came from.</p>
+    <p><strong>Compliance is decided in code, not by the language model.</strong>
+    The model reads and reports what a document says; the pass/fail arithmetic
+    against your specification is deterministic and auditable. An unfound
+    parameter is reported as unfound — never silently defaulted to zero or to a
+    pass.</p>
+  </section>
+
+  <section class="clause">
+    <h2 data-no="2.">Commercial terms</h2>
+    <p>Two lines: a fixed annual platform fee, and prepaid capacity drawn down
+    only when a tender is actually processed.</p>
+    <div class="tw">
+      <table>
+        <thead>
+          <tr>
+            <th>Component</th>
+            <th>Basis</th>
+            <th class="num">Rate</th>
+            <th class="num">Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Platform subscription</td>
+            <td>10 named users · 12 months</td>
+            <td class="num">—</td>
+            <td class="num">₹3,00,000</td>
+          </tr>
+          <tr class="pick">
+            <td>Processing capacity <span class="tag">Standard</span></td>
+            <td>750 MB of tender documents</td>
+            <td class="num">₹500 / MB</td>
+            <td class="num">₹3,75,000</td>
+          </tr>
+          <tr>
+            <td>Founding-customer allowance</td>
+            <td>250 MB additional capacity</td>
+            <td class="num"><span class="was">₹1,25,000</span>₹0</td>
+            <td class="num">₹0</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Capacity tiers are set by annual committed volume and stack, so a larger
+    commitment re-rates the whole year: <strong>₹600/MB</strong> at 250 MB,
+    <strong>₹500/MB</strong> at 750 MB, <strong>₹400/MB</strong> at 2,000 MB.
+    Mid-year expansion re-rates forward.</p>
+  </section>
+
+  <section class="clause">
+    <h2 data-no="3.">Year-one total</h2>
+    <div class="total">
+      <div class="lbl">Payable, year one — excl. taxes</div>
+      <div class="fig">₹6,75,000</div>
+      <div class="sub">1,000 MB of capacity — approximately 22 tender packages
+      at the 45 MB average — plus platform subscription for 10 users.</div>
+    </div>
+    <p class="value">That is roughly <b>₹30,700</b> per tender package, against
+    the <b>4 engineer-days</b> — about <b>₹1,00,000</b> of loaded cost — your
+    team currently spends assembling one comparative statement by hand. Over 22
+    tenders it replaces close to <b>₹22,00,000</b> of engineering time, and it
+    is the fourth day, when attention fades, where deviations get missed.</p>
+  </section>
+
+  <section class="clause">
+    <h2 data-no="4.">Included at no charge</h2>
+    <p>Capacity is consumed only when documents are ingested. Everything you do
+    with the results afterwards is unmetered and unlimited:</p>
+    <ul class="plain">
+      <li><b>Reviewing</b> extractions and source evidence</li>
+      <li><b>Compliance matrix</b> against your specification</li>
+      <li><b>Comparative statement</b> across all vendors</li>
+      <li><b>Manual overrides</b> and reviewer corrections</li>
+      <li><b>Exports</b> to Excel and CSV, unlimited</li>
+      <li><b>Re-running</b> reports as often as you like</li>
+    </ul>
+  </section>
+
+  <section class="clause">
+    <h2 data-no="5.">How capacity is measured</h2>
+    <ol class="terms">
+      <li><b>You are billed on the size of the files you submit</b>, in
+      megabytes, rounded up once per tender at the run level — never per
+      document.</li>
+      <li><b>You never pay twice for the same document.</b> Re-submitting a file
+      that has not changed is free; the platform recognises it and reuses the
+      existing extraction.</li>
+      <li><b>Failed extractions are credited back in full.</b> You pay for
+      facts, not for attempts.</li>
+      <li><b>Each tender is billed within a 20–120 MB band</b>, so a
+      drawing-heavy package cannot run away with your capacity, and a small one
+      still carries its share.</li>
+      <li><b>You see the cost before it is incurred.</b> Uploading a package
+      returns the exact megabytes and the resulting balance; nothing is
+      processed until you proceed.</li>
+      <li><b>Capacity is valid 12 months</b> from purchase and rolls over once
+      on renewal.</li>
+    </ol>
+  </section>
+
+  <section class="clause">
+    <h2 data-no="6.">Founding-customer terms</h2>
+    <p>The allowance in clause 2 is offered in exchange for a two-year term, a
+    named case study on completion of the first three tenders, and permission to
+    reference <mark class="ph">[ CLIENT ]</mark> as a customer. The platform fee
+    is held at the standard rate for the full term.</p>
+    <div class="sign">
+      <div><span></span>For <mark class="ph">[ YOUR COMPANY ]</mark></div>
+      <div><span></span>Accepted for <mark class="ph">[ CLIENT ]</mark></div>
+    </div>
+  </section>
+
+  <p class="foot">Prices in Indian Rupees, exclusive of applicable taxes. This
+  quotation is valid for 30 days from the date of issue. Capacity is
+  non-refundable in cash. Support is provided on business days, 10:00–18:00
+  IST.</p>
+
+</article>
