@@ -134,6 +134,22 @@ def make_rfq(store: WorkflowStore, project_id: str, item_ids: list[str]):
     )
 
 
+def freeze_and_prepare(store: WorkflowStore, rfq_id: str) -> None:
+    """Satisfy every forward gate up to EVALUATION, so a test about the
+    transition mechanic is not also a test of the gates."""
+    store.set_technical_package(
+        rfq_id,
+        revision="Rev. B",
+        basis_of_design="basis",
+        attachments=[Attachment(doc_code="HAL-PID-001", title="P&ID", revision="Rev. C")],
+    )
+    store.freeze_package(rfq_id, by="lead.engineer@example.com")
+    store.add_shortlist_entry(rfq_id, vendor_name="Galfar", prequal_status="Qualified",
+                              scope_code_fit=True, included=True)
+    store.approve_shortlist(rfq_id, by="procurement@example.com")
+    store.set_tbe_template(rfq_id, criteria=["Throughput"])
+
+
 def test_new_rfq_starts_at_scoping():
     store = make_store()
     p = make_project(store)
@@ -168,6 +184,7 @@ def test_allowed_transition_advances_the_stage_and_appends_history():
     p = make_project(store)
     item = make_item(store, p.id)
     rfq = make_rfq(store, p.id, [item.id])
+    freeze_and_prepare(store, rfq.id)
 
     updated = store.transition(rfq.id, Stage.SHORTLISTING, by="amal@example.com")
 
@@ -194,6 +211,7 @@ def test_backward_transition_preserves_the_prior_attempt():
     p = make_project(store)
     item = make_item(store, p.id)
     rfq = make_rfq(store, p.id, [item.id])
+    freeze_and_prepare(store, rfq.id)
     for target in [
         Stage.SHORTLISTING,
         Stage.ISSUED,

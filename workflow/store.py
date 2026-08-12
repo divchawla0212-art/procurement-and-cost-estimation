@@ -10,6 +10,7 @@ from workflow.models.rfq import (
     TechnicalPackage,
     VdrlLine,
 )
+from workflow.gates import check_gate
 from workflow.stages import Stage, is_allowed
 
 
@@ -166,6 +167,9 @@ class WorkflowStore:
             raise KeyError(f"Unknown RFQ: {rfq_id}")
         if not is_allowed(rfq.stage, target):
             raise ValueError(f"Transition {rfq.stage.value} -> {target.value} is not allowed")
+        gate = check_gate(self, rfq_id, rfq.stage, target)
+        if not gate.passed:
+            raise ValueError(gate.reason)
 
         entry = StageTransition(
             from_stage=rfq.stage,
