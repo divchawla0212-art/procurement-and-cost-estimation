@@ -49,11 +49,12 @@ three `data/` passes and the two `pdftotext` passes turned into skips —
 counts move, measure the workstation row and derive the CI row from it; editing
 the two rows independently is how they drift apart.
 
-Both rows above were derived, not both measured: the environment they were last
-taken in had `pdftotext` but neither `data/` nor `projects/`, and measured
-**898 passed, 10 skipped** there. The workstation row is that plus the seven
-fixture-gated passes; the CI row is that minus the two `pdftotext` passes. If
-you can measure the real workstation row, do, and re-derive CI from it.
+The workstation row is now measured rather than derived: **905 passed, 3
+skipped**, taken on 2026-08-12 in an environment with `pdftotext`, `data/` and
+an ingested multi-vendor `projects/` all present. It confirms the figure that
+was previously extrapolated from a run of 898 passed, 10 skipped. The CI row is
+still derived from the workstation row by the subtraction above; derive it that
+way again when the counts move.
 
 **There is no longer a workstation-only failure.** Until the Streamlit portal
 was removed, `tests/test_portal_app.py::test_missing_api_key_does_not_block_creation`
