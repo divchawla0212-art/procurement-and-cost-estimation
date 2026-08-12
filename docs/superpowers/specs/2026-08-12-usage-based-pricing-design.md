@@ -27,6 +27,15 @@ Everything below is measured on `projects/phase4c-shipped-defaults`, the
 shipped-defaults reference corpus: **4 vendors, 37 documents, 44.6 MB, 801,022
 characters of extracted text.**
 
+> **Scope: this section models LLM running cost only.** Hosting, storage,
+> support, onboarding and amortised development are deliberately deferred to a
+> later revision. That is a sequencing choice, not a claim that model spend
+> dominates — it does not. At Base volume, model spend is roughly **1% of
+> contract value**, and it only becomes the largest single cost line above
+> ~10,800 MB/year (≈240 tenders, about one per working day), which is where it
+> would overtake a single ₹96,000/yr support line. Treat §2 as the first row of
+> a cost model, not the whole of it, and do not set a price from it alone.
+
 ### 2.1 Input volume by document class
 
 | class | files | MB | extracted chars | chars per MB |
@@ -45,24 +54,69 @@ The 22× spread between `drawing` (2,471 chars/MB) and `bom` (65,153 chars/MB)
 is the central weakness of MB metering and is managed in §4.4, not designed
 away.
 
-### 2.2 Model spend per tender
+### 2.2 Call structure — where the tokens actually go
 
-Input ≈ 801,022 chars ÷ 4 ≈ **200,000 input tokens**. Output taken as the full
-stored corpus (559,120 B ≈ **139,780 tokens**) — deliberately conservative,
-since `compliance.json` (236,035 B of it) is derived in Python and never comes
-off the wire.
+Read out of `chunking.py`, `extract_tech.py`, `extract_requirements.py` and
+`extract.py` rather than assumed:
 
-| model | $ / tender | $ / MB | ₹ / MB (@ ₹88) |
+| path | budget | behaviour |
+|---|---|---|
+| `chunk_on_lines` | — | **No overlap, by design** — "overlap duplicates the records the chunk carries". No document text is ever sent twice. |
+| `TECH_CHUNK_CHARS` | 12,000 | 28 documents, ~39 chunks |
+| `REQUIREMENTS_CHUNK_CHARS` | 8,000 | 1 document, 4 chunks |
+| `extract.py:25` | unchunked | quotations sent whole |
+| classification | — | 3 of 37 documents; the other 34 resolve by rule, free |
+
+That is roughly **55 model calls per tender.** The only duplicated input is the
+prompt itself, re-sent once per call at ~400 tokens — about **+22,000 tokens,
+an 11% overhead** on top of the document text.
+
+Input is therefore ≈ 200,250 (text) + 22,000 (prompt re-sends) ≈ **222,000
+tokens**.
+
+### 2.3 Model spend per tender
+
+Output is given as a range. The low end is what the model actually emits —
+`facts.json` (222,335 B) + `requirements.json` (70,912 B) ≈ **73,312 tokens**.
+The high end (**139,780 tokens**) adds `compliance.json` and `documents.json`,
+which are derived in Python and never come off the wire; it is carried as a
+safety margin only.
+
+| model | $ / tender | ₹ / MB (@ ₹88) | ₹ / yr @ Base (1,080 MB) |
 |---|---|---|---|
-| Sonnet 5, intro rate (expires 2026-08-31) | $1.80 | $0.040 | ₹3.55 |
-| Sonnet 5, standard ($3 / $15) | $2.70 | $0.060 | ₹5.33 |
-| Opus 5 ($5 / $25) | $4.50 | $0.101 | ₹8.87 |
+| Haiku 4.5 ($1 / $5) | $0.59 – 0.92 | ₹1.16 – 1.82 | ₹1,253 – 1,966 |
+| Sonnet 5, intro (expires 2026-08-31) | $1.18 – 1.84 | ₹2.32 – 3.63 | ₹2,506 – 3,920 |
+| Sonnet 5, standard ($3 / $15) | $1.77 – 2.76 | ₹3.48 – 5.45 | ₹3,758 – 5,886 |
+| **Opus 5 ($5 / $25)** | **$2.94 – 4.61** | **₹5.81 – 9.09** | **₹6,275 – 9,817** |
 
-**Marginal cost of goods is ₹3.5–9 per billable MB.** Every price in §3 is set
-against the value delivered, not this number — but this number is what proves
-the margin holds under any realistic input.
+**Marginal cost of goods is ₹1.2–9.1 per billable MB depending on model, and
+₹5.8–9.1 on Opus 5.** Every price in §3 is set against the value delivered, not
+against this number — but this is what proves the margin holds under any
+realistic input.
 
-### 2.3 Worst-case input
+### 2.4 Cost levers — and why there is only one
+
+The usual optimisations are unavailable here. This was checked, not assumed:
+
+- **Prompt caching does not apply.** Opus 5's minimum cacheable prefix is 512
+  tokens. The prompt library spans 194–1,292 tokens, and only
+  `requirements_v4` (1,292 tok, 4 calls per tender) clears the bar. Best case
+  saves ~5,000 tokens per tender — immaterial.
+- **No chunk overlap exists to remove.** Already eliminated by design (§2.2).
+- **Input is document text**, unique per document. Nothing to deduplicate
+  beyond the `content_sha256` skip already in `pipeline.py` (§4.2).
+
+Model choice is therefore the entire lever, and it spans **₹1,253 → ₹9,817 per
+year** — a total range of ₹8,564, or **1.6% of the ₹5,40,000 credit line** at
+Base volume.
+
+> **Never trade extraction accuracy for model cost.** Moving Opus 5 → Haiku 4.5
+> saves ~₹8,500 a year. One missed deviation on one tender costs the client more
+> than that, and costs you the account. The store invariants in `CLAUDE.md`
+> exist because wrong extractions corrupt award decisions; they must not be
+> undermined to save a rounding error.
+
+### 2.5 Worst-case input
 
 The margin risk under MB billing is text-dense, small-byte files, not large
 ones. The reference requirements sheet is 276 KB → 25,176 chars = **91,217
@@ -284,7 +338,8 @@ From `CLAUDE.md`, and each one has a specific consequence here:
 
 | risk | severity | mitigation |
 |---|---|---|
-| Sonnet 5 intro pricing ends 2026-08-31 | low | COGS rises $1.80 → $2.70/tender; margin stays ~98%. No price change needed. |
+| Sonnet 5 intro pricing ends 2026-08-31 | low | Only bites if running Sonnet 5: COGS rises ~50%, ₹3,920 → ₹5,886/yr at Base. Margin stays ~98%. No price change needed. |
+| Pressure to downgrade the model to save cost | medium | §2.4. The entire Opus 5 → Haiku 4.5 saving is ₹8,500/yr. Refuse it; the accuracy risk is not priced in the client's favour. |
 | Client disputes MB on a drawing-heavy pack | **high** | §4.4 ceiling caps their exposure; quote shown pre-spend (§4.5). |
 | Client re-uploads to game the meter | low | `content_sha256` dedup makes re-upload free, so there is nothing to game. |
 | Model swap silently erodes margin | **high** | §5.4 telemetry. This is why it is non-negotiable. |
@@ -302,9 +357,10 @@ for client-verifiability — the client can read the number off their own file
 browser before they upload, which neither alternative allows. §4.4 bounds the
 resulting variance.
 
-**Value anchor over cost-plus.** Marginal cost is ₹3.5–9 per MB. Cost-plus at a
-10× multiple would cap a tender near ₹2,500 against ₹1,00,000 of displaced
-labour. The pricing is deliberately not cost-related.
+**Value anchor over cost-plus.** Marginal cost is ₹5.8–9.1 per MB on Opus 5.
+Cost-plus at a 10× multiple would cap a tender near ₹4,000 against ₹1,00,000 of
+displaced labour, and pure-LLM breakeven sits at ~₹9/MB against a ₹500/MB price
+— **55× headroom**. The pricing is deliberately not cost-related.
 
 ## 9. Out of scope
 
