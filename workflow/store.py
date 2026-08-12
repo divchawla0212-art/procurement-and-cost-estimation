@@ -1,6 +1,6 @@
 from datetime import date
 
-from workflow.models.project import Project
+from workflow.models.project import Item, Project
 
 
 class WorkflowStore:
@@ -10,6 +10,7 @@ class WorkflowStore:
 
     def __init__(self) -> None:
         self._projects: dict[str, Project] = {}
+        self._items: dict[str, Item] = {}
 
     # -- projects ---------------------------------------------------------
 
@@ -45,3 +46,51 @@ class WorkflowStore:
         updated = project.model_copy(update={"name": new_name})
         self._projects[project_id] = updated
         return updated
+
+    # -- items ------------------------------------------------------------
+
+    def create_item(
+        self,
+        project_id: str,
+        item_type: str,
+        description: str,
+        qty: float,
+        uom: str,
+        discipline: str,
+        estimated_value_aed: int,
+        required_on_site: date | None = None,
+        is_long_lead: bool = False,
+    ) -> Item:
+        if project_id not in self._projects:
+            raise KeyError(f"Unknown project: {project_id}")
+        item = Item(
+            project_id=project_id,
+            item_type=item_type,
+            description=description,
+            qty=qty,
+            uom=uom,
+            discipline=discipline,
+            estimated_value_aed=estimated_value_aed,
+            required_on_site=required_on_site,
+            is_long_lead=is_long_lead,
+        )
+        self._items[item.id] = item
+        return item
+
+    def items_for_project(self, project_id: str) -> list[Item]:
+        return [i for i in self._items.values() if i.project_id == project_id]
+
+    def validate_against_live_period(self, project_id: str, when: date) -> str | None:
+        """Returns None when `when` is in range, otherwise the reason it is not.
+        A reason string rather than a bare False, so a caller can show the user
+        something actionable."""
+        project = self._projects.get(project_id)
+        if project is None:
+            raise KeyError(f"Unknown project: {project_id}")
+        if when < project.live_period_start or when > project.live_period_end:
+            return (
+                f"{when.isoformat()} falls outside the project live period "
+                f"({project.live_period_start.isoformat()} to "
+                f"{project.live_period_end.isoformat()})"
+            )
+        return None
