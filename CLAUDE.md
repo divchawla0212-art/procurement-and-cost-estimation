@@ -25,8 +25,8 @@ untracked fixture directories are present, never in pass/fail:
 
 | where | baseline |
 |---|---|
-| a developer workstation, `data/` and an ingested multi-vendor `projects/` present | **873 passed, 3 skipped, 0 failed** |
-| CI, and any clean checkout | **866 passed, 10 skipped, 0 failed** |
+| a developer workstation, `data/` and an ingested multi-vendor `projects/` present | **958 passed, 3 skipped, 0 failed** |
+| CI, and any clean checkout | **951 passed, 10 skipped, 0 failed** |
 
 Anything else is a real regression.
 
@@ -38,10 +38,27 @@ three skips a workstation already shows are credential guards
 `test_procurement_real_data.py`) and skip in both places.
 
 So the CI row is the workstation row with the four corpus-coverage passes and
-the three `data/` passes turned into skips — `866 = 873 - 4 - 3`,
-`10 = 3 + 4 + 3`; 876 tests either way. When the counts move, measure the
+the three `data/` passes turned into skips — `951 = 958 - 4 - 3`,
+`10 = 3 + 4 + 3`; 961 tests either way. When the counts move, measure the
 workstation row and derive the CI row from it; editing the two rows
 independently is how they drift apart.
+
+**These numbers ran the derivation backwards, because they had to.** The
+checkout that produced them had neither `data/` nor a fixture-bearing
+`projects/`, so the workstation row was not measurable there — only the
+clean/CI row was, at **951 passed, 10 skipped**. The 958/3 workstation figure
+above was *derived* from that measurement by adding the same 7 back
+(`958 = 951 + 4 + 3`, `3 = 10 - 4 - 3`), the reverse of the normal direction.
+The arithmetic reconciles either way, since it's the same equation read
+backwards, but reconciling is not the same as measuring: **958/3 is an
+assumption that the four corpus-coverage tests and the three `data/`-guarded
+tests would all still pass on a fixture-bearing checkout, not a confirmed
+result.** The 951/10 row is the one that was actually run, and the one to
+trust without qualification. If you have `data/` and a multi-vendor
+`projects/` and get something other than 958/3, that is not necessarily a
+regression — it may just mean the derived row was wrong and this note was
+overdue for a real measurement; re-run here and update both rows from *that*
+one, the normal way described above.
 
 **There is no longer a workstation-only failure.** Until the Streamlit portal
 was removed, `tests/test_portal_app.py::test_missing_api_key_does_not_block_creation`
@@ -76,8 +93,9 @@ dev`.
 
 ## Store invariants — violating these corrupts award decisions
 
-The snapshots under `projects/<slug>/store/` are the **only** authoritative
-store; `index/store.db` is derived and disposable.
+There are **two** authoritative stores, with separate rules. For project data:
+the snapshots under `projects/<slug>/store/`; `index/store.db` is derived and
+disposable. For accounts: `<ROOT>/auth.json` — see the section after this one.
 
 - Every write goes through `procurement/store/snapshots.py`. Never hand-roll a
   snapshot write.
@@ -95,6 +113,32 @@ store; `index/store.db` is derived and disposable.
   the model reads, code decides. Never ask an extractor whether a vendor complies.
 - A failed extraction never blanks previously-good stored data, and always
   records why in `DocumentRecord.notes`.
+
+## Auth invariants — `<ROOT>/auth.json`
+
+Users, sessions and grants live in one document so a single lock and a single
+atomic write keep all three consistent. Written **only** from
+`api/auth/store.py`; routes never touch the file.
+
+- Every write is a read-modify-write inside `locked_update`. **And so is every
+  decision that gates one.** A check made in the caller and a write made in
+  the store are two critical sections, not one: two admins deleting each other
+  concurrently each read "two admins, fine" and both writes land on zero
+  admins. Both guards this subsystem shipped wrong were *reads* outside the
+  lock, not writes — `store.delete_user` and `store.grant` show the shape.
+- `grants` holds exactly the grants whose user still exists. `delete_user`
+  cascades to grants and sessions in the same write. (A grant whose *project*
+  is gone is deliberately tolerated and inert — `list_projects` filters
+  against disk.)
+- Sessions persist `sha256(token)` only. `password_hash` is never a field on
+  `User`, so it cannot reach a response body; `store.password_hash_for` is the
+  one reader of the digest.
+- Roles are `admin` and `reviewer`, and **no route changes a role** — it is
+  set once at creation. Signup always creates a reviewer.
+- A project slug is matched against `list_projects` (which reads `os.listdir`),
+  never by asking the filesystem whether a path exists. Windows and macOS
+  resolve paths case-insensitively; CI does not, so that class of bug cannot
+  fail on CI.
 
 ## Planning convention
 

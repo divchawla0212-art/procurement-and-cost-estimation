@@ -2,31 +2,70 @@ import { useEffect, useState } from 'react'
 import { fetchProjects } from './api'
 import type { ProjectSummary } from './types'
 import { useAsync } from './useAsync'
+import { useAuth } from './auth/context'
+import type { User } from './auth/context'
+import { Auth } from './pages/Auth'
 import { Dashboard } from './pages/Dashboard'
+import { Overview } from './pages/Overview'
 import { ComplianceMatrix } from './pages/ComplianceMatrix'
 import { ComparativeStatement } from './pages/ComparativeStatement'
 import { ExtractionStatus } from './pages/ExtractionStatus'
 import { Setup } from './pages/Setup'
+import { Admin } from './pages/Admin'
 
-type View = 'dashboard' | 'setup' | 'matrix' | 'statement' | 'extraction'
+type View =
+  | 'dashboard'
+  | 'setup'
+  | 'overview'
+  | 'matrix'
+  | 'statement'
+  | 'extraction'
+  | 'admin'
 
-const NAV: { view: View; index: string; label: string; needsProject: boolean }[] = [
+// `roles` is omitted for every screen both roles can reach; the one entry that
+// carries it is hidden from a reviewer's nav. This is presentation only — the
+// server enforces the actual boundary, and every `/api/admin/*` route refuses
+// a reviewer whether or not this list ever mentioned it.
+const NAV: {
+  view: View
+  index: string
+  label: string
+  needsProject: boolean
+  roles?: Array<User['role']>
+}[] = [
   { view: 'dashboard', index: '00', label: 'Dashboard', needsProject: false },
   { view: 'setup', index: '01', label: 'Set up & ingest', needsProject: false },
-  { view: 'matrix', index: '02', label: 'Compliance matrix', needsProject: true },
-  { view: 'statement', index: '03', label: 'Comparative statement', needsProject: true },
-  { view: 'extraction', index: '04', label: 'Extraction status', needsProject: true },
+  { view: 'overview', index: '02', label: 'Overview', needsProject: true },
+  { view: 'matrix', index: '03', label: 'Compliance matrix', needsProject: true },
+  { view: 'statement', index: '04', label: 'Comparative statement', needsProject: true },
+  { view: 'extraction', index: '05', label: 'Extraction status', needsProject: true },
+  {
+    view: 'admin',
+    index: '06',
+    label: 'Users and access',
+    needsProject: false,
+    roles: ['admin'],
+  },
 ]
 
 export default function App() {
+  const { user, ready, logout } = useAuth()
   const [tick, setTick] = useState(0)
+  // Nothing is fetched until a session is confirmed: while signed out (or
+  // still booting) the loader resolves to an empty list without hitting the
+  // network, and the moment `user` changes — sign-in, sign-out — this re-runs
+  // because `user` is a dependency, so the roster is never left showing a
+  // stale or unauthenticated fetch's result.
   const { data: projects, error, loading } = useAsync<ProjectSummary[]>(
-    fetchProjects,
-    [tick],
+    () => (user ? fetchProjects() : Promise.resolve([])),
+    [tick, user],
   )
   const [view, setView] = useState<View>('dashboard')
   const [slug, setSlug] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
+  // A vendor to pre-select when the matrix is opened from the Overview, so a
+  // click on a vendor there lands on that vendor's rows rather than "all".
+  const [matrixVendor, setMatrixVendor] = useState<string | null>(null)
 
   useEffect(() => {
     if (projects && projects.length && slug === null) {
@@ -39,7 +78,20 @@ export default function App() {
 
   function open(nextSlug: string) {
     setSlug(nextSlug)
+    setMatrixVendor(null)
+    setView('overview')
+  }
+
+  function openMatrix(vendor?: string) {
+    setMatrixVendor(vendor ?? null)
     setView('matrix')
+  }
+
+  function navigate(next: View) {
+    // A plain nav click to the matrix shows every vendor; only an Overview
+    // drill-down carries a vendor filter into it.
+    if (next === 'matrix') setMatrixVendor(null)
+    setView(next)
   }
 
   function startNew() {
@@ -52,6 +104,13 @@ export default function App() {
     setCreating(false)
     reload()
   }
+
+  // Every hook above must run on every render regardless of auth state, so
+  // these gates come after them rather than before.
+  if (!ready) return <div className="boot" />
+  if (!user) return <Auth />
+
+  const visibleNav = NAV.filter((item) => !item.roles || item.roles.includes(user.role))
 
   return (
     <div className="shell">
@@ -89,7 +148,7 @@ export default function App() {
 
           <div className="rail-label">Screens</div>
           <ul className="rail-nav">
-            {NAV.map((item) => {
+            {visibleNav.map((item) => {
               const disabled = item.needsProject && !slug
               return (
                 <li key={item.view}>
@@ -98,7 +157,7 @@ export default function App() {
                     className={view === item.view ? 'active' : ''}
                     disabled={disabled}
                     style={disabled ? { opacity: 0.4, cursor: 'not-allowed' } : undefined}
-                    onClick={() => setView(item.view)}
+                    onClick={() => navigate(item.view)}
                   >
                     <span className="nav-index">{item.index}</span>
                     {item.label}
@@ -107,6 +166,16 @@ export default function App() {
               )
             })}
           </ul>
+        </div>
+
+        <div className="rail-account">
+          <div className="rail-who">
+            <span className="rail-email">{user.email}</span>
+            <span className="rail-role">{user.role}</span>
+          </div>
+          <button type="button" className="rail-signout" onClick={() => logout()}>
+            Sign out
+          </button>
         </div>
 
         <div className="rail-foot">
@@ -163,14 +232,33 @@ export default function App() {
                 onOpen={open}
               />
             )}
+            {view === 'overview' && active && (
+              <Overview
+                slug={active.slug}
+                projectName={active.name}
+                onOpenMatrix={openMatrix}
+              />
+            )}
             {view === 'matrix' && active && (
-              <ComplianceMatrix slug={active.slug} projectName={active.name} />
+              <ComplianceMatrix
+                slug={active.slug}
+                projectName={active.name}
+                initialVendor={matrixVendor ?? undefined}
+              />
             )}
             {view === 'statement' && active && (
               <ComparativeStatement slug={active.slug} projectName={active.name} />
             )}
             {view === 'extraction' && active && (
               <ExtractionStatus slug={active.slug} projectName={active.name} />
+            )}
+            {view === 'admin' && user.role === 'admin' && (
+              // The role check is repeated here rather than trusted from the
+              // nav filter: `view` is component state, so a stale 'admin' left
+              // over from a previous session would otherwise render the screen
+              // for whoever signs in next. Its calls would 403, but the screen
+              // should not appear at all.
+              <Admin projects={projects ?? []} meId={user.id} />
             )}
           </div>
         </main>

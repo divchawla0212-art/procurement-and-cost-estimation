@@ -7,6 +7,8 @@ from procurement.project import create_project, load_project, save_project
 from procurement.store import snapshots
 from procurement.store.models import ComplianceResult, DocumentRecord, VendorFacts
 
+from tests.auth_helpers import signed_in_admin
+
 NOW = "2026-08-02T00:00:00+00:00"
 
 
@@ -55,7 +57,7 @@ def client(tmp_path, monkeypatch, project_slug) -> TestClient:
     # ROOT is read at import time in api.main — reload after env is set.
     import api.main as api_main
     monkeypatch.setattr(api_main, "ROOT", str(tmp_path))
-    return TestClient(api_main.app)
+    return signed_in_admin(TestClient(api_main.app), tmp_path)
 
 
 def test_extraction_status_route_returns_every_vendor(client, project_slug):

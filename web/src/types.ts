@@ -190,3 +190,19 @@ export interface Statement {
   statuses: Record<string, 'ok' | 'failed' | 'missing' | string>
   rows: StatementRow[]
 }
+
+/**
+ * A row of `GET /api/admin/users`. There is deliberately no `password_hash`
+ * here and none in the server's `User` model either — the digest is reachable
+ * only through `store.password_hash_for`, never through a response body.
+ *
+ * `grants` is empty for an admin and carries no meaning there: admins see
+ * every project regardless of what the grants table says.
+ */
+export interface AdminUser {
+  id: string
+  email: string
+  role: 'admin' | 'reviewer'
+  created_at: string
+  grants: string[]
+}

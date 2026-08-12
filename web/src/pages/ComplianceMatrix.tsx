@@ -19,6 +19,8 @@ import {
 export interface ComplianceMatrixProps {
   slug: string
   projectName: string
+  /** Pre-select the vendor filter — set when opened from the Overview. */
+  initialVendor?: string
 }
 
 const GROUP_ORDER: GroupKey[] = ['not_matched', 'needs_human', 'matched']
@@ -97,7 +99,7 @@ export function ComplianceMatrix(props: ComplianceMatrixProps): JSX.Element {
   const [view, setView] = useState<'worklist' | 'grid'>('worklist')
   const [query, setQuery] = useState('')
   const [verdicts, setVerdicts] = useState<Set<string>>(new Set())
-  const [vendor, setVendor] = useState('')
+  const [vendor, setVendor] = useState(props.initialVendor ?? '')
   const [matchedOpen, setMatchedOpen] = useState(false)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
 

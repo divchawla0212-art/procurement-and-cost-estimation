@@ -7,6 +7,8 @@ from procurement.store import snapshots
 from procurement.store.models import (ComplianceResult, RequirementRecord,
                                       RequirementSet, req_id_for)
 
+from tests.auth_helpers import signed_in_admin
+
 NOW = "2026-07-31T00:00:00+00:00"
 
 
@@ -40,7 +42,7 @@ def _client(tmp_path, monkeypatch) -> TestClient:
     # ROOT is read at import time in api.main — reload after env is set.
     import api.main as api_main
     monkeypatch.setattr(api_main, "ROOT", str(tmp_path))
-    return TestClient(api_main.app)
+    return signed_in_admin(TestClient(api_main.app), tmp_path)
 
 
 def test_list_projects_returns_seeded_project(tmp_path, monkeypatch):

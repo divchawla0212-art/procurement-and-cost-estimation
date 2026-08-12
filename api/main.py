@@ -11,9 +11,11 @@ import os
 import shutil
 import tempfile
 import zipfile
+from contextlib import asynccontextmanager
 
 from fastapi import (
     Body,
+    Depends,
     FastAPI,
     File,
     HTTPException,
@@ -26,6 +28,13 @@ from fastapi.staticfiles import StaticFiles
 
 import dotenv
 
+from api.admin_routes import router as admin_router
+from api.auth import bootstrap
+from api.auth import middleware as auth_middleware
+from api.auth import store as auth_store
+from api.auth.deps import current_user, require_admin, require_project_access
+from api.auth.models import User
+from api.auth.routes import router as auth_router
 from procurement import project as proj
 from procurement.coverage import build_extraction_status, rollup
 from procurement.feedback import save_feedback
@@ -70,7 +79,20 @@ def _provider_ready(provider: str) -> bool:
     return needed is None or bool(os.getenv(needed))
 
 
-app = FastAPI(title="Procurement Review API", version="0.2.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan: seed admin on startup."""
+    bootstrap.seed_admin_if_empty(ROOT)
+    yield
+
+
+app = FastAPI(title="Procurement Review API", version="0.2.0", lifespan=lifespan)
+# Registered BEFORE the CORS block on purpose, and the order is load-bearing.
+# Starlette inserts each middleware at position 0 and wraps in reverse, so the
+# last registered ends up outermost. Auth first therefore leaves CORS outside
+# it, and a 401 still comes back with the headers a cross-origin browser needs
+# to read the status instead of surfacing as an opaque CORS failure.
+auth_middleware.install(app)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -81,6 +103,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(auth_router)
+app.include_router(admin_router)
 
 
 def _project_summary(p) -> dict:
@@ -111,17 +135,22 @@ def health() -> dict:
 
 
 @app.get("/api/projects")
-def list_projects() -> list[dict]:
-    return [_project_summary(p) for p in proj.list_projects(ROOT)]
+def list_projects(user: User = Depends(current_user)) -> list[dict]:
+    visible = None if user.role == "admin" else auth_store.granted_slugs(ROOT, user.id)
+    return [
+        _project_summary(p)
+        for p in proj.list_projects(ROOT)
+        if visible is None or p.slug in visible
+    ]
 
 
 @app.get("/api/projects/{slug}")
-def get_project(slug: str) -> dict:
+def get_project(slug: str, _: User = Depends(require_project_access)) -> dict:
     return _project_summary(_load_or_404(slug))
 
 
 @app.get("/api/projects/{slug}/compliance-matrix")
-def get_compliance_matrix(slug: str) -> dict:
+def get_compliance_matrix(slug: str, _: User = Depends(require_project_access)) -> dict:
     _load_or_404(slug)
     matrix = build_matrix(ROOT, slug)
     payload = matrix.model_dump()
@@ -133,7 +162,7 @@ def get_compliance_matrix(slug: str) -> dict:
 
 
 @app.get("/api/projects/{slug}/summary")
-def get_summary(slug: str) -> dict:
+def get_summary(slug: str, _: User = Depends(require_project_access)) -> dict:
     """Lightweight dashboard readout: counts and coverage, no matrix rows."""
     project = _load_or_404(slug)
     matrix = build_matrix(ROOT, slug)
@@ -152,13 +181,13 @@ def get_summary(slug: str) -> dict:
 
 
 @app.get("/api/projects/{slug}/extraction-status")
-def get_extraction_status(slug: str) -> dict:
+def get_extraction_status(slug: str, _: User = Depends(require_project_access)) -> dict:
     _load_or_404(slug)
     return build_extraction_status(ROOT, slug).model_dump()
 
 
 @app.get("/api/projects/{slug}/statement")
-def get_statement(slug: str) -> dict:
+def get_statement(slug: str, _: User = Depends(require_project_access)) -> dict:
     _load_or_404(slug)
     return build_statement(ROOT, slug).model_dump()
 
@@ -203,7 +232,9 @@ _FORMAT = Query("xlsx", pattern="^(xlsx|csv)$")
 
 
 @app.get("/api/projects/{slug}/compliance-matrix/export")
-def export_compliance_matrix(slug: str, format: str = _FORMAT) -> Response:
+def export_compliance_matrix(
+    slug: str, format: str = _FORMAT, _: User = Depends(require_project_access)
+) -> Response:
     _load_or_404(slug)
     matrix = build_matrix(ROOT, slug)
     return _export(format, slug, "compliance-matrix",
@@ -212,7 +243,9 @@ def export_compliance_matrix(slug: str, format: str = _FORMAT) -> Response:
 
 
 @app.get("/api/projects/{slug}/statement/export")
-def export_statement(slug: str, format: str = _FORMAT) -> Response:
+def export_statement(
+    slug: str, format: str = _FORMAT, _: User = Depends(require_project_access)
+) -> Response:
     _load_or_404(slug)
     statement = build_statement(ROOT, slug)
     return _export(format, slug, "comparative-statement",
@@ -230,7 +263,10 @@ def export_statement(slug: str, format: str = _FORMAT) -> Response:
 
 
 @app.put("/api/projects/{slug}/vendors/{vendor}/feedback")
-def put_feedback(slug: str, vendor: str, payload: dict = Body(...)) -> dict:
+def put_feedback(
+    slug: str, vendor: str, payload: dict = Body(...),
+    _: User = Depends(require_project_access),
+) -> dict:
     _load_or_404(slug)
     try:
         save_feedback(ROOT, slug, vendor,
@@ -294,12 +330,12 @@ def _setup_state(project) -> dict:
 
 
 @app.get("/api/projects/{slug}/setup")
-def get_setup(slug: str) -> dict:
+def get_setup(slug: str, _: User = Depends(require_project_access)) -> dict:
     return _setup_state(_load_or_404(slug))
 
 
 @app.post("/api/projects", status_code=201)
-def create_project(payload: dict = Body(...)) -> dict:
+def create_project(payload: dict = Body(...), _: User = Depends(require_admin)) -> dict:
     name = str(payload.get("name", "")).strip()
     if not name:
         raise HTTPException(status_code=422, detail="A project name is required.")
@@ -314,7 +350,9 @@ def create_project(payload: dict = Body(...)) -> dict:
 
 
 @app.post("/api/projects/{slug}/requirements")
-def upload_requirements(slug: str, file: UploadFile = File(...)) -> dict:
+def upload_requirements(
+    slug: str, file: UploadFile = File(...), _: User = Depends(require_admin)
+) -> dict:
     project = _load_or_404(slug)
     filename = os.path.basename(file.filename or "")
     if not filename:
@@ -335,7 +373,9 @@ def upload_requirements(slug: str, file: UploadFile = File(...)) -> dict:
 
 
 @app.post("/api/projects/{slug}/vendors")
-def upload_vendors(slug: str, file: UploadFile = File(...)) -> dict:
+def upload_vendors(
+    slug: str, file: UploadFile = File(...), _: User = Depends(require_admin)
+) -> dict:
     _load_or_404(slug)
     fd, tmp = tempfile.mkstemp(suffix=".zip", dir=os.path.join(ROOT, slug))
     try:
@@ -352,7 +392,9 @@ def upload_vendors(slug: str, file: UploadFile = File(...)) -> dict:
 
 
 @app.put("/api/projects/{slug}/fx-rates")
-def set_fx_rates(slug: str, payload: dict = Body(...)) -> dict:
+def set_fx_rates(
+    slug: str, payload: dict = Body(...), _: User = Depends(require_admin)
+) -> dict:
     project = _load_or_404(slug)
     raw = payload.get("rates", {})
     if not isinstance(raw, dict):
@@ -371,7 +413,9 @@ def set_fx_rates(slug: str, payload: dict = Body(...)) -> dict:
 
 
 @app.post("/api/projects/{slug}/ingest")
-def ingest(slug: str, payload: dict | None = Body(default=None)) -> dict:
+def ingest(
+    slug: str, payload: dict | None = Body(default=None), _: User = Depends(require_admin)
+) -> dict:
     project = _load_or_404(slug)
     if not project.vendors:
         raise HTTPException(
