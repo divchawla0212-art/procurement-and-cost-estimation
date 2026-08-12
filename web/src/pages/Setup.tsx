@@ -10,8 +10,10 @@ import {
   uploadVendors,
 } from '../api'
 import { useAsync } from '../useAsync'
+import { useAuth } from '../auth/context'
 import {
   Card,
+  EmptyState,
   ErrorState,
   LoadingState,
   PageHeader,
@@ -26,7 +28,31 @@ export interface SetupProps {
 }
 
 export function Setup(props: SetupProps): JSX.Element {
+  const { user } = useAuth()
+  // Every mutation this screen offers — create, both uploads, FX, ingest — is
+  // `require_admin` on the server (api/main.py). A reviewer's `GET .../setup`
+  // is not, so the screen still has something true to show them: what has been
+  // attached, which vendors are loaded, whether ingestion has run. So the
+  // screen stays and the controls go, rather than hiding the whole thing.
+  // This is presentation only; the server refuses these calls either way.
+  const canEdit = user?.role === 'admin'
+
   if (props.slug === null) {
+    if (!canEdit) {
+      return (
+        <>
+          <PageHeader
+            eyebrow="Setup"
+            title="No project selected"
+            sub="Reviewers see the projects an administrator has granted them."
+          />
+          <EmptyState title="Nothing to set up here">
+            Only an administrator creates projects and runs ingestion. If you
+            expected to see a tender, ask them to grant you access to it.
+          </EmptyState>
+        </>
+      )
+    }
     return <CreateProject onCreated={props.onCreated} reload={props.reload} />
   }
   return (
@@ -35,6 +61,7 @@ export function Setup(props: SetupProps): JSX.Element {
       onNew={props.onNew}
       reload={props.reload}
       onOpen={props.onOpen}
+      canEdit={canEdit}
     />
   )
 }
@@ -127,11 +154,13 @@ function ConfigureProject({
   onNew,
   reload,
   onOpen,
+  canEdit,
 }: {
   slug: string
   onNew: () => void
   reload: () => void
   onOpen: (slug: string) => void
+  canEdit: boolean
 }): JSX.Element {
   const [tick, setTick] = useState(0)
   const { data: setup, error, loading } = useAsync(
@@ -161,11 +190,17 @@ function ConfigureProject({
       <PageHeader
         eyebrow="Setup"
         title={setup.name}
-        sub="Attach the requirement, upload vendor bids, set any FX rates, then run ingestion."
+        sub={
+          canEdit
+            ? 'Attach the requirement, upload vendor bids, set any FX rates, then run ingestion.'
+            : 'How this tender was set up. An administrator makes these changes.'
+        }
         actions={
-          <button className="btn btn-ghost" onClick={onNew}>
-            New project
-          </button>
+          canEdit ? (
+            <button className="btn btn-ghost" onClick={onNew}>
+              New project
+            </button>
+          ) : undefined
         }
       />
       <Card>
@@ -175,9 +210,18 @@ function ConfigureProject({
             done={done[0]}
             active={activeIndex === 0}
             title="Requirements document"
-            note="The buyer's spec — PDF, DOCX, or XLSX. Its clauses become the compliance rows."
+            note={
+              canEdit
+                ? "The buyer's spec — PDF, DOCX, or XLSX. Its clauses become the compliance rows."
+                : "The buyer's spec. Its clauses are the compliance rows you review."
+            }
           >
-            <RequirementsStep slug={slug} setup={setup} onDone={refresh} />
+            <RequirementsStep
+              slug={slug}
+              setup={setup}
+              onDone={refresh}
+              canEdit={canEdit}
+            />
           </StepFrame>
 
           <StepFrame
@@ -185,9 +229,18 @@ function ConfigureProject({
             done={done[1]}
             active={activeIndex === 1}
             title="Vendor bids"
-            note="Upload a ZIP whose top-level folders are vendors. Add more any time — each upload adds to the roster."
+            note={
+              canEdit
+                ? 'Upload a ZIP whose top-level folders are vendors. Add more any time — each upload adds to the roster.'
+                : 'The vendors whose bids were uploaded for this tender.'
+            }
           >
-            <VendorsStep slug={slug} setup={setup} onDone={refresh} />
+            <VendorsStep
+              slug={slug}
+              setup={setup}
+              onDone={refresh}
+              canEdit={canEdit}
+            />
           </StepFrame>
 
           <StepFrame
@@ -195,9 +248,18 @@ function ConfigureProject({
             done={done[2]}
             active={activeIndex === 2}
             title="FX rates"
-            note={`Enter a rate to ${setup.target_currency} for any other currency a vendor quoted in. Leave empty if every offer is already in ${setup.target_currency}.`}
+            note={
+              canEdit
+                ? `Enter a rate to ${setup.target_currency} for any other currency a vendor quoted in. Leave empty if every offer is already in ${setup.target_currency}.`
+                : `The rates used to normalise offers quoted in another currency to ${setup.target_currency}.`
+            }
           >
-            <FxStep slug={slug} setup={setup} onSaved={refresh} />
+            <FxStep
+              slug={slug}
+              setup={setup}
+              onSaved={refresh}
+              canEdit={canEdit}
+            />
           </StepFrame>
 
           <StepFrame
@@ -205,9 +267,19 @@ function ConfigureProject({
             done={done[3]}
             active={activeIndex === 3}
             title="Run ingestion"
-            note="Extract every vendor bid and build the comparison. This can take a few minutes with a live model."
+            note={
+              canEdit
+                ? 'Extract every vendor bid and build the comparison. This can take a few minutes with a live model.'
+                : 'Whether the bids have been extracted and the comparison built.'
+            }
           >
-            <IngestStep slug={slug} setup={setup} onDone={refresh} onOpen={onOpen} />
+            <IngestStep
+              slug={slug}
+              setup={setup}
+              onDone={refresh}
+              onOpen={onOpen}
+              canEdit={canEdit}
+            />
           </StepFrame>
         </div>
       </Card>
@@ -304,10 +376,12 @@ function RequirementsStep({
   slug,
   setup,
   onDone,
+  canEdit,
 }: {
   slug: string
   setup: ProjectSetup
   onDone: () => void
+  canEdit: boolean
 }): JSX.Element {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -331,24 +405,32 @@ function RequirementsStep({
         <div className="filerow">
           <span className="fname">{setup.requirements_file}</span>
           <span className="fmeta">attached</span>
-          <button
-            className="btn btn-ghost btn-sm"
-            onClick={() => inputRef.current?.click()}
-          >
-            Replace
-          </button>
+          {canEdit && (
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => inputRef.current?.click()}
+            >
+              Replace
+            </button>
+          )}
         </div>
       )}
-      <div style={{ marginTop: setup.requirements_file ? '0.6rem' : 0 }}>
-        <Dropzone
-          accept=".pdf,.docx,.xlsx"
-          title="Drop the requirements file or browse"
-          hint="PDF, DOCX or XLSX"
-          busy={busy}
-          onFile={handle}
-          inputRef={inputRef}
-        />
-      </div>
+      {canEdit ? (
+        <div style={{ marginTop: setup.requirements_file ? '0.6rem' : 0 }}>
+          <Dropzone
+            accept=".pdf,.docx,.xlsx"
+            title="Drop the requirements file or browse"
+            hint="PDF, DOCX or XLSX"
+            busy={busy}
+            onFile={handle}
+            inputRef={inputRef}
+          />
+        </div>
+      ) : (
+        !setup.requirements_file && (
+          <p className="hint">No requirements document attached yet.</p>
+        )
+      )}
       {error && (
         <div className="banner banner--error" style={{ marginTop: '0.6rem' }}>
           {error}
@@ -375,10 +457,12 @@ function VendorsStep({
   slug,
   setup,
   onDone,
+  canEdit,
 }: {
   slug: string
   setup: ProjectSetup
   onDone: () => void
+  canEdit: boolean
 }): JSX.Element {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -404,13 +488,19 @@ function VendorsStep({
           ))}
         </div>
       )}
-      <Dropzone
-        accept=".zip"
-        title="Drop a vendor ZIP or browse"
-        hint="One ZIP; top-level folders are vendors"
-        busy={busy}
-        onFile={handle}
-      />
+      {canEdit ? (
+        <Dropzone
+          accept=".zip"
+          title="Drop a vendor ZIP or browse"
+          hint="One ZIP; top-level folders are vendors"
+          busy={busy}
+          onFile={handle}
+        />
+      ) : (
+        setup.vendors.length === 0 && (
+          <p className="hint">No vendor bids uploaded yet.</p>
+        )
+      )}
       {error && (
         <div className="banner banner--error" style={{ marginTop: '0.6rem' }}>
           {error}
@@ -431,7 +521,9 @@ function FxStep({
   slug,
   setup,
   onSaved,
+  canEdit,
 }: {
+  canEdit: boolean
   slug: string
   setup: ProjectSetup
   onSaved: () => void
@@ -440,26 +532,36 @@ function FxStep({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [ok, setOk] = useState(false)
+  const [suggested, setSuggested] = useState(false)
 
   useEffect(() => {
     const entries = Object.entries(setup.fx_rates)
-    setRows(entries.map(([code, rate]) => ({ code, rate: String(rate) })))
+    if (entries.length === 0 && setup.target_currency === 'USD') {
+      setRows([{ code: 'EUR', rate: '1.08' }])
+      setSuggested(true)
+    } else {
+      setRows(entries.map(([code, rate]) => ({ code, rate: String(rate) })))
+      setSuggested(false)
+    }
     setError(null)
   }, [setup])
 
   function edit(index: number, patch: Partial<FxRow>) {
     setRows((rs) => rs.map((r, i) => (i === index ? { ...r, ...patch } : r)))
     setOk(false)
+    setSuggested(false)
   }
 
   function addRow() {
     setRows((rs) => [...rs, { code: '', rate: '' }])
     setOk(false)
+    setSuggested(false)
   }
 
   function removeRow(index: number) {
     setRows((rs) => rs.filter((_, i) => i !== index))
     setOk(false)
+    setSuggested(false)
   }
 
   async function save() {
@@ -485,8 +587,33 @@ function FxStep({
     }
   }
 
+  if (!canEdit) {
+    return rows.length ? (
+      <>
+        {rows.map((row) => (
+          <div className="filerow" key={row.code}>
+            <span className="fname">{row.code}</span>
+            <span className="fmeta">
+              1 {row.code} = {row.rate} {setup.target_currency}
+            </span>
+          </div>
+        ))}
+      </>
+    ) : (
+      <p className="hint">
+        No FX rates set — every offer is treated as already quoted in{' '}
+        {setup.target_currency}.
+      </p>
+    )
+  }
+
   return (
     <>
+      {suggested && (
+        <p className="hint" style={{ marginBottom: '0.5rem' }}>
+          Suggested: 1.08 as of 2026-08-05 — check before saving.
+        </p>
+      )}
       {rows.map((row, i) => (
         <div className="fxrow" key={i} style={{ marginBottom: '0.5rem' }}>
           <input
@@ -538,7 +665,18 @@ function FxStep({
 
 /* ------------------------------------------------------- step 4: ingestion */
 
-function ProviderBanner({ option }: { option: ProviderOption }): JSX.Element {
+function ProviderBanner({
+  option,
+}: {
+  option: ProviderOption | null
+}): JSX.Element {
+  if (option === null) {
+    return (
+      <div className="banner banner--warn">
+        No provider configured. Choose one below.
+      </div>
+    )
+  }
   if (option.ready) {
     return (
       <div className="banner banner--ok">
@@ -561,42 +699,96 @@ function IngestStep({
   setup,
   onDone,
   onOpen,
+  canEdit,
 }: {
   slug: string
   setup: ProjectSetup
   onDone: () => void
   onOpen: (slug: string) => void
+  canEdit: boolean
 }): JSX.Element {
   const [running, setRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [provider, setProvider] = useState(setup.provider.provider)
+  // '' is the "nothing selected yet" sentinel for the controlled <select>: a
+  // native select's value can't be null. It only arises when the server has
+  // no default (BUG-004: LLM_PROVIDER unset) and the reviewer hasn't picked
+  // one either.
+  const [provider, setProvider] = useState(setup.provider.provider ?? '')
 
   // A cached bundle talking to an older API during a rolling deploy would get
   // no `catalog` at all; falling back to [] keeps step 4 rendering instead of
   // white-screening on `.find`.
   const catalog = setup.provider.catalog ?? []
   const inCatalog = catalog.some((entry) => entry.id === provider)
-  const selected =
+  const selected: ProviderOption | null =
     catalog.find((entry) => entry.id === provider) ??
-    { id: provider, needs_key: setup.provider.needs_key, ready: setup.provider.ready }
+    (provider === ''
+      ? null
+      : { id: provider, needs_key: setup.provider.needs_key, ready: setup.provider.ready })
 
   const anthropic = catalog.find((entry) => entry.id === 'anthropic')
   const scannedPdfsUnsupported =
-    selected.id !== 'anthropic' && anthropic !== undefined && !anthropic.ready
+    selected !== null && selected.id !== 'anthropic' &&
+    anthropic !== undefined && !anthropic.ready
 
   const noVendors = setup.vendors.length === 0
-  const canRun = !noVendors && selected.ready && !running
+  const canRun = !noVendors && selected !== null && selected.ready && !running
 
   async function run() {
     setRunning(true)
     setError(null)
     try {
-      await runIngestion(slug, provider)
+      await runIngestion(slug, provider || undefined)
       onDone()
     } catch (err) {
       setError((err as Error).message)
       setRunning(false)
     }
+  }
+
+  // Guard 3 (design spec §1.2): a forced run re-spends the full LLM cost of
+  // the project, so it confirms before firing and names the cost. Guard 2 —
+  // a separate, secondary action shown only once there are results to force
+  // over — is enforced at the call site below (`setup.has_results`).
+  async function runForced() {
+    const ok = window.confirm(
+      'This re-extracts every vendor document from scratch, ignoring the ' +
+      'cache, and re-spends the full LLM cost of the project. Continue?',
+    )
+    if (!ok) return
+    setRunning(true)
+    setError(null)
+    try {
+      await runIngestion(slug, provider || undefined, true)
+      onDone()
+    } catch (err) {
+      setError((err as Error).message)
+      setRunning(false)
+    }
+  }
+
+  if (!canEdit) {
+    // No provider banner: which model runs the extraction is an operator's
+    // concern, and a reviewer can do nothing about a missing key. What they
+    // need is whether results exist and a way into them.
+    return (
+      <>
+        {setup.has_results ? (
+          <>
+            <div className="banner banner--ok">Ingestion complete.</div>
+            <div style={{ marginTop: '0.6rem' }}>
+              <button className="btn btn-ink" onClick={() => onOpen(slug)}>
+                Review compliance matrix
+              </button>
+            </div>
+          </>
+        ) : (
+          <p className="hint">
+            Ingestion has not run yet, so there are no results to review.
+          </p>
+        )}
+      </>
+    )
   }
 
   return (
@@ -628,8 +820,16 @@ function IngestStep({
         >
           {/* A selection outside the catalog — an off-catalog LLM_PROVIDER —
               matches no option, so the browser would render the control blank
-              and it would read as broken. Show what it is actually set to. */}
-          {!inCatalog && (
+              and it would read as broken. Show what it is actually set to.
+              '' is the separate "nothing configured, nothing chosen" case
+              (BUG-004): the placeholder names that state honestly instead of
+              rendering an empty label. */}
+          {!inCatalog && provider === '' && (
+            <option value="" disabled>
+              No provider configured
+            </option>
+          )}
+          {!inCatalog && provider !== '' && (
             <option value={provider} disabled>
               {provider} — not a known provider
             </option>
@@ -668,6 +868,20 @@ function IngestStep({
         >
           {running ? 'Running ingestion…' : 'Run ingestion'}
         </button>
+        {/* BUG-002: a distinct, secondary action from `Run ingestion`, shown
+            only once there are results to force over (guard 2) and confirmed
+            before it fires (guard 3) - see runForced above. Before the first
+            run there is nothing cached to bypass. */}
+        {setup.has_results && (
+          <button
+            className="btn btn-ghost"
+            disabled={!canRun}
+            onClick={runForced}
+            title="Re-extracts every document from scratch, ignoring the cache."
+          >
+            {running ? 'Re-extracting…' : 'Force full re-extraction'}
+          </button>
+        )}
         {setup.has_results && (
           <button className="btn btn-ink" onClick={() => onOpen(slug)}>
             Review compliance matrix

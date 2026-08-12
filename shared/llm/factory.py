@@ -12,9 +12,21 @@ def get_client(provider: str | None = None) -> LLMClient:
 
     `provider=None` resolves through LLM_PROVIDER, which is what every
     environment-driven caller relies on. An explicit name wins, so a request
-    can choose a provider without mutating the process environment.
+    can choose a provider without mutating the process environment. Neither
+    an explicit empty string nor an unset/empty LLM_PROVIDER defaults to
+    "mock" — there is no argument-free path to the mock client that does not
+    name it.
     """
-    name = (provider or os.getenv("LLM_PROVIDER", "mock")).lower()
+    name = (provider or "").strip().lower() or None
+    if name is None:
+        env = os.getenv("LLM_PROVIDER") or ""
+        name = env.strip().lower() or None
+    if name is None:
+        raise ValueError(
+            "No LLM_PROVIDER is configured. Set the LLM_PROVIDER environment "
+            "variable (one of: mock, anthropic, openai, gemini, bedrock), or "
+            "pass a provider explicitly to get_client()."
+        )
     model = os.getenv("LLM_MODEL")
     kwargs = {"model": model} if model else {}
     if name == "mock":

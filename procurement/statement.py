@@ -263,6 +263,20 @@ def _priced_rows(project, facts) -> list[StatementRow]:
             cell("normalised",
                  f"Normalised (ex-VAT, ex-options, {project.target_currency})",
                  "priced", vendor, total=norm_total)
+        elif (base is not None and
+              (normalized or {}).get("normalization_status") == "no_fx_rate"):
+            # Emitted with no total: the row must not vanish, or its absence
+            # reads as "nothing to compare" rather than "a rate is missing".
+            # `base is not None` matters here too: _usable_rate fires on
+            # currency/fx_rates alone, before it ever looks at base_price, so
+            # a vendor with a foreign currency and no stated price would
+            # otherwise land here and be told a rate would fix it — it would
+            # not, since base is still unknown. That vendor falls through to
+            # the FINAL VALUE-style blank-with-no-cell case below instead.
+            cell("normalised",
+                 f"Normalised (ex-VAT, ex-options, {project.target_currency})",
+                 "priced", vendor,
+                 note=f"no FX rate set for {c.get('currency')}")
 
     for vendor in project.vendors:
         s = sums.get(vendor, {})

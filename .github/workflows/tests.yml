@@ -8,7 +8,7 @@
 # blast radius to fork PRs. The trade is stated plainly: the live-provider paths
 # are not exercised here.
 #
-# Expected on a clean checkout: 896 passed, 12 skipped, 0 failed.
+# Expected on a clean checkout: 1088 passed, 12 skipped, 0 failed.
 #
 # Twelve skips are expected, not a defect: three need provider credentials,
 # three need a `data/` sample directory that is not tracked in git, four need an
@@ -18,7 +18,10 @@
 # arithmetic relating them.
 #
 # Note that a local run legitimately differs and is not a regression: a
-# workstation with all of the above shows 905 passed, 3 skipped.
+# workstation with all of the above shows 1097 passed, 3 skipped.
+#
+# The `web` job below takes no secrets either, and is not part of the pytest
+# counts above — it is a separate suite over `web/`.
 
 name: tests
 
@@ -55,3 +58,37 @@ jobs:
 
       - name: Run tests
         run: python -m pytest -q
+
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        working-directory: web
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # 22 matches the node:22-alpine base image in the Dockerfile — the same
+      # rationale as the Python job pinning to the pyproject.toml floor: build
+      # and test against the interpreter the shipped image actually runs.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      # web/tsconfig.app.json includes `src`, so *.test.tsx files are
+      # type-checked as part of the production build, not just by vitest.
+      # Running only `npm test` here would miss a test-file type error that
+      # `npm run build` catches — see task 5's carry-forward note in
+      # .superpowers/sdd/2026-08-05-tracked-bugs-001-004/progress.md.
+      - name: Build
+        run: npm run build

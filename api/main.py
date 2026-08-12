@@ -10,10 +10,13 @@ from __future__ import annotations
 import os
 import shutil
 import tempfile
+import threading
 import zipfile
+from contextlib import asynccontextmanager
 
 from fastapi import (
     Body,
+    Depends,
     FastAPI,
     File,
     HTTPException,
@@ -26,6 +29,13 @@ from fastapi.staticfiles import StaticFiles
 
 import dotenv
 
+from api.admin_routes import router as admin_router
+from api.auth import bootstrap
+from api.auth import middleware as auth_middleware
+from api.auth import store as auth_store
+from api.auth.deps import current_user, require_admin, require_project_access
+from api.auth.models import User
+from api.auth.routes import router as auth_router
 from procurement import project as proj
 from procurement.coverage import build_extraction_status, rollup
 from procurement.feedback import save_feedback
@@ -36,8 +46,9 @@ from procurement.export import (
     statement_to_xlsx_bytes,
 )
 from procurement.matrix import GROUP_ORDER, build_matrix, rows_in_group
-from procurement.pipeline import load_dataset, run_ingestion
+from procurement.pipeline import has_results, run_ingestion
 from procurement.quote_select import pick_quote
+from procurement.renormalize import renormalize
 from procurement.statement import build_statement
 from procurement.store import snapshots
 
@@ -70,7 +81,20 @@ def _provider_ready(provider: str) -> bool:
     return needed is None or bool(os.getenv(needed))
 
 
-app = FastAPI(title="Procurement Review API", version="0.2.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan: seed admin on startup."""
+    bootstrap.seed_admin_if_empty(ROOT)
+    yield
+
+
+app = FastAPI(title="Procurement Review API", version="0.2.0", lifespan=lifespan)
+# Registered BEFORE the CORS block on purpose, and the order is load-bearing.
+# Starlette inserts each middleware at position 0 and wraps in reverse, so the
+# last registered ends up outermost. Auth first therefore leaves CORS outside
+# it, and a 401 still comes back with the headers a cross-origin browser needs
+# to read the status instead of surfacing as an opaque CORS failure.
+auth_middleware.install(app)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -81,6 +105,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(auth_router)
+app.include_router(admin_router)
 
 
 def _project_summary(p) -> dict:
@@ -91,6 +117,17 @@ def _project_summary(p) -> dict:
         "target_currency": p.target_currency,
         "status": p.status,
         "generation": p.generation,
+        # Whether the store holds an extraction to read, independent of
+        # `status` (BUG-001 follow-up / I2). `status` can be "failed" while
+        # the store still holds a complete prior extraction — CLAUDE.md: "a
+        # failed extraction never blanks previously-good stored data" — so
+        # `status` alone is the wrong predicate for whether screens 02/03 are
+        # reachable. Same computation `_setup_state` already uses; kept to
+        # one implementation. This route renders every project, so it takes
+        # the predicate that reads the store's shape rather than
+        # `bool(load_dataset(...))`, which loaded every vendor's facts and
+        # built a price comparison per project purely to discard it.
+        "has_results": has_results(ROOT, p.slug),
     }
 
 
@@ -111,17 +148,22 @@ def health() -> dict:
 
 
 @app.get("/api/projects")
-def list_projects() -> list[dict]:
-    return [_project_summary(p) for p in proj.list_projects(ROOT)]
+def list_projects(user: User = Depends(current_user)) -> list[dict]:
+    visible = None if user.role == "admin" else auth_store.granted_slugs(ROOT, user.id)
+    return [
+        _project_summary(p)
+        for p in proj.list_projects(ROOT)
+        if visible is None or p.slug in visible
+    ]
 
 
 @app.get("/api/projects/{slug}")
-def get_project(slug: str) -> dict:
+def get_project(slug: str, _: User = Depends(require_project_access)) -> dict:
     return _project_summary(_load_or_404(slug))
 
 
 @app.get("/api/projects/{slug}/compliance-matrix")
-def get_compliance_matrix(slug: str) -> dict:
+def get_compliance_matrix(slug: str, _: User = Depends(require_project_access)) -> dict:
     _load_or_404(slug)
     matrix = build_matrix(ROOT, slug)
     payload = matrix.model_dump()
@@ -133,7 +175,7 @@ def get_compliance_matrix(slug: str) -> dict:
 
 
 @app.get("/api/projects/{slug}/summary")
-def get_summary(slug: str) -> dict:
+def get_summary(slug: str, _: User = Depends(require_project_access)) -> dict:
     """Lightweight dashboard readout: counts and coverage, no matrix rows."""
     project = _load_or_404(slug)
     matrix = build_matrix(ROOT, slug)
@@ -152,13 +194,13 @@ def get_summary(slug: str) -> dict:
 
 
 @app.get("/api/projects/{slug}/extraction-status")
-def get_extraction_status(slug: str) -> dict:
+def get_extraction_status(slug: str, _: User = Depends(require_project_access)) -> dict:
     _load_or_404(slug)
     return build_extraction_status(ROOT, slug).model_dump()
 
 
 @app.get("/api/projects/{slug}/statement")
-def get_statement(slug: str) -> dict:
+def get_statement(slug: str, _: User = Depends(require_project_access)) -> dict:
     _load_or_404(slug)
     return build_statement(ROOT, slug).model_dump()
 
@@ -203,7 +245,9 @@ _FORMAT = Query("xlsx", pattern="^(xlsx|csv)$")
 
 
 @app.get("/api/projects/{slug}/compliance-matrix/export")
-def export_compliance_matrix(slug: str, format: str = _FORMAT) -> Response:
+def export_compliance_matrix(
+    slug: str, format: str = _FORMAT, _: User = Depends(require_project_access)
+) -> Response:
     _load_or_404(slug)
     matrix = build_matrix(ROOT, slug)
     return _export(format, slug, "compliance-matrix",
@@ -212,7 +256,9 @@ def export_compliance_matrix(slug: str, format: str = _FORMAT) -> Response:
 
 
 @app.get("/api/projects/{slug}/statement/export")
-def export_statement(slug: str, format: str = _FORMAT) -> Response:
+def export_statement(
+    slug: str, format: str = _FORMAT, _: User = Depends(require_project_access)
+) -> Response:
     _load_or_404(slug)
     statement = build_statement(ROOT, slug)
     return _export(format, slug, "comparative-statement",
@@ -230,7 +276,10 @@ def export_statement(slug: str, format: str = _FORMAT) -> Response:
 
 
 @app.put("/api/projects/{slug}/vendors/{vendor}/feedback")
-def put_feedback(slug: str, vendor: str, payload: dict = Body(...)) -> dict:
+def put_feedback(
+    slug: str, vendor: str, payload: dict = Body(...),
+    _: User = Depends(require_project_access),
+) -> dict:
     _load_or_404(slug)
     try:
         save_feedback(ROOT, slug, vendor,
@@ -256,11 +305,12 @@ def _provider_state() -> dict:
     The first three keys describe the default, not any selection — the front end
     and tests both depend on that meaning being unchanged.
     """
-    provider = os.getenv("LLM_PROVIDER", "mock").lower()
+    raw = os.getenv("LLM_PROVIDER")
+    provider = raw.strip().lower() if raw and raw.strip() else None
     return {
         "provider": provider,
-        "needs_key": PROVIDER_KEYS.get(provider),
-        "ready": _provider_ready(provider),
+        "needs_key": PROVIDER_KEYS.get(provider) if provider else None,
+        "ready": _provider_ready(provider) if provider else False,
         "catalog": [
             {"id": name, "needs_key": key, "ready": _provider_ready(name)}
             for name, key in PROVIDER_KEYS.items()
@@ -288,18 +338,18 @@ def _setup_state(project) -> dict:
         "fx_rates": project.fx_rates,
         "status": project.status,
         "generation": project.generation,
-        "has_results": bool(load_dataset(ROOT, slug)),
+        "has_results": has_results(ROOT, slug),
         "provider": _provider_state(),
     }
 
 
 @app.get("/api/projects/{slug}/setup")
-def get_setup(slug: str) -> dict:
+def get_setup(slug: str, _: User = Depends(require_project_access)) -> dict:
     return _setup_state(_load_or_404(slug))
 
 
 @app.post("/api/projects", status_code=201)
-def create_project(payload: dict = Body(...)) -> dict:
+def create_project(payload: dict = Body(...), _: User = Depends(require_admin)) -> dict:
     name = str(payload.get("name", "")).strip()
     if not name:
         raise HTTPException(status_code=422, detail="A project name is required.")
@@ -314,7 +364,9 @@ def create_project(payload: dict = Body(...)) -> dict:
 
 
 @app.post("/api/projects/{slug}/requirements")
-def upload_requirements(slug: str, file: UploadFile = File(...)) -> dict:
+def upload_requirements(
+    slug: str, file: UploadFile = File(...), _: User = Depends(require_admin)
+) -> dict:
     project = _load_or_404(slug)
     filename = os.path.basename(file.filename or "")
     if not filename:
@@ -329,13 +381,18 @@ def upload_requirements(slug: str, file: UploadFile = File(...)) -> dict:
     os.makedirs(dest_dir, exist_ok=True)
     with open(os.path.join(dest_dir, filename), "wb") as fh:
         shutil.copyfileobj(file.file, fh)
-    project.requirements_file = filename
-    proj.save_project(ROOT, project)
+    # Atomic (BUG-009): the load and the save are one critical section, so a
+    # concurrent mutation of another field is not overwritten by the copy read
+    # at the top of this handler.
+    with proj.update_project(ROOT, slug) as project:
+        project.requirements_file = filename
     return _setup_state(project)
 
 
 @app.post("/api/projects/{slug}/vendors")
-def upload_vendors(slug: str, file: UploadFile = File(...)) -> dict:
+def upload_vendors(
+    slug: str, file: UploadFile = File(...), _: User = Depends(require_admin)
+) -> dict:
     _load_or_404(slug)
     fd, tmp = tempfile.mkstemp(suffix=".zip", dir=os.path.join(ROOT, slug))
     try:
@@ -352,7 +409,9 @@ def upload_vendors(slug: str, file: UploadFile = File(...)) -> dict:
 
 
 @app.put("/api/projects/{slug}/fx-rates")
-def set_fx_rates(slug: str, payload: dict = Body(...)) -> dict:
+def set_fx_rates(
+    slug: str, payload: dict = Body(...), _: User = Depends(require_admin)
+) -> dict:
     project = _load_or_404(slug)
     raw = payload.get("rates", {})
     if not isinstance(raw, dict):
@@ -360,18 +419,61 @@ def set_fx_rates(slug: str, payload: dict = Body(...)) -> dict:
     rates: dict[str, float] = {}
     for code, value in raw.items():
         try:
-            rates[str(code).strip().upper()] = float(value)
+            rate = float(value)
         except (TypeError, ValueError) as exc:
             raise HTTPException(
                 status_code=422, detail=f"Rate for '{code}' is not a number."
             ) from exc
-    project.fx_rates = rates
-    proj.save_project(ROOT, project)
-    return _setup_state(project)
+        if rate <= 0:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Rate for '{code}' must be greater than zero.",
+            )
+        rates[str(code).strip().upper()] = rate
+    # Atomic (BUG-009): this is the write the bug was reported against - an
+    # in-flight run's own status write used to overwrite the rates set here,
+    # after this endpoint had already answered 200.
+    with proj.update_project(ROOT, slug) as project:
+        project.fx_rates = rates
+    # Outside the lock on purpose: renormalize opens its own transaction, which
+    # bumps `generation` through the same lock. Calling it inside would be the
+    # nesting the plain Lock in project.py deliberately refuses.
+    renormalize(ROOT, slug)
+    # `renormalize` may have bumped `generation` on disk; `project` here is
+    # the in-memory copy from before that, so reload rather than under-report.
+    return _setup_state(_load_or_404(slug))
+
+
+# One ingestion run per project at a time (BUG-008). `ingest` below is a
+# synchronous handler, so FastAPI runs concurrent requests in its threadpool
+# and two runs of one project genuinely overlap. Measured before this guard:
+# 30 of 30 offset-zero trials ended at `generation` 1 after two runs instead of
+# 2, with one of the two runs dying of a filesystem race and surfacing as a
+# 502.
+#
+# Scope and its limits, stated plainly because the gap is silent otherwise:
+# this is an in-process lock, which is exactly the shipped deployment — the
+# image runs one `uvicorn` worker (Dockerfile CMD, no `--workers`) against one
+# volume. It does NOT serialise two containers sharing a volume, a
+# multi-worker uvicorn, or `cost-est` writing alongside the API. Those need a
+# lockfile with a stale-lock policy; see BUG-008's design note before adding
+# one, because a crashed run holding a lockfile blocks a client who has no
+# operator to clear it.
+_RUN_LOCKS: dict[str, threading.Lock] = {}
+_RUN_LOCKS_GUARD = threading.Lock()
+
+
+def _run_lock(slug: str) -> threading.Lock:
+    """The lock for one project, created once. Per slug, never global: a shared
+    lock would make one slow run a queue for every other project."""
+    with _RUN_LOCKS_GUARD:
+        return _RUN_LOCKS.setdefault(slug, threading.Lock())
 
 
 @app.post("/api/projects/{slug}/ingest")
-def ingest(slug: str, payload: dict | None = Body(default=None)) -> dict:
+def ingest(
+    slug: str, payload: dict | None = Body(default=None), _: User = Depends(require_admin)
+) -> dict:
     project = _load_or_404(slug)
     if not project.vendors:
         raise HTTPException(
@@ -390,8 +492,42 @@ def ingest(slug: str, payload: dict | None = Body(default=None)) -> dict:
     # `has_results: true`, and an unknown one surfaced as a 502 from inside the
     # try below.
     requested = (payload or {}).get("provider")
-    provider = str(requested).strip().lower() if requested else None
-    effective = provider or os.getenv("LLM_PROVIDER", "mock").lower()
+    # A *present* `provider` must be a string. Without this check `False` and
+    # `0` are falsy and silently fell through to the env default rather than
+    # being rejected, while `123` was stringified to `"123"` and rejected as
+    # an *unknown provider* (400) rather than as a malformed field (422) —
+    # the same class of accident `force`'s boolean check two lines below
+    # guards against, so `provider` is held to the same standard.
+    if requested is not None and not isinstance(requested, str):
+        raise HTTPException(
+            status_code=422,
+            detail="`provider` must be a string.",
+        )
+    provider = requested.strip().lower() if requested else None
+    effective = provider or (os.getenv("LLM_PROVIDER") or "").strip().lower() or None
+
+    # Defaults to False: a client that predates this field (or omits it) keeps
+    # today's cache-respecting behaviour exactly (design spec §1.2, guard 1).
+    # A *present* value must be an actual boolean — this is the switch that
+    # re-spends the full LLM cost of the project, so a truthy-coerced typo
+    # like {"force": "false"} silently becoming a forced run would be exactly
+    # the "hard to hit by accident" guarantee failing by surprise.
+    _body = payload or {}
+    if "force" in _body and not isinstance(_body["force"], bool):
+        raise HTTPException(
+            status_code=422,
+            detail="`force` must be a boolean.",
+        )
+    force = bool(_body.get("force", False))
+    if effective is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No extraction provider is configured. Set LLM_PROVIDER in the API "
+                f"environment (one of: {', '.join(PROVIDER_KEYS)}) and restart it, "
+                "or name a provider in this request."
+            ),
+        )
     if effective not in PROVIDER_KEYS:
         raise HTTPException(
             status_code=400,
@@ -420,10 +556,30 @@ def ingest(slug: str, payload: dict | None = Body(default=None)) -> dict:
         from procurement.pdf_llm import transcribe_pdf
 
         pdf_fallback = transcribe_pdf
+    # Non-blocking: a caller that finds a run in progress is told so, never
+    # queued. Queueing would hold the request open for the length of a second
+    # full run — and that second run is always either a duplicate submission or
+    # a mistake, so running it just re-spends the project's LLM cost for a
+    # result the in-flight run is already producing.
+    lock = _run_lock(slug)
+    if not lock.acquire(blocking=False):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "An ingestion run is already in progress for this project. "
+                "Wait for it to finish before starting another."
+            ),
+        )
     try:
-        run_ingestion(ROOT, slug, get_client(provider), pdf_fallback=pdf_fallback)
+        run_ingestion(ROOT, slug, get_client(provider), pdf_fallback=pdf_fallback,
+                     force=force)
     except Exception as exc:  # surface extraction failures to the UI verbatim
         raise HTTPException(status_code=502, detail=f"Ingestion failed: {exc}") from exc
+    finally:
+        # In `finally`, not after the call: the 502 path above leaves by
+        # exception, and a lock that outlives its run would break ingestion for
+        # the life of the process — a worse bug than the race it closes.
+        lock.release()
     return _setup_state(proj.load_project(ROOT, slug))
 
 

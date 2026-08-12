@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 from shared.provenance import ProvenanceRef
+from procurement.store import layout
 
 
 class OptionalItem(BaseModel):
@@ -55,6 +56,7 @@ class NormalizedBid(BaseModel):
     normalized_total: float | None
     adjustments: list[NormalizationAdjustment] = []
     extraction_status: str = "ok"
+    normalization_status: str = "ok"       # "ok" | "no_fx_rate"
 
 
 class ComparisonRow(BaseModel):
@@ -67,6 +69,7 @@ class ComparisonRow(BaseModel):
     payment_terms: str | None
     engine_make: str | None
     extraction_status: str
+    normalization_status: str = "ok"       # "ok" | "no_fx_rate"
 
 
 class ComparisonTable(BaseModel):
@@ -82,6 +85,6 @@ class Project(BaseModel):
     fx_rates: dict[str, float] = {}
     vendors: list[str] = []
     requirements_file: str | None = None
-    store_version: int = 1
+    store_version: int = layout.STORE_VERSION
     generation: int = 0
     status: str = "new"

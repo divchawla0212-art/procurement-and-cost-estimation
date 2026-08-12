@@ -1,17 +1,49 @@
 import pathlib
 import re
 
+import pytest
+
 from procurement.compliance import VERDICTS
+from procurement.feedback import save_feedback
 from procurement.pipeline import run_ingestion
-from procurement.project import load_project, save_project
+from procurement.project import create_project, load_project, save_project
 from procurement.statement import build_statement, compliance_tally
 from procurement.store import snapshots
-from procurement.store.models import ComplianceResult
+from procurement.store.models import ComplianceResult, VendorFacts
 
 from tests.test_pipeline_rfq import RfqClient
 from tests.test_pipeline_vocabulary import _project, _PAD
 
 _QUOTE = "Quotation.txt"
+
+
+def test_saving_feedback_leaves_every_other_field_untouched(tmp_path):
+    root = str(tmp_path)
+    create_project(root, "p")
+    snapshots.save_facts(root, "p", VendorFacts(
+        vendor="K",
+        commercial={"vendor": "K", "currency": "EUR", "base_price": 1000.0},
+        normalized={"vendor": "K", "normalized_total": 1080.0},
+        technical=[{"doc_id": "d1", "parameter": "flow"}],
+        quotation_doc_id="d1"))
+    before = snapshots.load_facts(root, "p", "K").model_dump()
+
+    save_feedback(root, "p", "K", "not compliant", reason="site visit")
+
+    after = snapshots.load_facts(root, "p", "K").model_dump()
+    assert after.pop("technical_feedback") == "not compliant"
+    before.pop("technical_feedback")
+    assert after == before
+
+
+def test_feedback_for_an_unknown_vendor_still_raises_and_writes_nothing(tmp_path):
+    root = str(tmp_path)
+    create_project(root, "p")
+    generation_before = snapshots.get_generation(root, "p")
+    with pytest.raises(LookupError):
+        save_feedback(root, "p", "NOBODY", "x", reason="y")
+    assert snapshots.load_facts(root, "p", "NOBODY") is None
+    assert snapshots.get_generation(root, "p") == generation_before
 
 
 def _note(root, vendor, text):

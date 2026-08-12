@@ -69,8 +69,8 @@ def budget_from_env(name: str, default: int) -> int:
     An unusable value - not an integer, or below MIN_CHUNK_CHARS - falls back
     to `default` and says so in the log rather than being honoured. Clamping
     rather than raising at import: this is read at module scope, so a raise
-    takes the portal and the API down for a typo in one environment variable,
-    while the fallback keeps the run going at a budget that is known to work.
+    takes the API down for a typo in one environment variable, while the
+    fallback keeps the run going at a budget that is known to work.
     """
     raw = (os.getenv(name) or "").strip()
     if not raw:

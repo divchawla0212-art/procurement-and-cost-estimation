@@ -1,16 +1,17 @@
 import os
 from datetime import datetime, timezone
 
-from procurement.project import load_project, save_project, vendor_files
+from procurement.project import (load_project, save_project, update_project,
+                                 vendor_files)
 from procurement.extract import extract_bid
 from procurement.normalize import normalize_bid
 from procurement.compare import build_comparison
 from procurement.quote_select import pick_quote
 from procurement.models import VendorBid, NormalizedBid
+from procurement import renormalize as renormalize_mod
 from procurement.store import events, layout, migrate, snapshots
 from procurement.store.models import (Amendment, DocumentRecord, Event,
-                                      RequirementRecord, RequirementSet,
-                                      VendorFacts)
+                                      RequirementRecord, RequirementSet)
 from procurement.store.overrides import apply_overrides, reconcile
 from procurement.classify import (classify_by_rules, classify_document,
                                   CLASSIFY_PROMPT_VERSION)
@@ -200,50 +201,90 @@ def _prune_orphan_facts(root: str, slug: str, run_id: str, vendors: list[str],
             live_by_route.setdefault((doc.vendor, route), set()).add(doc.doc_id)
 
     for vendor in vendors:
-        facts = snapshots.load_facts(root, slug, vendor)
-        if facts is None:
-            continue
         live_technical = live_by_route.get((vendor, "datasheet"), set())
         live_deviations = live_by_route.get((vendor, "deviation"), set())
         live_quotations = live_by_route.get((vendor, "quotation"), set())
-        technical = [f for f in facts.technical if f.get("doc_id") in live_technical]
-        deviations = [d for d in facts.deviations if d.get("doc_id") in live_deviations]
-        # commercial has no per-record doc_id, so it is pruned via the stored
-        # link: a vendor whose quotation was deleted, or whose document is
-        # still present but no longer classifies (or infers) as a quotation,
-        # kept its prices forever otherwise. The None guard matters: facts
-        # written before quotation_doc_id existed have no link, and reading
-        # that absence as "dead" would delete every pre-existing vendor's
-        # prices on the first run after upgrade.
-        commercial_dead = (facts.quotation_doc_id is not None
-                           and facts.quotation_doc_id not in live_quotations)
-        if (len(technical) == len(facts.technical)
-                and len(deviations) == len(facts.deviations)
-                and not commercial_dead):
+
+        # Cheap pre-check on an unlocked read, so an unchanged vendor is not
+        # rewritten (and re-eventing) on every run. Deliberately advisory:
+        # the authoritative filter re-runs against a fresh read inside the
+        # lock below, because another writer may have added records for a
+        # live document since this read (BUG-010).
+        peek = snapshots.load_facts(root, slug, vendor)
+        if peek is None:
             continue
-        dropped = sorted(
-            {f.get("doc_id") for f in facts.technical
-             if f.get("doc_id") not in live_technical}
-            | {d.get("doc_id") for d in facts.deviations
-               if d.get("doc_id") not in live_deviations})
-        detail = {"doc_ids": dropped,
-                  "technical_dropped": len(facts.technical) - len(technical),
-                  "deviations_dropped": len(facts.deviations) - len(deviations)}
-        if commercial_dead:
-            detail["commercial_dropped"] = facts.quotation_doc_id
-            facts.commercial = None
-            facts.normalized = None
-            facts.quotation_doc_id = None
-        facts.technical = technical
-        facts.deviations = deviations
-        # Overrides are left untouched: they are re-reconciled against the
-        # fresh extraction on the next run, where a path that no longer
-        # resolves correctly raises conflict=True. Re-reconciling here would
-        # compare against already-resolved values and corrupt extracted_value.
-        snapshots.save_facts(root, slug, facts)
-        events.append_event(root, slug, Event(
-            at=_now(), run_id=run_id, actor="pipeline",
-            action="facts.pruned", target=vendor, detail=detail))
+        peek_commercial_dead = (peek.quotation_doc_id is not None
+                                and peek.quotation_doc_id not in live_quotations)
+        if (all(f.get("doc_id") in live_technical for f in peek.technical)
+                and all(d.get("doc_id") in live_deviations for d in peek.deviations)
+                and not peek_commercial_dead):
+            continue
+
+        detail = None
+        try:
+            with snapshots.update_facts(root, slug, vendor) as facts:
+                # Re-filter against what is stored NOW, not the pre-check's
+                # copy: another writer may have added or removed records for
+                # this vendor since the read above.
+                technical = [f for f in facts.technical
+                             if f.get("doc_id") in live_technical]
+                deviations = [d for d in facts.deviations
+                             if d.get("doc_id") in live_deviations]
+                # commercial has no per-record doc_id, so it is pruned via the
+                # stored link: a vendor whose quotation was deleted, or whose
+                # document is still present but no longer classifies (or
+                # infers) as a quotation, kept its prices forever otherwise.
+                # The None guard matters: facts written before
+                # quotation_doc_id existed have no link, and reading that
+                # absence as "dead" would delete every pre-existing vendor's
+                # prices on the first run after upgrade.
+                commercial_dead = (facts.quotation_doc_id is not None
+                                   and facts.quotation_doc_id not in live_quotations)
+                if (len(technical) == len(facts.technical)
+                        and len(deviations) == len(facts.deviations)
+                        and not commercial_dead):
+                    # Candidacy evaporated: a concurrent writer already
+                    # resolved what the pre-check saw as orphaned. Nothing to
+                    # write, and no event to report.
+                    continue
+                dropped = sorted(
+                    {f.get("doc_id") for f in facts.technical
+                     if f.get("doc_id") not in live_technical}
+                    | {d.get("doc_id") for d in facts.deviations
+                       if d.get("doc_id") not in live_deviations})
+                detail = {"doc_ids": dropped,
+                          "technical_dropped": len(facts.technical) - len(technical),
+                          "deviations_dropped": len(facts.deviations) - len(deviations)}
+                if commercial_dead:
+                    detail["commercial_dropped"] = facts.quotation_doc_id
+                    facts.commercial = None
+                    facts.normalized = None
+                    facts.quotation_doc_id = None
+                facts.technical = technical
+                facts.deviations = deviations
+                # Overrides and technical_feedback are left untouched here:
+                # overrides are re-reconciled against the fresh extraction on
+                # the next run, where a path that no longer resolves
+                # correctly raises conflict=True -- re-reconciling here would
+                # compare against already-resolved values and corrupt
+                # extracted_value. technical_feedback is the reviewer's
+                # field, never the run's; every field left alone keeps
+                # whatever is stored now, which is the point of update_facts.
+        except LookupError:
+            # This vendor's facts vanished between the pre-check above and
+            # this lock acquire -- e.g. the stale-vendor sweep further down
+            # this same function's caller runs on a *different* concurrent
+            # run that has already removed `vendor` from its project roster.
+            # Skip, don't recreate: a stored collection holds exactly the
+            # records of its currently-live sources, and update_facts
+            # (create=False) raising here is exactly that vendor correctly
+            # staying gone, not a bug to route around.
+            continue
+
+        if detail is not None:
+            events.append_event(root, slug, Event(          # outside the lock
+                at=_now(), run_id=run_id, actor="pipeline",
+                action="facts.pruned", target=vendor, detail=detail))
 
 
 def inventory_documents(root: str, slug: str) -> list[DocumentRecord]:
@@ -613,6 +654,24 @@ def _run_rfq_pass(root: str, slug: str, client,
     return docs, extracted, failed
 
 
+def _replace_doc_records(stored: list[dict], doc_id: str,
+                         produced: list[dict] | None) -> list[dict]:
+    """`stored` with this document's records replaced by `produced`.
+
+    Every other document's records are kept — including any a concurrent
+    writer added while this document was being extracted, which is why the
+    filter runs against the freshly-read list rather than the copy a run read
+    before its extraction (BUG-010).
+
+    `produced is None` means the extraction yielded nothing new (it failed, or
+    this pass did not run), and the stored records are returned untouched: a
+    failed extraction never blanks previously-good stored data.
+    """
+    if produced is None:
+        return stored
+    return [r for r in stored if r.get("doc_id") != doc_id] + produced
+
+
 def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
                   force: bool = False, pdf_reader: str | None = None) -> dict:
     """`pdf_reader` names a single PDF reader for the *vendor* side only, for
@@ -630,7 +689,8 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
     project = load_project(root, slug)
     run_id = events.new_run_id()
     events.append_event(root, slug, Event(at=_now(), run_id=run_id, actor="pipeline",
-                                          action="run.started"))
+                                          action="run.started",
+                                          detail={"client": type(client).__name__}))
 
     prior_docs = {d.doc_id: d for d in snapshots.load_documents(root, slug)}
     fresh_docs = inventory_documents(root, slug)
@@ -843,13 +903,17 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
                     detail={"text_source": doc.text_source}))
                 continue
 
-            prior_facts = snapshots.load_facts(root, slug, doc.vendor)
-            base = prior_facts or VendorFacts(vendor=doc.vendor)
+            # What THIS document yielded — never a merge against a copy of the
+            # vendor's facts read here, before an extraction that takes
+            # minutes. `None` means "this document yielded nothing new: leave
+            # whatever is stored alone", which is also how every failure guard
+            # below expresses itself — a failed branch simply assigns nothing.
+            # The merge happens under the vendor lock further down (BUG-010).
             status = "ok"
-            commercial_dump = base.commercial
-            quotation_doc_id = base.quotation_doc_id
-            technical = list(base.technical)
-            deviations = list(base.deviations)
+            doc_commercial = None          # a VendorBid dump
+            doc_technical = None           # list[dict], this doc_id's facts
+            doc_deviations = None          # list[dict], this doc_id's deviations
+            claims_quotation = False       # may this document take the link?
 
             if not run_primary:
                 # Only the secondary pass is stale, so the primary's cached
@@ -865,15 +929,17 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
                                   pdf_fallback=pdf_fallback, text=text)
                 status = bid.extraction_status
                 doc.notes = bid.notes
-                # the same guard the other two branches carry: phase 2 keeps
-                # technical and deviations in this file too, so a failed
-                # overwrite would publish a half-good record - facts intact,
-                # commercial blanked - straight into the comparison
-                commercial_dump = bid.model_dump() if status == "ok" else base.commercial
-                # only on success: a failed re-extraction must not repoint the
-                # link at a document that produced nothing, which would then
-                # prune good prices
-                quotation_doc_id = doc.doc_id if status == "ok" else base.quotation_doc_id
+                if status == "ok":
+                    # the same guard the other two branches carry: phase 2 keeps
+                    # technical and deviations in this file too, so a failed
+                    # overwrite would publish a half-good record - facts intact,
+                    # commercial blanked - straight into the comparison.
+                    # Leaving both `None` on failure keeps the stored ones.
+                    doc_commercial = bid.model_dump()
+                    # only on success: a failed re-extraction must not repoint
+                    # the link at a document that produced nothing, which would
+                    # then prune good prices
+                    claims_quotation = True
             elif route == "datasheet":
                 facts, status, notes = extract_tech_facts(
                     doc.doc_id, full, client, pdf_fallback=pdf_fallback,
@@ -881,9 +947,7 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
                 doc.vocabulary_sha = vocab_sha
                 doc.notes = notes
                 if status == "ok":
-                    # replace only this document's facts; other datasheets survive
-                    technical = [f for f in base.technical if f.get("doc_id") != doc.doc_id]
-                    technical += [f.model_dump() for f in facts]
+                    doc_technical = [f.model_dump() for f in facts]
                 # on failure a re-extraction must not erase this document's
                 # previously-good, already-stored facts
             else:   # deviation
@@ -892,8 +956,7 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
                                                           text=text)
                 doc.notes = notes
                 if status == "ok":
-                    deviations = [d for d in base.deviations if d.get("doc_id") != doc.doc_id]
-                    deviations += [d.model_dump() for d in items]
+                    doc_deviations = [d.model_dump() for d in items]
                 # same guard as the datasheet branch: a failed re-extraction
                 # must not erase this document's previously-good deviations
 
@@ -921,8 +984,11 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
                     doc.notes = _with_secondary_note(doc.notes, secondary,
                                                      secondary_notes)
                 if secondary_status == "ok":
-                    technical = [f for f in technical if f.get("doc_id") != doc.doc_id]
-                    technical += [f.model_dump() for f in facts]
+                    # This document's technical facts, whichever pass produced
+                    # them: when a datasheet primary and this pass both ran,
+                    # both replace exactly this doc_id's records, so the later
+                    # one standing is what the merged list did before too.
+                    doc_technical = [f.model_dump() for f in facts]
                 events.append_event(root, slug, Event(
                     at=_now(), run_id=run_id, actor="pipeline",
                     action="document.extracted_secondary", target=doc.doc_id,
@@ -942,27 +1008,47 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
             extracted += 1 if document_ok else 0
             failed += 0 if document_ok else 1
 
-            facts_view = {"commercial": commercial_dump,
-                          "technical": technical,
-                          "deviations": deviations}
-            overrides = reconcile(base.overrides, facts_view)
-            resolved = apply_overrides(facts_view, overrides)
-            normalized = (normalize_bid(
-                VendorBid.model_validate(resolved["commercial"]),
-                project.target_currency, project.fx_rates).model_dump()
-                if resolved["commercial"] else base.normalized)
+            # Merge, reconcile and normalize under the vendor lock, against the
+            # facts as they are NOW (BUG-010). The extraction above ran outside
+            # it on purpose: the lock must never span an LLM call, or a
+            # reviewer's feedback save waits minutes behind a run.
+            # `stored`, not `facts`: `facts` is the extractors' result list a
+            # few lines up, and shadowing it here would make the next edit to
+            # this block very easy to get wrong.
+            with snapshots.update_facts(root, slug, doc.vendor,
+                                        create=True) as stored:
+                facts_view = {
+                    "commercial": (doc_commercial if doc_commercial is not None
+                                   else stored.commercial),
+                    "technical": _replace_doc_records(stored.technical, doc.doc_id,
+                                                      doc_technical),
+                    "deviations": _replace_doc_records(stored.deviations, doc.doc_id,
+                                                       doc_deviations),
+                }
+                overrides = reconcile(stored.overrides, facts_view)
+                resolved = apply_overrides(facts_view, overrides)
 
-            snapshots.save_facts(root, slug, VendorFacts(
-                vendor=doc.vendor,
-                commercial=resolved["commercial"],
-                normalized=normalized,
-                technical=resolved["technical"],
-                deviations=resolved["deviations"],
-                overrides=overrides,
-                quotation_doc_id=quotation_doc_id,
-                # carried or a re-extraction silently discards the reviewer's
-                # judgement — vocabulary_sha's defect, one field over
-                technical_feedback=base.technical_feedback))
+                stored.commercial = resolved["commercial"]
+                stored.technical = resolved["technical"]
+                stored.deviations = resolved["deviations"]
+                stored.overrides = overrides
+                if claims_quotation:
+                    stored.quotation_doc_id = doc.doc_id
+                # `technical_feedback` is never assigned here. It is the
+                # reviewer's field, this run does not produce it, and carrying
+                # it forward off a pre-extraction copy is exactly BUG-010 —
+                # every field left alone keeps whatever is stored now.
+                if resolved["commercial"]:
+                    # the project as it is NOW, not the copy read at the top of
+                    # the run: a rate corrected during a long extraction must
+                    # not leave a plausible stale total behind.
+                    current = load_project(root, slug)
+                    stored.normalized = normalize_bid(
+                        VendorBid.model_validate(resolved["commercial"]),
+                        current.target_currency,
+                        current.fx_rates).model_dump()
+                # else: no commercial, nothing to derive — the stored
+                # `normalized` is left alone rather than blanked
 
             events.append_event(root, slug, Event(
                 at=_now(), run_id=run_id, actor="pipeline",
@@ -1011,32 +1097,42 @@ def run_ingestion(root: str, slug: str, client, pdf_fallback=None,
                     "by_verdict": {v: sum(1 for r in results if r.verdict == v)
                                    for v in compliance.VERDICTS}}))
 
-    project = load_project(root, slug)
-    project.status = ("failed" if extracted == 0
-                      else "done_with_failures" if failed else "done")
-    save_project(root, project)
+    # Atomic (BUG-009): read and write under one lock, so settings a reviewer
+    # changed mid-run - FX rates especially - are not overwritten by the copy
+    # this run read a moment earlier.
+    with update_project(root, slug) as project:
+        project.status = ("failed" if extracted == 0
+                          else "done_with_failures" if failed else "done")
+        status = project.status
 
     events.append_event(root, slug, Event(
         at=_now(), run_id=run_id, actor="pipeline", action="run.finished",
         detail={"extracted": extracted, "failed": failed,
                 "documents": len(rfq_docs) + len(documents),
-                "status": project.status}))
+                "status": status}))
 
     return load_dataset(root, slug) or {}
 
 
-def load_dataset(root: str, slug: str) -> dict | None:
-    """Assemble the UI-facing view from the store.
+def _live_fact_vendors(root: str, slug: str) -> list[str]:
+    """Vendors the store holds facts for *and* the project still lists.
 
-    Migrates on read as well as on ingestion: the portal calls this on every
-    render, and a project whose results only exist in a legacy dataset.json
-    would otherwise show nothing until the user paid for a full re-extraction.
-    The migration is idempotent and a no-op once the store is populated.
+    The shared front half of `load_dataset` and `has_results`. Both have to
+    decide "are there live facts here?" and they must decide it identically:
+    were `has_results` the looser test, the UI would offer a review screen with
+    nothing behind it.
+
+    Migrates on read as well as on ingestion: the API reaches this on every
+    project-summary request, and a project whose results only exist in a legacy
+    dataset.json would otherwise show nothing until the user paid for a full
+    re-extraction. The migration is idempotent and a no-op once the store is
+    populated.
     """
     migrate.migrate_dataset_json(root, slug)
+    renormalize_mod.migrate_normalization(root, slug)
     vendors = snapshots.list_fact_vendors(root, slug)
     if not vendors:
-        return None
+        return []
     project = load_project(root, slug)
     if project.vendors:
         # defence in depth behind run_ingestion's pruning: never show a vendor
@@ -1044,8 +1140,26 @@ def load_dataset(root: str, slug: str) -> dict | None:
         # at all, since that cannot distinguish "none" from "not recorded" for
         # a project whose facts came from migration.
         vendors = [v for v in vendors if v in set(project.vendors)]
+    return vendors
+
+
+def has_results(root: str, slug: str) -> bool:
+    """Whether `load_dataset` would return a dataset -- without building one.
+
+    `_project_summary` needs this one bit for every project in the dashboard
+    listing. Spelling it `bool(load_dataset(...))` made that listing load every
+    vendor's facts and build a price comparison per project only to discard it,
+    so the cost of opening the dashboard scaled with the corpus it lists.
+    """
+    return bool(_live_fact_vendors(root, slug))
+
+
+def load_dataset(root: str, slug: str) -> dict | None:
+    """Assemble the UI-facing view from the store."""
+    vendors = _live_fact_vendors(root, slug)
     if not vendors:
         return None
+    project = load_project(root, slug)
     bids, normalized = [], []
     for vendor in vendors:
         facts = snapshots.load_facts(root, slug, vendor)

@@ -25,8 +25,8 @@ untracked fixture directories are present, never in pass/fail:
 
 | where | baseline |
 |---|---|
-| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **905 passed, 3 skipped, 0 failed** |
-| CI, and any clean checkout | **896 passed, 12 skipped, 0 failed** |
+| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1097 passed, 3 skipped, 0 failed** |
+| CI, and any clean checkout | **1088 passed, 12 skipped, 0 failed** |
 
 Anything else is a real regression.
 
@@ -45,16 +45,35 @@ pass on a workstation that has it and skip in CI.
 
 So the CI row is the workstation row with the four corpus-coverage passes, the
 three `data/` passes and the two `pdftotext` passes turned into skips —
-`896 = 905 - 4 - 3 - 2`, `12 = 3 + 4 + 3 + 2`; 908 tests either way. When the
-counts move, measure the workstation row and derive the CI row from it; editing
-the two rows independently is how they drift apart.
+`1088 = 1097 - 4 - 3 - 2`, `12 = 3 + 4 + 3 + 2`; 1100 tests either way. When
+the counts move, measure the workstation row and derive the CI row from it;
+editing the two rows independently is how they drift apart.
 
-The workstation row is now measured rather than derived: **905 passed, 3
-skipped**, taken on 2026-08-12 in an environment with `pdftotext`, `data/` and
-an ingested multi-vendor `projects/` all present. It confirms the figure that
-was previously extrapolated from a run of 898 passed, 10 skipped. The CI row is
-still derived from the workstation row by the subtraction above; derive it that
-way again when the counts move.
+**The workstation row is measured, not derived**: **1097 passed, 3 skipped**,
+taken on 2026-08-12 on the merge of this branch with the auth work, in an
+environment with `pdftotext`, `data/` and an ingested multi-vendor `projects/`
+all present. That matters, because the row it replaces was not. While the auth
+branch was in flight the workstation figure was *derived backwards* — measured
+on a checkout that had neither fixture directory, then extrapolated upward —
+and was flagged in this file as an assumption rather than a result. It is now
+a real measurement, and the caveat that used to sit here is deleted rather
+than reworded. The CI row is still derived from it by the subtraction above;
+derive it that way again when the counts move.
+
+The web suite is separate and not part of either row above — both rows are
+`python -m pytest` counts. Run it with `npm test` under `web/` (vitest,
+non-watching, exits non-zero on failure); `npm run build` also type-checks the
+test files, since `web/tsconfig.app.json` includes `src`. CI runs both, in the
+`web` job of the same workflow. It stands at **36 passed** across 6 files.
+
+Component tests that render `App` or `Setup` must mock `auth/context`'s
+`useAuth`, and must return a **stable** object from it — build the value once
+outside the `vi.mock` factory (`vi.hoisted`), never a fresh literal per call.
+`App` passes `user` in the dependency list of the `useAsync` that loads the
+project roster, so a new identity per render refetches, re-renders and
+refetches until the vitest worker dies of heap exhaustion. That failure
+arrives as `Worker exited unexpectedly` with a V8 fatal-error stack, not as a
+failed assertion, so it is worth recognising on sight.
 
 **There is no longer a workstation-only failure.** Until the Streamlit portal
 was removed, `tests/test_portal_app.py::test_missing_api_key_does_not_block_creation`
@@ -89,8 +108,9 @@ dev`.
 
 ## Store invariants — violating these corrupts award decisions
 
-The snapshots under `projects/<slug>/store/` are the **only** authoritative
-store; `index/store.db` is derived and disposable.
+There are **two** authoritative stores, with separate rules. For project data:
+the snapshots under `projects/<slug>/store/`; `index/store.db` is derived and
+disposable. For accounts: `<ROOT>/auth.json` — see the section after this one.
 
 - Every write goes through `procurement/store/snapshots.py`. Never hand-roll a
   snapshot write.
@@ -108,6 +128,32 @@ store; `index/store.db` is derived and disposable.
   the model reads, code decides. Never ask an extractor whether a vendor complies.
 - A failed extraction never blanks previously-good stored data, and always
   records why in `DocumentRecord.notes`.
+
+## Auth invariants — `<ROOT>/auth.json`
+
+Users, sessions and grants live in one document so a single lock and a single
+atomic write keep all three consistent. Written **only** from
+`api/auth/store.py`; routes never touch the file.
+
+- Every write is a read-modify-write inside `locked_update`. **And so is every
+  decision that gates one.** A check made in the caller and a write made in
+  the store are two critical sections, not one: two admins deleting each other
+  concurrently each read "two admins, fine" and both writes land on zero
+  admins. Both guards this subsystem shipped wrong were *reads* outside the
+  lock, not writes — `store.delete_user` and `store.grant` show the shape.
+- `grants` holds exactly the grants whose user still exists. `delete_user`
+  cascades to grants and sessions in the same write. (A grant whose *project*
+  is gone is deliberately tolerated and inert — `list_projects` filters
+  against disk.)
+- Sessions persist `sha256(token)` only. `password_hash` is never a field on
+  `User`, so it cannot reach a response body; `store.password_hash_for` is the
+  one reader of the digest.
+- Roles are `admin` and `reviewer`, and **no route changes a role** — it is
+  set once at creation. Signup always creates a reviewer.
+- A project slug is matched against `list_projects` (which reads `os.listdir`),
+  never by asking the filesystem whether a path exists. Windows and macOS
+  resolve paths case-insensitively; CI does not, so that class of bug cannot
+  fail on CI.
 
 ## Planning convention
 

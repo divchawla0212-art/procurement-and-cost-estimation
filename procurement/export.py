@@ -6,7 +6,7 @@ from procurement.matrix import ComplianceMatrix, bound
 
 _HEADERS = ["vendor", "currency", "raw_base_price", "normalized_total",
             "delivery_terms", "delivery_time", "payment_terms", "engine_make",
-            "extraction_status"]
+            "extraction_status", "normalization_status"]
 
 
 def comparison_to_rows(table: ComparisonTable) -> list[dict]:

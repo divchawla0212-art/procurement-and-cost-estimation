@@ -1,12 +1,57 @@
 import os
 import re
 import json
+import threading
 import zipfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from procurement.models import Project
 from procurement.store import layout
 
 _SLUG = re.compile(r"[^a-z0-9]+")
+
+# BUG-009: every mutation of project.json is a load-modify-save, and
+# `save_project` writes the whole document. Two overlapping mutations meant the
+# later save wrote back fields it had read before the earlier one changed them
+# - an FX-rate write that returned 200 was discarded by a run finishing in the
+# same window, with nothing reported to the caller.
+#
+# The lock has to span the read AND the write, so it lives here rather than in
+# `api/main.py`: `pipeline.py` and `snapshots.py` mutate the project too, and a
+# lock around only the save would still leave the read outside it.
+#
+# Deliberately a plain Lock, not an RLock. Re-entering it from one thread would
+# mean an inner update saving, then the outer update saving its own older copy
+# over the top - the exact lost write this exists to prevent, just harder to
+# see. A plain Lock turns that mistake into a hang the test suite catches
+# instead of silent corruption. Nothing nests today; keep it that way.
+_PROJECT_LOCKS: dict[str, threading.Lock] = {}
+_PROJECT_LOCKS_GUARD = threading.Lock()
+
+
+def _project_lock(root: str, slug: str) -> threading.Lock:
+    key = os.path.join(os.path.realpath(root), slug)
+    with _PROJECT_LOCKS_GUARD:
+        return _PROJECT_LOCKS.setdefault(key, threading.Lock())
+
+
+@contextmanager
+def update_project(root: str, slug: str):
+    """Load, mutate, save - atomically with respect to other mutators.
+
+    Every read-modify-write of project.json goes through this. Mutate the
+    yielded object; it is saved on a clean exit and left untouched if the body
+    raises, so a failed mutation cannot half-write the document.
+
+    A plain `load_project` remains the right call for a read that does not
+    write, and `save_project` for the initial write of a project that does not
+    exist yet. What must not come back is the load/save pair spelled out at a
+    call site - that pair is the defect.
+    """
+    with _project_lock(root, slug):
+        project = load_project(root, slug)
+        yield project
+        save_project(root, project)
 
 
 def slugify(name: str) -> str:
@@ -41,6 +86,7 @@ def create_project(root: str, name: str, target_currency: str = "USD") -> Projec
         name=name, slug=slug,
         created_at=datetime.now(timezone.utc).isoformat(),
         target_currency=target_currency,
+        store_version=layout.STORE_VERSION,
     )
     save_project(root, project)
     return project
@@ -105,10 +151,10 @@ def unpack_vendor_zip(root: str, slug: str, zip_path: str) -> list[str]:
     # `run_ingestion` then deleted the facts an earlier run had stored for
     # them. A vendor is withdrawn by removing its folder, which this still
     # reports, because then the folder is genuinely gone.
-    project = load_project(root, slug)
-    project.vendors = list_vendor_dirs(root, slug)
-    save_project(root, project)
-    return list(project.vendors)
+    with update_project(root, slug) as project:
+        project.vendors = list_vendor_dirs(root, slug)
+        roster = list(project.vendors)
+    return roster
 
 
 def vendor_files(root: str, slug: str, vendor: str) -> list[str]:

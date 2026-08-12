@@ -1,8 +1,12 @@
 import json
 import os
+from contextlib import contextmanager
+from unittest import mock
+
 import pytest
 from procurement.project import create_project
 from procurement.store import migrate, snapshots
+from procurement.store.models import VendorFacts
 
 
 def _write_dataset(root, slug):
@@ -121,3 +125,31 @@ def test_retry_does_not_clobber_facts_already_in_the_store(tmp_path, monkeypatch
 
     migrate.migrate_dataset_json(root, "p")
     assert snapshots.load_facts(root, "p", "KERUI").commercial["base_price"] == 1234.0
+
+
+def test_migration_does_not_overwrite_facts_a_run_stored_meanwhile(tmp_path):
+    """The check-then-write TOCTOU: facts appearing between the existence
+    check and the write must win -- they are newer than dataset.json by
+    construction. Before this fix, `migrate_dataset_json` ran its
+    `load_facts(...) is not None` check before taking any lock, so a run
+    that stored real facts in that window was silently overwritten by
+    legacy data a moment later."""
+    root = str(tmp_path)
+    create_project(root, "P")
+    _write_dataset(root, "p")
+
+    real_lock = snapshots.facts_lock
+
+    @contextmanager
+    def store_then_lock(root_, slug_, vendor_):
+        if vendor_ == "KERUI":
+            snapshots.save_facts(root_, slug_, VendorFacts(
+                vendor=vendor_,
+                commercial={"vendor": vendor_, "base_price": 999.0}))
+        with real_lock(root_, slug_, vendor_):
+            yield
+
+    with mock.patch.object(migrate.snapshots, "facts_lock", store_then_lock):
+        migrate.migrate_dataset_json(root, "p")
+
+    assert snapshots.load_facts(root, "p", "KERUI").commercial["base_price"] == 999.0

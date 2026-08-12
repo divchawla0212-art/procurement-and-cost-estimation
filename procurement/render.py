@@ -1,12 +1,12 @@
 """Render a `Statement` as the one-page HTML sheet a reviewer already reads.
 
-Streamlit's grid cannot merge a cell across the three Qty/Unit/Total
-sub-columns, and it gives only two header levels where the reference sheet
+Streamlit's grid could not merge a cell across the three Qty/Unit/Total
+sub-columns, and it gave only two header levels where the reference sheet
 has three (vendor · revision · sub-columns). Spec §7 answered that by
-splitting into two stacked `st.dataframe`s; this module answers it by
-emitting the single merged table instead, which is what the reference sheet
-actually is. Nothing here computes: every number arrives from
-`build_statement`, already rounded.
+splitting into two stacked `st.dataframe`s while Streamlit was the only front
+end; this module answers it by emitting the single merged table instead,
+which is what the reference sheet actually is. Nothing here computes: every
+number arrives from `build_statement`, already rounded.
 """
 import html
 

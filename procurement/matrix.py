@@ -183,9 +183,9 @@ def bound(row: MatrixRow) -> str:
     """The requirement's checkable bound, or its clause text.
 
     Lives here rather than in a view because it is a property of a `MatrixRow`,
-    and it now has two Python readers — the portal's compliance screen and the
-    exporter. `web/src/constants.ts` holds the same rule for the browser; that
-    copy is unavoidable, a third one was not.
+    read by the exporter as a plain function rather than tied to any one
+    front end. `web/src/constants.ts` holds the same rule for the browser;
+    that copy is unavoidable since JS cannot import this module.
     """
     if row.checkability == "stated":
         return (f"{row.parameter} = {row.value}" if row.value is not None

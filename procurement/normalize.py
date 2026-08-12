@@ -1,25 +1,41 @@
 from procurement.models import VendorBid, NormalizedBid, NormalizationAdjustment
 
 
+def _usable_rate(currency: str, target_currency: str,
+                 fx_rates: dict[str, float]) -> float | None:
+    """The multiplier to reach the target currency, or None if there isn't one.
+
+    None means "refuse", never "assume". A non-positive configured rate counts
+    as absent: 0.0 would convert the bid to nothing and sort it first, which is
+    the defect this function exists to stop, not a rate.
+    """
+    if not currency or currency == target_currency:
+        return 1.0
+    rate = fx_rates.get(currency)
+    if rate is None or rate <= 0:
+        return None
+    return rate
+
+
 def normalize_bid(bid: VendorBid, target_currency: str, fx_rates: dict[str, float]) -> NormalizedBid:
     if bid.extraction_status == "failed":
         return NormalizedBid(vendor=bid.vendor, normalized_currency=target_currency,
                              normalized_total=None, extraction_status="failed")
 
-    adjustments: list[NormalizationAdjustment] = []
-    is_foreign = bool(bid.currency) and bid.currency != target_currency
-    rate = fx_rates.get(bid.currency, 1.0) if is_foreign else 1.0
+    rate = _usable_rate(bid.currency, target_currency, fx_rates)
+    if rate is None:
+        # Early return, before VAT/freight/discount: every one of those steps
+        # operates on a converted figure.
+        return NormalizedBid(vendor=bid.vendor, normalized_currency=target_currency,
+                             normalized_total=None, normalization_status="no_fx_rate")
 
+    adjustments: list[NormalizationAdjustment] = []
     base = bid.base_price
     converted = base * rate
     if rate != 1.0:
         adjustments.append(NormalizationAdjustment(
             kind="currency", description=f"{bid.currency}->{target_currency} @ {rate}",
             from_value=base, to_value=converted, delta=converted - base))
-    elif is_foreign and bid.currency not in fx_rates:
-        adjustments.append(NormalizationAdjustment(
-            kind="currency", description=f"no FX rate for {bid.currency}; assumed 1.0",
-            from_value=base, to_value=base, delta=0.0))
 
     total = converted
     if bid.vat_included and bid.vat_rate:

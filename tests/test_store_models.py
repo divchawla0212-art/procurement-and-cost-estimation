@@ -1,4 +1,5 @@
 from procurement.store.models import DocumentRecord, Override, Event, VendorFacts
+from procurement.store import layout
 from procurement.models import Project
 
 
@@ -37,4 +38,4 @@ def test_event_carries_run_id_and_actor():
 def test_project_gains_generation_and_store_version():
     p = Project(name="P", slug="p", created_at="2026-07-29T00:00:00Z")
     assert p.generation == 0
-    assert p.store_version == 1
+    assert p.store_version == layout.STORE_VERSION
