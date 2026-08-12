@@ -23,7 +23,7 @@ cost-est = "cost_estimation.cli:main"
 # Flat layout: name the real packages so setuptools doesn't try to package
 # runtime/data dirs (data/, projects/, docs/) alongside them.
 [tool.setuptools.packages.find]
-include = ["cost_estimation*", "procurement*", "shared*", "api*"]
+include = ["cost_estimation*", "procurement*", "shared*", "api*", "workflow*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
