@@ -1,6 +1,8 @@
-from datetime import date
+from datetime import date, datetime, timezone
 
 from workflow.models.project import Item, Project
+from workflow.models.rfq import RfqRecord, StageTransition
+from workflow.stages import Stage, is_allowed
 
 
 class WorkflowStore:
@@ -11,6 +13,7 @@ class WorkflowStore:
     def __init__(self) -> None:
         self._projects: dict[str, Project] = {}
         self._items: dict[str, Item] = {}
+        self._rfqs: dict[str, RfqRecord] = {}
 
     # -- projects ---------------------------------------------------------
 
@@ -94,3 +97,70 @@ class WorkflowStore:
                 f"{project.live_period_end.isoformat()})"
             )
         return None
+
+    # -- rfqs -------------------------------------------------------------
+
+    def create_rfq(
+        self,
+        project_id: str,
+        item_ids: list[str],
+        reference: str,
+        package: str,
+        discipline: str,
+        value_estimate_aed: int,
+    ) -> RfqRecord:
+        if project_id not in self._projects:
+            raise KeyError(f"Unknown project: {project_id}")
+        for item_id in item_ids:
+            item = self._items.get(item_id)
+            if item is None:
+                raise KeyError(f"Unknown item: {item_id}")
+            if item.project_id != project_id:
+                raise ValueError(f"Item {item_id} does not belong to project {project_id}")
+
+        rfq = RfqRecord(
+            reference=reference,
+            project_id=project_id,
+            item_ids=list(item_ids),
+            package=package,
+            discipline=discipline,
+            value_estimate_aed=value_estimate_aed,
+            history=[
+                StageTransition(
+                    from_stage=None,
+                    to_stage=Stage.SCOPING,
+                    at=datetime.now(timezone.utc),
+                    by="system",
+                    reason="RFQ created",
+                )
+            ],
+        )
+        self._rfqs[rfq.id] = rfq
+        return rfq
+
+    def get_rfq(self, rfq_id: str) -> RfqRecord | None:
+        return self._rfqs.get(rfq_id)
+
+    def transition(
+        self,
+        rfq_id: str,
+        target: Stage,
+        by: str,
+        reason: str | None = None,
+    ) -> RfqRecord:
+        rfq = self._rfqs.get(rfq_id)
+        if rfq is None:
+            raise KeyError(f"Unknown RFQ: {rfq_id}")
+        if not is_allowed(rfq.stage, target):
+            raise ValueError(f"Transition {rfq.stage.value} -> {target.value} is not allowed")
+
+        entry = StageTransition(
+            from_stage=rfq.stage,
+            to_stage=target,
+            at=datetime.now(timezone.utc),
+            by=by,
+            reason=reason,
+        )
+        updated = rfq.model_copy(update={"stage": target, "history": [*rfq.history, entry]})
+        self._rfqs[rfq_id] = updated
+        return updated

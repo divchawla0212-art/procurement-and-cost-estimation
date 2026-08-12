@@ -8,6 +8,7 @@ from datetime import date
 
 import pytest
 
+from workflow.stages import Stage
 from workflow.store import WorkflowStore
 
 
@@ -119,3 +120,103 @@ def test_date_outside_live_period_returns_a_reason():
     reason = store.validate_against_live_period(p.id, date(2030, 1, 1))
     assert reason is not None
     assert "live period" in reason.lower()
+
+
+def make_rfq(store: WorkflowStore, project_id: str, item_ids: list[str]):
+    return store.create_rfq(
+        project_id=project_id,
+        item_ids=item_ids,
+        reference="ADP-RFQ-2026-014",
+        package="Wellhead & CGF tie-in materials",
+        discipline="Mechanical / piping",
+        value_estimate_aed=46_200_000,
+    )
+
+
+def test_new_rfq_starts_at_scoping():
+    store = make_store()
+    p = make_project(store)
+    item = make_item(store, p.id)
+    rfq = make_rfq(store, p.id, [item.id])
+    assert rfq.stage is Stage.SCOPING
+    assert rfq.project_id == p.id
+    assert rfq.item_ids == [item.id]
+
+
+def test_rfq_may_span_several_items():
+    store = make_store()
+    p = make_project(store)
+    a = make_item(store, p.id, "Generator")
+    b = make_item(store, p.id, "Cable")
+    rfq = make_rfq(store, p.id, [a.id, b.id])
+    assert set(rfq.item_ids) == {a.id, b.id}
+
+
+def test_creation_records_an_opening_history_entry():
+    store = make_store()
+    p = make_project(store)
+    item = make_item(store, p.id)
+    rfq = make_rfq(store, p.id, [item.id])
+    assert len(rfq.history) == 1
+    assert rfq.history[0].from_stage is None
+    assert rfq.history[0].to_stage is Stage.SCOPING
+
+
+def test_allowed_transition_advances_the_stage_and_appends_history():
+    store = make_store()
+    p = make_project(store)
+    item = make_item(store, p.id)
+    rfq = make_rfq(store, p.id, [item.id])
+
+    updated = store.transition(rfq.id, Stage.SHORTLISTING, by="amal@example.com")
+
+    assert updated.stage is Stage.SHORTLISTING
+    assert len(updated.history) == 2
+    assert updated.history[-1].from_stage is Stage.SCOPING
+    assert updated.history[-1].by == "amal@example.com"
+
+
+def test_disallowed_transition_raises_and_leaves_the_stage_untouched():
+    store = make_store()
+    p = make_project(store)
+    item = make_item(store, p.id)
+    rfq = make_rfq(store, p.id, [item.id])
+
+    with pytest.raises(ValueError, match="not allowed"):
+        store.transition(rfq.id, Stage.ISSUED, by="amal@example.com")
+
+    assert store.get_rfq(rfq.id).stage is Stage.SCOPING
+
+
+def test_backward_transition_preserves_the_prior_attempt():
+    store = make_store()
+    p = make_project(store)
+    item = make_item(store, p.id)
+    rfq = make_rfq(store, p.id, [item.id])
+    for target in [
+        Stage.SHORTLISTING,
+        Stage.ISSUED,
+        Stage.CLARIFICATIONS,
+        Stage.BIDS_RECEIVED,
+        Stage.EVALUATION,
+    ]:
+        store.transition(rfq.id, target, by="amal@example.com")
+
+    retendered = store.transition(
+        rfq.id, Stage.ISSUED, by="amal@example.com", reason="retender — all bids over estimate"
+    )
+
+    assert retendered.stage is Stage.ISSUED
+    # the first pass through ISSUED is still in the record
+    issued_entries = [h for h in retendered.history if h.to_stage is Stage.ISSUED]
+    assert len(issued_entries) == 2
+    assert issued_entries[-1].reason == "retender — all bids over estimate"
+
+
+def test_creating_an_rfq_against_a_foreign_item_raises():
+    store = make_store()
+    a = make_project(store)
+    b = make_project(store)
+    foreign = make_item(store, b.id)
+    with pytest.raises(ValueError, match="does not belong"):
+        make_rfq(store, a.id, [foreign.id])
