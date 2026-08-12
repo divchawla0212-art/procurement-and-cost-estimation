@@ -8,6 +8,14 @@ export interface ProjectSummary {
   target_currency: string
   status: string
   generation: number
+  // Whether the store holds an extraction to read, independent of `status`
+  // (I2, final-review report): `status` can be `"failed"` while the store
+  // still holds a complete prior extraction — a second run that failed
+  // outright does not blank a first run that succeeded (CLAUDE.md: "a
+  // failed extraction never blanks previously-good stored data"). This is
+  // the field `nav.ts`'s `reviewReachable` consults; `status` drives only
+  // the partial/failed-run banner on the review screens.
+  has_results: boolean
 }
 
 export interface MatrixCell {
@@ -140,7 +148,10 @@ export interface ProviderOption {
 }
 
 export interface ProviderState {
-  provider: string
+  // null when no LLM_PROVIDER is set in the API environment (BUG-004): there
+  // is no implicit default any more, so an unconfigured deployment must be
+  // representable as "nothing is selected", not coerced into a string.
+  provider: string | null
   needs_key: string | null
   ready: boolean
   catalog: ProviderOption[]

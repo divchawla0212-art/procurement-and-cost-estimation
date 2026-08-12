@@ -1,11 +1,17 @@
 import io
+import os
 import shutil
 import zipfile
-from procurement.project import create_project, unpack_vendor_zip, load_project
+from contextlib import contextmanager
+
+from procurement.project import (create_project, unpack_vendor_zip,
+                                 load_project, save_project)
 from procurement.pipeline import run_ingestion, inventory_documents, load_dataset
 from procurement.store import events, snapshots
 from procurement.store.models import Override
 from shared.llm.mock_client import MockLLMClient
+
+from tests.test_pipeline_rfq import RfqClient      # the schema-aware stub
 
 
 def _zip(entries):
@@ -322,3 +328,188 @@ def test_withdrawn_vendor_is_dropped_from_the_store_and_the_comparison(tmp_path)
     dataset = load_dataset(root, "p")
     assert [b["vendor"] for b in dataset["bids"]] == ["KERUI"]
     assert [r["vendor"] for r in dataset["comparison"]["rows"]] == ["KERUI"]
+
+
+# --- has_results: the cheap form of `bool(load_dataset(...))` -----------------
+#
+# `_project_summary` needs one bit — "is there an extraction to open?" — for
+# every project in the dashboard listing. Answering it with
+# `bool(load_dataset(...))` made the listing O(projects x vendors) full fact
+# loads plus a discarded price comparison per project. `has_results` answers the
+# same question from the store's shape alone, so each test below pins it against
+# the `load_dataset` truthiness it replaces: the two must never disagree.
+
+
+def test_has_results_is_false_before_anything_is_extracted(tmp_path):
+    from procurement.pipeline import has_results
+    root = _project(tmp_path)
+
+    assert has_results(root, "p") is False
+    assert load_dataset(root, "p") is None
+
+
+def test_has_results_is_true_once_the_store_holds_facts(tmp_path):
+    from procurement.pipeline import has_results
+    root = _project(tmp_path)
+    run_ingestion(root, "p", _client())
+
+    assert has_results(root, "p") is True
+    assert bool(load_dataset(root, "p")) is True
+
+
+def test_has_results_ignores_facts_of_a_vendor_the_project_no_longer_lists(tmp_path):
+    """The `project.vendors` filter is part of the predicate, not decoration.
+
+    `load_dataset` returns None when every stored fact vendor has left the
+    project's roster, so `has_results` must too -- reading the store's vendor
+    directory alone would answer True and offer a review screen with nothing
+    behind it.
+    """
+    from procurement.project import save_project
+    from procurement.pipeline import has_results
+    root = _project(tmp_path)
+    run_ingestion(root, "p", _client())
+    project = load_project(root, "p")
+    project.vendors = ["GHOST"]
+    save_project(root, project)
+
+    assert load_dataset(root, "p") is None
+    assert has_results(root, "p") is False
+
+
+def test_has_results_trusts_the_store_when_the_project_records_no_vendors(tmp_path):
+    """An empty `project.vendors` means "not recorded", not "none".
+
+    A migrated project can hold facts while listing no vendors, so `load_dataset`
+    deliberately skips its filter in that case and `has_results` must skip it on
+    the same condition.
+    """
+    from procurement.project import save_project
+    from procurement.pipeline import has_results
+    root = _project(tmp_path)
+    run_ingestion(root, "p", _client())
+    project = load_project(root, "p")
+    project.vendors = []
+    save_project(root, project)
+
+    assert bool(load_dataset(root, "p")) is True
+    assert has_results(root, "p") is True
+
+
+def test_has_results_does_not_build_the_price_comparison(tmp_path, monkeypatch):
+    from procurement import pipeline
+    root = _project(tmp_path)
+    run_ingestion(root, "p", _client())
+
+    def _refuse(*args, **kwargs):
+        raise AssertionError(
+            "has_results built a price comparison it then threw away")
+
+    monkeypatch.setattr(pipeline, "build_comparison", _refuse)
+
+    assert pipeline.has_results(root, "p") is True
+
+
+# --- BUG-010: the prune save under the vendor lock -----------------------
+#
+# _prune_orphan_facts used to load-modify-save a vendor's facts outside any
+# lock, so a run's prune could discard a reviewer's technical_feedback (or a
+# concurrent writer's fresher fields) written in the window between its read
+# and its write. It is converted to snapshots.update_facts.
+
+_DATASHEET = "01 DataSheet Gas Generator.txt"
+
+
+def _project_with_datasheet(tmp_path):
+    """One vendor, one quotation and one datasheet -- so a run produces
+    stored `technical` facts keyed to the datasheet's doc_id, which can then
+    be orphaned by deleting just that file (the vendor itself stays live)."""
+    root = str(tmp_path)
+    create_project(root, "P", target_currency="USD")
+    vdir = tmp_path / "p" / "vendors" / "KERUI"
+    vdir.mkdir(parents=True)
+    (vdir / "Quotation.txt").write_bytes(b"base price 1000" + _PAD)
+    (vdir / _DATASHEET).write_bytes(b"H2S up to 70 ppm" + _PAD)
+    project = load_project(root, "p")
+    project.vendors = ["KERUI"]
+    save_project(root, project)
+    return root
+
+
+def test_pruning_does_not_disturb_feedback_or_overrides(tmp_path):
+    root = _project_with_datasheet(tmp_path)
+    run_ingestion(root, "p", RfqClient())
+
+    stored = snapshots.load_facts(root, "p", "KERUI")
+    assert stored.technical, "the datasheet must have produced a technical fact to prune"
+    doc_id = next(d.doc_id for d in snapshots.load_documents(root, "p")
+                  if d.path.endswith(_DATASHEET))
+
+    # A human correction, recorded against the value the extraction produces,
+    # so `reconcile` agrees with it and it must come back byte-identical --
+    # conflict flag and extracted_value included. The prune writes `technical`,
+    # `deviations` and (when the quotation link dies) `commercial`; `overrides`
+    # is one of the fields it must leave exactly as it found them.
+    override = Override(field_path="commercial.freight_included",
+                        value=not stored.commercial["freight_included"],
+                        extracted_value=stored.commercial["freight_included"],
+                        author="buyer", at="2026-08-05T00:00:00Z",
+                        reason="freight quoted separately in the cover letter")
+    with snapshots.update_facts(root, "p", "KERUI") as f:
+        f.technical_feedback = "a reviewer's note"
+        f.overrides = [override]
+    before = snapshots.load_facts(root, "p", "KERUI").overrides[0].model_dump()
+
+    os.remove(tmp_path / "p" / "vendors" / "KERUI" / _DATASHEET)
+    run_ingestion(root, "p", RfqClient(), force=True)
+
+    stored = snapshots.load_facts(root, "p", "KERUI")
+    assert stored.technical_feedback == "a reviewer's note", \
+        "pruning must not carry a stale copy back over the reviewer's note"
+    assert not any(f.get("doc_id") == doc_id for f in stored.technical), \
+        "the deleted datasheet's fact must actually be pruned"
+    # The overrides half of this test's name, which used to go unasserted.
+    assert len(stored.overrides) == 1, \
+        f"pruning dropped the reviewer's override: {stored.overrides}"
+    assert stored.overrides[0].model_dump() == before, \
+        f"pruning disturbed the override: {stored.overrides[0].model_dump()} != {before}"
+
+
+def test_pruning_skips_a_vendor_whose_facts_vanish_between_precheck_and_lock(
+        tmp_path, monkeypatch):
+    """A vendor whose facts vanish (e.g. a concurrent run's stale-vendor
+    sweep, further down this same transaction on a different run) between
+    the prune's advisory pre-check and its own lock acquire must be skipped,
+    not crash the run and not be resurrected. `update_facts(create=False)` --
+    the prune's call, unlike the extraction save's `create=True` a few lines
+    up in pipeline.py -- raises LookupError for exactly this case.
+    """
+    root = _project_with_datasheet(tmp_path)
+    run_ingestion(root, "p", RfqClient())
+    assert snapshots.load_facts(root, "p", "KERUI").technical
+
+    os.remove(tmp_path / "p" / "vendors" / "KERUI" / _DATASHEET)
+
+    from procurement import pipeline as pipeline_module
+    real_update = snapshots.update_facts
+    deleted = []
+
+    @contextmanager
+    def delete_then_update(root_, slug_, vendor_, **kw):
+        # Only the prune's own call is create=False (default); the
+        # extraction save a few lines up always passes create=True. That
+        # distinguishes "the prune is about to take its lock" from every
+        # other update_facts call this run makes, without needing to count
+        # calls or inspect a stack.
+        if vendor_ == "KERUI" and not kw.get("create", False) and not deleted:
+            deleted.append(True)
+            snapshots.delete_facts(root_, slug_, vendor_)
+        with real_update(root_, slug_, vendor_, **kw) as f:
+            yield f
+
+    monkeypatch.setattr(pipeline_module.snapshots, "update_facts", delete_then_update)
+
+    run_ingestion(root, "p", RfqClient(), force=True)   # must not raise
+
+    assert snapshots.load_facts(root, "p", "KERUI") is None, \
+        "a vendor whose facts vanished mid-prune must stay absent, not be resurrected"

@@ -25,8 +25,8 @@ untracked fixture directories are present, never in pass/fail:
 
 | where | baseline |
 |---|---|
-| a developer workstation, `data/` and an ingested multi-vendor `projects/` present | **958 passed, 3 skipped, 0 failed** |
-| CI, and any clean checkout | **951 passed, 10 skipped, 0 failed** |
+| a developer workstation, `data/` and an ingested multi-vendor `projects/` present | **1065 passed, 3 skipped, 0 failed** |
+| CI, and any clean checkout | **1058 passed, 10 skipped, 0 failed** |
 
 Anything else is a real regression.
 
@@ -38,27 +38,42 @@ three skips a workstation already shows are credential guards
 `test_procurement_real_data.py`) and skip in both places.
 
 So the CI row is the workstation row with the four corpus-coverage passes and
-the three `data/` passes turned into skips — `951 = 958 - 4 - 3`,
-`10 = 3 + 4 + 3`; 961 tests either way. When the counts move, measure the
+the three `data/` passes turned into skips — `1058 = 1065 - 4 - 3`,
+`10 = 3 + 4 + 3`; 1068 tests either way. When the counts move, measure the
 workstation row and derive the CI row from it; editing the two rows
 independently is how they drift apart.
 
 **These numbers ran the derivation backwards, because they had to.** The
 checkout that produced them had neither `data/` nor a fixture-bearing
 `projects/`, so the workstation row was not measurable there — only the
-clean/CI row was, at **951 passed, 10 skipped**. The 958/3 workstation figure
-above was *derived* from that measurement by adding the same 7 back
-(`958 = 951 + 4 + 3`, `3 = 10 - 4 - 3`), the reverse of the normal direction.
-The arithmetic reconciles either way, since it's the same equation read
-backwards, but reconciling is not the same as measuring: **958/3 is an
+clean/CI row was, at **1058 passed, 10 skipped**. The 1065/3 workstation
+figure above was *derived* from that measurement by adding the same 7 back
+(`1065 = 1058 + 4 + 3`, `3 = 10 - 4 - 3`), the reverse of the normal
+direction. The arithmetic reconciles either way, since it's the same equation
+read backwards, but reconciling is not the same as measuring: **1065/3 is an
 assumption that the four corpus-coverage tests and the three `data/`-guarded
 tests would all still pass on a fixture-bearing checkout, not a confirmed
-result.** The 951/10 row is the one that was actually run, and the one to
+result.** The 1058/10 row is the one that was actually run, and the one to
 trust without qualification. If you have `data/` and a multi-vendor
-`projects/` and get something other than 958/3, that is not necessarily a
+`projects/` and get something other than 1065/3, that is not necessarily a
 regression — it may just mean the derived row was wrong and this note was
 overdue for a real measurement; re-run here and update both rows from *that*
 one, the normal way described above.
+
+The web suite is separate and not part of either row above — both rows are
+`python -m pytest` counts. Run it with `npm test` under `web/` (vitest,
+non-watching, exits non-zero on failure); `npm run build` also type-checks the
+test files, since `web/tsconfig.app.json` includes `src`. CI runs both, in the
+`web` job of the same workflow. It stands at **36 passed** across 6 files.
+
+Component tests that render `App` or `Setup` must mock `auth/context`'s
+`useAuth`, and must return a **stable** object from it — build the value once
+outside the `vi.mock` factory (`vi.hoisted`), never a fresh literal per call.
+`App` passes `user` in the dependency list of the `useAsync` that loads the
+project roster, so a new identity per render refetches, re-renders and
+refetches until the vitest worker dies of heap exhaustion. That failure
+arrives as `Worker exited unexpectedly` with a V8 fatal-error stack, not as a
+failed assertion, so it is worth recognising on sight.
 
 **There is no longer a workstation-only failure.** Until the Streamlit portal
 was removed, `tests/test_portal_app.py::test_missing_api_key_does_not_block_creation`

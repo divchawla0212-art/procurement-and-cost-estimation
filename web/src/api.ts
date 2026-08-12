@@ -165,10 +165,17 @@ export function revokeProject(userId: string, slug: string): Promise<void> {
 export function runIngestion(
   slug: string,
   provider?: string,
+  force?: boolean,
 ): Promise<ProjectSetup> {
+  const body: { provider?: string; force?: boolean } = {}
+  if (provider) body.provider = provider
+  // Omitted rather than sent as `false`: the payload field defaults to false
+  // server-side (design spec §1.2, guard 1), so a plain ingestion run makes
+  // the same request it always has.
+  if (force) body.force = true
   return sendJson<ProjectSetup>(
     `/api/projects/${encodeURIComponent(slug)}/ingest`,
     'POST',
-    provider ? { provider } : {},
+    body,
   )
 }

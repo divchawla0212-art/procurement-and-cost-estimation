@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { fetchProjects } from './api'
 import type { ProjectSummary } from './types'
 import { useAsync } from './useAsync'
+import { reviewReachable } from './nav'
 import { useAuth } from './auth/context'
 import type { User } from './auth/context'
 import { Auth } from './pages/Auth'
@@ -22,6 +23,16 @@ type View =
   | 'extraction'
   | 'admin'
 
+// `needsReview` marks the screens that read a stored extraction (BUG-001,
+// BUGS_TRACKER.md): they need not just a selected project but one whose
+// `has_results` passes `reviewReachable` (I2, final-review report —
+// `status` alone is not the right gate: see `nav.ts`). `Overview` carries it
+// too: it renders from the compliance matrix and statement, so it is as
+// unreachable without an extraction as the two screens it links into.
+// `Extraction status` stays `needsProject` only — it is the screen that
+// reports why the review screens are unreachable, so it must stay open
+// regardless of status.
+//
 // `roles` is omitted for every screen both roles can reach; the one entry that
 // carries it is hidden from a reviewer's nav. This is presentation only — the
 // server enforces the actual boundary, and every `/api/admin/*` route refuses
@@ -31,19 +42,21 @@ const NAV: {
   index: string
   label: string
   needsProject: boolean
+  needsReview: boolean
   roles?: Array<User['role']>
 }[] = [
-  { view: 'dashboard', index: '00', label: 'Dashboard', needsProject: false },
-  { view: 'setup', index: '01', label: 'Set up & ingest', needsProject: false },
-  { view: 'overview', index: '02', label: 'Overview', needsProject: true },
-  { view: 'matrix', index: '03', label: 'Compliance matrix', needsProject: true },
-  { view: 'statement', index: '04', label: 'Comparative statement', needsProject: true },
-  { view: 'extraction', index: '05', label: 'Extraction status', needsProject: true },
+  { view: 'dashboard', index: '00', label: 'Dashboard', needsProject: false, needsReview: false },
+  { view: 'setup', index: '01', label: 'Set up & ingest', needsProject: false, needsReview: false },
+  { view: 'overview', index: '02', label: 'Overview', needsProject: true, needsReview: true },
+  { view: 'matrix', index: '03', label: 'Compliance matrix', needsProject: true, needsReview: true },
+  { view: 'statement', index: '04', label: 'Comparative statement', needsProject: true, needsReview: true },
+  { view: 'extraction', index: '05', label: 'Extraction status', needsProject: true, needsReview: false },
   {
     view: 'admin',
     index: '06',
     label: 'Users and access',
     needsProject: false,
+    needsReview: false,
     roles: ['admin'],
   },
 ]
@@ -79,12 +92,44 @@ export default function App() {
   function open(nextSlug: string) {
     setSlug(nextSlug)
     setMatrixVendor(null)
-    setView('overview')
+    // Overview is where an opened project lands, but only once there is an
+    // extraction behind it (BUG-001) — otherwise it would mount and fetch a
+    // matrix and statement that do not exist yet.
+    const project = projects?.find((p) => p.slug === nextSlug)
+    setView(reviewReachable(project?.has_results) ? 'overview' : 'setup')
   }
 
   function openMatrix(vendor?: string) {
     setMatrixVendor(vendor ?? null)
     setView('matrix')
+  }
+
+  // The setup screen's "Review compliance matrix" button lands on the matrix
+  // rather than the Overview `open()` routes to, because that is what its
+  // label promises. It only renders when `has_results` is true, so the
+  // reachability gate is already satisfied at the call site.
+  function openMatrixFor(nextSlug: string) {
+    setSlug(nextSlug)
+    openMatrix()
+  }
+
+  // I1 (final-review report): the rail's project switcher used to call
+  // `setSlug` directly and never touch `view`, so switching away from a
+  // `done` project while sitting on a review screen left that screen
+  // mounted — refetching for the newly selected project even though its nav
+  // button just greyed out. `open()` already computes the right destination
+  // for a freshly *opened* project; this reuses the same rule, but only
+  // overrides `view` when the current screen actually needs review and the
+  // new project can't supply it — a switch onto the dashboard, setup or
+  // extraction-status screen (none of which need a completed review) must
+  // not be yanked around.
+  function selectProject(nextSlug: string | null) {
+    setSlug(nextSlug)
+    const project = nextSlug ? projects?.find((p) => p.slug === nextSlug) ?? null : null
+    setView((v) => {
+      const item = NAV.find((n) => n.view === v)
+      return item?.needsReview && !reviewReachable(project?.has_results) ? 'setup' : v
+    })
   }
 
   function navigate(next: View) {
@@ -132,7 +177,7 @@ export default function App() {
             <select
               id="project-switch"
               value={slug ?? ''}
-              onChange={(e) => setSlug(e.target.value || null)}
+              onChange={(e) => selectProject(e.target.value || null)}
               disabled={!projects || projects.length === 0}
             >
               {(!projects || projects.length === 0) && (
@@ -149,7 +194,9 @@ export default function App() {
           <div className="rail-label">Screens</div>
           <ul className="rail-nav">
             {visibleNav.map((item) => {
-              const disabled = item.needsProject && !slug
+              const disabled =
+                (item.needsProject && !slug) ||
+                (item.needsReview && !reviewReachable(active?.has_results))
               return (
                 <li key={item.view}>
                   <button
@@ -229,7 +276,7 @@ export default function App() {
                 onCreated={onCreated}
                 onNew={startNew}
                 reload={reload}
-                onOpen={open}
+                onOpen={openMatrixFor}
               />
             )}
             {view === 'overview' && active && (
@@ -243,11 +290,16 @@ export default function App() {
               <ComplianceMatrix
                 slug={active.slug}
                 projectName={active.name}
+                status={active.status}
                 initialVendor={matrixVendor ?? undefined}
               />
             )}
             {view === 'statement' && active && (
-              <ComparativeStatement slug={active.slug} projectName={active.name} />
+              <ComparativeStatement
+                slug={active.slug}
+                projectName={active.name}
+                status={active.status}
+              />
             )}
             {view === 'extraction' && active && (
               <ExtractionStatus slug={active.slug} projectName={active.name} />

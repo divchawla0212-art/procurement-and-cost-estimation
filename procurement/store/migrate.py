@@ -42,14 +42,22 @@ def migrate_dataset_json(root: str, slug: str) -> bool:
             vendor = bid.get("vendor")
             if not vendor:
                 continue
-            if snapshots.load_facts(root, slug, vendor) is not None:
-                continue              # already in the store and newer than this
-            snapshots.save_facts(root, slug, VendorFacts(
-                vendor=vendor,
-                commercial=bid,
-                normalized=normalized_by_vendor.get(vendor),
-            ))
-            imported.append(vendor)
+            # This write is conditional on the vendor having no facts at all
+            # -- a first write, not a read-modify-write -- so it takes the
+            # bare lock rather than update_facts, and re-checks existence
+            # INSIDE it. Checking before the lock (as this used to) is a
+            # TOCTOU: a run can store real facts in the window between the
+            # check and the write below, and legacy dataset.json data would
+            # then overwrite them (BUG-010).
+            with snapshots.facts_lock(root, slug, vendor):
+                if snapshots.load_facts(root, slug, vendor) is not None:
+                    continue          # already in the store and newer than this
+                snapshots.save_facts(root, slug, VendorFacts(
+                    vendor=vendor,
+                    commercial=bid,
+                    normalized=normalized_by_vendor.get(vendor),
+                ))
+                imported.append(vendor)
         layout.atomic_write_json(layout.migration_marker_path(root, slug), {
             "source": "dataset.json",
             "at": datetime.now(timezone.utc).isoformat(),

@@ -171,7 +171,7 @@ def require_known_field(data: dict, output_schema: type[BaseModel]) -> None:
 
 # Long enough to show the shape of a wrapper and what it holds, short enough
 # that the note it lands in stays readable in DocumentRecord.notes and in the
-# portal. The gas-14 failure recorded key names only, which is exactly the
+# web app. The gas-14 failure recorded key names only, which is exactly the
 # information that cannot distinguish a recoverable envelope from a bare
 # name/value pair - so the next occurrence of an unrepairable shape has to
 # carry its values with it.
