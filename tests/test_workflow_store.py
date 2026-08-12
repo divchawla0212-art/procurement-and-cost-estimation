@@ -148,6 +148,8 @@ def freeze_and_prepare(store: WorkflowStore, rfq_id: str) -> None:
                               scope_code_fit=True, included=True)
     store.approve_shortlist(rfq_id, by="procurement@example.com")
     store.set_tbe_template(rfq_id, criteria=["Throughput"])
+    bid = store.register_bid(rfq_id, vendor_name="Galfar", headline_price_aed=46_200_000)
+    store.select_bids(rfq_id, [bid.id], by="client@example.com", rationale="Only compliant bid")
 
 
 def test_new_rfq_starts_at_scoping():
@@ -351,3 +353,99 @@ def test_artifacts_reject_an_unknown_rfq():
     with pytest.raises(KeyError):
         store.set_technical_package("rfq_missing", revision="Rev. A",
                                     basis_of_design="basis", attachments=[])
+
+
+def test_vdrl_summary_counts_received_against_required():
+    store = make_store()
+    rfq = seed_rfq(store)
+    for code in ["GA-001", "DS-001", "TP-001"]:
+        store.add_vdrl_line(rfq.id, doc_code=code, title=code, doc_type="Doc", mandatory=True)
+    bid = store.register_bid(rfq.id, vendor_name="Petrofac", headline_price_aed=51_400_000)
+
+    store.record_vdrl_receipt(bid.id, doc_code="GA-001", state="received", revision="Rev. A")
+    store.record_vdrl_receipt(bid.id, doc_code="DS-001", state="received", revision="Rev. A")
+    store.record_vdrl_receipt(bid.id, doc_code="TP-001", state="not_received")
+
+    received, required = store.vdrl_summary(bid.id)
+    assert (received, required) == (2, 3)
+    assert store.missing_vdrl_lines(bid.id) == ["TP-001"]
+
+
+def test_unreadable_is_distinct_from_not_received():
+    store = make_store()
+    rfq = seed_rfq(store)
+    store.add_vdrl_line(rfq.id, doc_code="GA-001", title="GA", doc_type="Doc", mandatory=True)
+    bid = store.register_bid(rfq.id, vendor_name="Petrofac", headline_price_aed=51_400_000)
+    store.record_vdrl_receipt(bid.id, doc_code="GA-001", state="unreadable")
+
+    received, required = store.vdrl_summary(bid.id)
+    assert received == 0, "an unreadable document is not a received document"
+    assert store.missing_vdrl_lines(bid.id) == ["GA-001"]
+    # but the distinction survives in the record — a corrupt file is chased,
+    # a missing one is escalated
+    assert [r.state for r in store.receipts_for(bid.id)] == ["unreadable"]
+
+
+def test_optional_vdrl_lines_do_not_count_against_a_bid():
+    store = make_store()
+    rfq = seed_rfq(store)
+    store.add_vdrl_line(rfq.id, doc_code="GA-001", title="GA", doc_type="Doc", mandatory=True)
+    store.add_vdrl_line(rfq.id, doc_code="OPT-001", title="Nice to have",
+                        doc_type="Doc", mandatory=False)
+    bid = store.register_bid(rfq.id, vendor_name="Petrofac", headline_price_aed=51_400_000)
+    store.record_vdrl_receipt(bid.id, doc_code="GA-001", state="received", revision="Rev. A")
+
+    assert store.vdrl_summary(bid.id) == (1, 1)
+    assert store.missing_vdrl_lines(bid.id) == []
+
+
+def test_selection_records_who_and_why():
+    store = make_store()
+    rfq = seed_rfq(store)
+    a = store.register_bid(rfq.id, vendor_name="Galfar", headline_price_aed=46_200_000)
+    store.register_bid(rfq.id, vendor_name="Petrofac", headline_price_aed=51_400_000)
+
+    store.select_bids(rfq.id, [a.id], by="client@example.com", rationale="Lowest compliant bid")
+
+    shortlist = store.get_bid_shortlist(rfq.id)
+    assert shortlist.selected_bid_ids == [a.id]
+    assert shortlist.selected_by == "client@example.com"
+    assert shortlist.rationale == "Lowest compliant bid"
+
+
+def test_non_selected_bids_are_retained():
+    """Selection narrows what is evaluated; it never deletes what was bid."""
+    store = make_store()
+    rfq = seed_rfq(store)
+    a = store.register_bid(rfq.id, vendor_name="Galfar", headline_price_aed=46_200_000)
+    b = store.register_bid(rfq.id, vendor_name="Petrofac", headline_price_aed=51_400_000)
+
+    store.select_bids(rfq.id, [a.id], by="client@example.com", rationale="Lowest compliant bid")
+
+    assert {bid.id for bid in store.bids_for(rfq.id)} == {a.id, b.id}
+
+
+def test_selection_without_a_rationale_is_rejected():
+    store = make_store()
+    rfq = seed_rfq(store)
+    bid = store.register_bid(rfq.id, vendor_name="Galfar", headline_price_aed=46_200_000)
+    with pytest.raises(ValueError, match="rationale"):
+        store.select_bids(rfq.id, [bid.id], by="client@example.com", rationale="")
+
+
+def test_selecting_a_bid_from_another_rfq_is_rejected():
+    store = make_store()
+    mine = seed_rfq(store)
+    theirs = seed_rfq(store)
+    foreign = store.register_bid(theirs.id, vendor_name="Galfar", headline_price_aed=1)
+    with pytest.raises(ValueError, match="does not belong"):
+        store.select_bids(mine.id, [foreign.id], by="client@example.com", rationale="Cheapest")
+
+
+def test_evaluation_gate_blocks_until_bids_are_selected():
+    store = make_store()
+    rfq = seed_rfq(store)
+    from workflow.gates import check_gate
+    result = check_gate(store, rfq.id, Stage.BIDS_RECEIVED, Stage.EVALUATION)
+    assert result.passed is False
+    assert "select" in result.reason.lower()

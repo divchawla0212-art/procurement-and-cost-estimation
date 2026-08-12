@@ -218,6 +218,8 @@ def test_backward_transitions_are_not_gated():
                               scope_code_fit=True, included=True)
     store.approve_shortlist(rfq_id, by="procurement@example.com")
     store.set_tbe_template(rfq_id, criteria=["Throughput"])
+    bid = store.register_bid(rfq_id, vendor_name="Galfar", headline_price_aed=46_200_000)
+    store.select_bids(rfq_id, [bid.id], by="client@example.com", rationale="Only compliant bid")
     for target in [Stage.ISSUED, Stage.CLARIFICATIONS, Stage.BIDS_RECEIVED, Stage.EVALUATION]:
         store.transition(rfq_id, target, by="amal@example.com")
 

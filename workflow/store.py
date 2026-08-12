@@ -1,5 +1,6 @@
 from datetime import date, datetime, timezone
 
+from workflow.models.bid import Bid, BidShortlist, ReceiptState, VdrlReceipt
 from workflow.models.project import Item, Project
 from workflow.models.rfq import (
     Attachment,
@@ -28,6 +29,9 @@ class WorkflowStore:
         self._shortlist_approvals: dict[str, str] = {}
         self._tbe: dict[str, TbeTemplate] = {}
         self._vdrl: dict[str, list[VdrlLine]] = {}
+        self._bids: dict[str, Bid] = {}
+        self._receipts: dict[str, list[VdrlReceipt]] = {}
+        self._bid_shortlists: dict[str, BidShortlist] = {}
 
     # -- projects ---------------------------------------------------------
 
@@ -289,3 +293,88 @@ class WorkflowStore:
 
     def vdrl_for(self, rfq_id: str) -> list[VdrlLine]:
         return list(self._vdrl.get(rfq_id, []))
+
+    # -- bids -------------------------------------------------------------
+
+    def register_bid(
+        self, rfq_id: str, vendor_name: str, headline_price_aed: int, currency: str = "AED"
+    ) -> Bid:
+        if rfq_id not in self._rfqs:
+            raise KeyError(f"Unknown RFQ: {rfq_id}")
+        bid = Bid(
+            rfq_id=rfq_id,
+            vendor_name=vendor_name,
+            received_at=datetime.now(timezone.utc),
+            headline_price_aed=headline_price_aed,
+            currency=currency,
+        )
+        self._bids[bid.id] = bid
+        return bid
+
+    def bids_for(self, rfq_id: str) -> list[Bid]:
+        return [b for b in self._bids.values() if b.rfq_id == rfq_id]
+
+    def record_vdrl_receipt(
+        self, bid_id: str, doc_code: str, state: ReceiptState, revision: str | None = None
+    ) -> VdrlReceipt:
+        if bid_id not in self._bids:
+            raise KeyError(f"Unknown bid: {bid_id}")
+        receipt = VdrlReceipt(bid_id=bid_id, doc_code=doc_code, state=state, revision=revision)
+        self._receipts.setdefault(bid_id, []).append(receipt)
+        return receipt
+
+    def receipts_for(self, bid_id: str) -> list[VdrlReceipt]:
+        return list(self._receipts.get(bid_id, []))
+
+    def vdrl_summary(self, bid_id: str) -> tuple[int, int]:
+        """Returns (received, required). Only `received` counts — `unreadable`
+        and `not_received` are both gaps, and the count must not flatter a bid
+        by treating a corrupt file as a delivered one."""
+        bid = self._bids.get(bid_id)
+        if bid is None:
+            raise KeyError(f"Unknown bid: {bid_id}")
+        required = [line for line in self.vdrl_for(bid.rfq_id) if line.mandatory]
+        received_codes = self._received_codes(bid_id)
+        return len([line for line in required if line.doc_code in received_codes]), len(required)
+
+    def missing_vdrl_lines(self, bid_id: str) -> list[str]:
+        bid = self._bids.get(bid_id)
+        if bid is None:
+            raise KeyError(f"Unknown bid: {bid_id}")
+        received_codes = self._received_codes(bid_id)
+        return [
+            line.doc_code
+            for line in self.vdrl_for(bid.rfq_id)
+            if line.mandatory and line.doc_code not in received_codes
+        ]
+
+    def _received_codes(self, bid_id: str) -> set[str]:
+        return {r.doc_code for r in self._receipts.get(bid_id, []) if r.state == "received"}
+
+    def select_bids(
+        self, rfq_id: str, bid_ids: list[str], by: str, rationale: str
+    ) -> BidShortlist:
+        if rfq_id not in self._rfqs:
+            raise KeyError(f"Unknown RFQ: {rfq_id}")
+        if not bid_ids:
+            raise ValueError("At least one bid must be selected")
+        if not rationale.strip():
+            raise ValueError("A selection rationale is required")
+        for bid_id in bid_ids:
+            bid = self._bids.get(bid_id)
+            if bid is None:
+                raise KeyError(f"Unknown bid: {bid_id}")
+            if bid.rfq_id != rfq_id:
+                raise ValueError(f"Bid {bid_id} does not belong to RFQ {rfq_id}")
+        shortlist = BidShortlist(
+            rfq_id=rfq_id,
+            selected_bid_ids=list(bid_ids),
+            selected_by=by,
+            rationale=rationale,
+            at=datetime.now(timezone.utc),
+        )
+        self._bid_shortlists[rfq_id] = shortlist
+        return shortlist
+
+    def get_bid_shortlist(self, rfq_id: str) -> BidShortlist | None:
+        return self._bid_shortlists.get(rfq_id)

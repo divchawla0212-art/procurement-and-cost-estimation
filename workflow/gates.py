@@ -49,11 +49,20 @@ def _shortlisting_exit(store: "WorkflowStore", rfq_id: str) -> GateResult:
     return _passed()
 
 
+def _bids_received_exit(store: "WorkflowStore", rfq_id: str) -> GateResult:
+    if store.get_bid_shortlist(rfq_id) is None:
+        return _blocked(
+            "Bids must be selected for evaluation before evaluation can begin."
+        )
+    return _passed()
+
+
 # Only forward transitions are gated. Backward transitions (retender,
 # renegotiate) are recoveries and must not be blocked by a forward gate.
 _GATES = {
     (Stage.SCOPING, Stage.SHORTLISTING): _scoping_exit,
     (Stage.SHORTLISTING, Stage.ISSUED): _shortlisting_exit,
+    (Stage.BIDS_RECEIVED, Stage.EVALUATION): _bids_received_exit,
 }
 
 
