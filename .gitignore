@@ -233,3 +233,16 @@ projects/
 
 # Isolated worktrees for feature work
 .worktrees/
+
+# Parser A/B outputs: a results dump and the LlamaParse markdown cache. The
+# cache is keyed by file hash and costs credits to refill, so it is worth
+# keeping locally and worth never committing.
+parser-ab-results.json
+.llamaparse-cache/
+
+# The notebooks' output directory: parsed markdown and facts.csv. This is the
+# full text of client tender documents plus what was extracted from it — the
+# same confidential content `data/` and `projects/` are excluded for, only
+# rendered by a parser. The notebooks themselves are tracked; their output
+# never is.
+notebooks/parsed/

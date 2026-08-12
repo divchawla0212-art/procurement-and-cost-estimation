@@ -136,3 +136,18 @@ Vite dev server on :5173 remains the front end.
 ```
 
 API coverage: `tests/test_api_compliance.py` (key-free).
+
+## PDF parser comparison
+
+Which PDF reader produces the fewest review flags — pypdf, `pdftotext`, or
+LlamaParse? Findings in
+[`docs/pdf-parser-quality-ab-results.md`](docs/pdf-parser-quality-ab-results.md).
+
+```bash
+pip install -e '.[llamaparse]'   # only needed for the LlamaParse arm
+python -m tools.parser_ab
+```
+
+Needs a provider key, so it is a script rather than a test. The deterministic
+half of it — scoring each reader against a datasheet read losslessly from
+`.xlsx` — needs no key and runs in CI as `tests/test_datasheet_row_recall.py`.

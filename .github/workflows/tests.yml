@@ -8,13 +8,17 @@
 # blast radius to fork PRs. The trade is stated plainly: the live-provider paths
 # are not exercised here.
 #
-# Expected on a clean checkout: 1058 passed, 10 skipped, 0 failed. See the
-# "Running things" section of CLAUDE.md for the arithmetic behind that number
-# and how it relates to the workstation baseline.
+# Expected on a clean checkout: 1088 passed, 12 skipped, 0 failed.
 #
-# Ten skips are expected, not a defect: three need provider credentials, seven
-# need untracked fixture directories (`data/`, and the multi-vendor `projects/`
-# corpus) that are not tracked in git.
+# Twelve skips are expected, not a defect: three need provider credentials,
+# three need a `data/` sample directory that is not tracked in git, four need an
+# ingested multi-vendor `projects/` store, and two need the `pdftotext` CLI from
+# poppler-utils, which this workflow deliberately does not install — see the
+# "Running things" section of CLAUDE.md, which carries both rows and the
+# arithmetic relating them.
+#
+# Note that a local run legitimately differs and is not a regression: a
+# workstation with all of the above shows 1097 passed, 3 skipped.
 #
 # The `web` job below takes no secrets either, and is not part of the pytest
 # counts above — it is a separate suite over `web/`.

@@ -25,8 +25,8 @@ untracked fixture directories are present, never in pass/fail:
 
 | where | baseline |
 |---|---|
-| a developer workstation, `data/` and an ingested multi-vendor `projects/` present | **1065 passed, 3 skipped, 0 failed** |
-| CI, and any clean checkout | **1058 passed, 10 skipped, 0 failed** |
+| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1097 passed, 3 skipped, 0 failed** |
+| CI, and any clean checkout | **1088 passed, 12 skipped, 0 failed** |
 
 Anything else is a real regression.
 
@@ -37,28 +37,28 @@ three skips a workstation already shows are credential guards
 (`test_anthropic_client.py`, `test_bedrock_client.py`,
 `test_procurement_real_data.py`) and skip in both places.
 
-So the CI row is the workstation row with the four corpus-coverage passes and
-the three `data/` passes turned into skips — `1058 = 1065 - 4 - 3`,
-`10 = 3 + 4 + 3`; 1068 tests either way. When the counts move, measure the
-workstation row and derive the CI row from it; editing the two rows
-independently is how they drift apart.
+There is now a **third** environmental gate, and it splits the two rows further
+apart than the sentence above describes. Two tests in
+`test_datasheet_row_recall.py` are guarded on the `pdftotext` CLI, which comes
+from poppler-utils; `.github/workflows/tests.yml` does not install it, so they
+pass on a workstation that has it and skip in CI.
 
-**These numbers ran the derivation backwards, because they had to.** The
-checkout that produced them had neither `data/` nor a fixture-bearing
-`projects/`, so the workstation row was not measurable there — only the
-clean/CI row was, at **1058 passed, 10 skipped**. The 1065/3 workstation
-figure above was *derived* from that measurement by adding the same 7 back
-(`1065 = 1058 + 4 + 3`, `3 = 10 - 4 - 3`), the reverse of the normal
-direction. The arithmetic reconciles either way, since it's the same equation
-read backwards, but reconciling is not the same as measuring: **1065/3 is an
-assumption that the four corpus-coverage tests and the three `data/`-guarded
-tests would all still pass on a fixture-bearing checkout, not a confirmed
-result.** The 1058/10 row is the one that was actually run, and the one to
-trust without qualification. If you have `data/` and a multi-vendor
-`projects/` and get something other than 1065/3, that is not necessarily a
-regression — it may just mean the derived row was wrong and this note was
-overdue for a real measurement; re-run here and update both rows from *that*
-one, the normal way described above.
+So the CI row is the workstation row with the four corpus-coverage passes, the
+three `data/` passes and the two `pdftotext` passes turned into skips —
+`1088 = 1097 - 4 - 3 - 2`, `12 = 3 + 4 + 3 + 2`; 1100 tests either way. When
+the counts move, measure the workstation row and derive the CI row from it;
+editing the two rows independently is how they drift apart.
+
+**The workstation row is measured, not derived**: **1097 passed, 3 skipped**,
+taken on 2026-08-12 on the merge of this branch with the auth work, in an
+environment with `pdftotext`, `data/` and an ingested multi-vendor `projects/`
+all present. That matters, because the row it replaces was not. While the auth
+branch was in flight the workstation figure was *derived backwards* — measured
+on a checkout that had neither fixture directory, then extrapolated upward —
+and was flagged in this file as an assumption rather than a result. It is now
+a real measurement, and the caveat that used to sit here is deleted rather
+than reworded. The CI row is still derived from it by the subtraction above;
+derive it that way again when the counts move.
 
 The web suite is separate and not part of either row above — both rows are
 `python -m pytest` counts. Run it with `npm test` under `web/` (vitest,

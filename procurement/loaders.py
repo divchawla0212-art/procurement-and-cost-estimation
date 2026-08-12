@@ -103,10 +103,50 @@ def _pypdf(path: str) -> str:
 MIN_EXTRACTABLE_CHARS = 100
 
 
+def _llamaparse(path: str) -> str:
+    # Imported here, not at module scope: llama-parse is an optional extra, and
+    # `loaders` is on the import path of the whole pipeline. A missing optional
+    # dependency must not stop anyone reading a .docx.
+    from procurement.llamaparse_reader import parse_pdf
+    return parse_pdf(path)
+
+
+# One reader, no chain. Named arms for the parser A/B; production passes None
+# and keeps the fallback chain below. The lambdas resolve the module globals at
+# call time so a test can stub `_pdftotext` and have the arm see the stub.
+_PURE_PDF_READERS = {
+    "pdftotext": lambda path: _pdftotext(path),
+    "pypdf": lambda path: _pypdf(path),
+    "llamaparse": lambda path: _llamaparse(path),
+}
+
+
 def read_pdf_text_with_source(path: str, llm_fallback=None,
-                              min_chars: int = 200) -> tuple[str, str]:
+                              min_chars: int = 200,
+                              pdf_reader: str | None = None) -> tuple[str, str]:
     """Robust PDF text plus the reader that produced it: pdftotext CLI ->
-    pypdf -> LLM transcription fallback."""
+    pypdf -> LLM transcription fallback.
+
+    `pdf_reader` names a single reader and disables the chain entirely,
+    including the LLM fallback. It exists for the parser comparison, where a
+    fallback would be actively misleading: an arm that quietly falls through
+    reports another reader's numbers under its own name, and because a rescue
+    fires *least* for the best parser, every arm would converge and the
+    experiment would read "no difference" whatever the truth. Production passes
+    None and is unaffected.
+
+    A pure arm still returns "" for a document it cannot read. That is a result
+    -- the caller's MIN_EXTRACTABLE_CHARS guard records it as `failed` with the
+    reader's name and the character count -- so it must not be rescued here.
+    """
+    if pdf_reader is not None:
+        reader = _PURE_PDF_READERS.get(pdf_reader)
+        if reader is None:
+            raise ValueError(
+                f"unknown pdf_reader {pdf_reader!r}; "
+                f"expected one of {sorted(_PURE_PDF_READERS)} or None")
+        return reader(path), pdf_reader
+
     text, source = _pdftotext(path), "pdftotext"
     if len(text.strip()) < min_chars:
         alt = _pypdf(path)
@@ -122,11 +162,14 @@ def read_pdf_text_with_source(path: str, llm_fallback=None,
     return text, source
 
 
-def read_pdf_text(path: str, llm_fallback=None, min_chars: int = 200) -> str:
-    return read_pdf_text_with_source(path, llm_fallback, min_chars)[0]
+def read_pdf_text(path: str, llm_fallback=None, min_chars: int = 200,
+                  pdf_reader: str | None = None) -> str:
+    return read_pdf_text_with_source(path, llm_fallback, min_chars,
+                                     pdf_reader=pdf_reader)[0]
 
 
-def read_text_with_source(path: str, llm_fallback=None) -> tuple[str, str]:
+def read_text_with_source(path: str, llm_fallback=None,
+                          pdf_reader: str | None = None) -> tuple[str, str]:
     """Text plus the name of the reader that produced it.
 
     `text_source` has been declared on DocumentRecord since phase 2 and never
@@ -137,7 +180,11 @@ def read_text_with_source(path: str, llm_fallback=None) -> tuple[str, str]:
     if ext == ".xlsx":
         return read_xlsx_text(path), "xlsx"
     if ext == ".pdf":
-        return read_pdf_text_with_source(path, llm_fallback=llm_fallback)
+        # `pdf_reader` is deliberately consulted only here. The A/B varies the
+        # PDF reader; every other format keeps its single reader in every arm,
+        # which is what makes the .xlsx control a control.
+        return read_pdf_text_with_source(path, llm_fallback=llm_fallback,
+                                         pdf_reader=pdf_reader)
     if ext == ".docx":
         return read_docx_text(path), "docx"
     if ext == ".doc":
@@ -151,5 +198,7 @@ def read_text_with_source(path: str, llm_fallback=None) -> tuple[str, str]:
         return fh.read(), "text"
 
 
-def read_text(path: str, llm_fallback=None) -> str:
-    return read_text_with_source(path, llm_fallback=llm_fallback)[0]
+def read_text(path: str, llm_fallback=None,
+              pdf_reader: str | None = None) -> str:
+    return read_text_with_source(path, llm_fallback=llm_fallback,
+                                 pdf_reader=pdf_reader)[0]
