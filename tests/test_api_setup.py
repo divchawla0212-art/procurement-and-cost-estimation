@@ -7,7 +7,7 @@ import zipfile
 from fastapi.testclient import TestClient
 
 # `import api.main` is deliberately kept *lazy* — inside `_client` and
-# `_unconfigured_client` below, not at module scope. `api/main.py:48` calls
+# `_unconfigured_client` below, not at module scope. `api/main.py` calls
 # `dotenv.load_dotenv()` at import time, and a module-scope import here would
 # run it during pytest's *collection* phase (this file collects before
 # `test_procurement_real_data.py`, alphabetically), populating
@@ -17,6 +17,12 @@ from fastapi.testclient import TestClient
 # an actual billed API call. (Caught by re-measuring the full suite's skip
 # count after trying that approach: 3 skips became 2.) So the fix instead
 # keeps every import lazy and only reorders it — see `_unconfigured_client`.
+#
+# The helper below is safe to import at module scope, and must stay that way:
+# it reaches `api.auth.store` only, which pulls in no part of `api.main` and
+# so runs no `load_dotenv()`. Anything added to `tests/auth_helpers.py` that
+# imports `api.main` would silently re-open the hole this comment describes.
+from tests.auth_helpers import signed_in_admin
 
 
 def _client(tmp_path, monkeypatch) -> TestClient:
@@ -24,7 +30,7 @@ def _client(tmp_path, monkeypatch) -> TestClient:
     monkeypatch.setenv("LLM_PROVIDER", "mock")
     import api.main as api_main
     monkeypatch.setattr(api_main, "ROOT", str(tmp_path))
-    return TestClient(api_main.app)
+    return signed_in_admin(TestClient(api_main.app), tmp_path)
 
 
 def _make_zip(paths: dict[str, bytes]) -> bytes:
@@ -536,7 +542,10 @@ def _unconfigured_client(tmp_path, monkeypatch) -> TestClient:
     for key in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(api_main, "ROOT", str(tmp_path))
-    return TestClient(api_main.app)
+    # Signing in needs no provider — signup and login are allowlisted paths —
+    # so an unconfigured client can still hold a session, which every
+    # non-public `/api/` path below now requires.
+    return signed_in_admin(TestClient(api_main.app), tmp_path)
 
 
 def test_ingest_without_provider_is_400_and_leaves_store_untouched(tmp_path, monkeypatch):
@@ -855,7 +864,13 @@ def test_a_second_ingest_while_one_is_running_is_rejected(tmp_path, monkeypatch)
     try:
         assert entered.wait(timeout=30), "the first run never reached the handler"
         # A separate client, so this cannot be serialised by the transport.
-        second = TestClient(api_main.app).post("/api/projects/p/ingest")
+        # It carries the first client's session cookie rather than signing up
+        # again: a second signup would collide on the admin's email, and the
+        # point of the separate client is a separate *transport*, not a
+        # separate account.
+        second_client = TestClient(api_main.app)
+        second_client.cookies.update(client.cookies)
+        second = second_client.post("/api/projects/p/ingest")
     finally:
         release.set()
         runner.join(timeout=60)
@@ -914,7 +929,10 @@ def test_a_run_does_not_block_ingestion_of_a_different_project(tmp_path, monkeyp
     runner.start()
     try:
         assert entered.wait(timeout=30), "the first run never reached the handler"
-        other = TestClient(api_main.app).post("/api/projects/q/ingest")
+        # Separate transport, same session — see the note in the test above.
+        other_client = TestClient(api_main.app)
+        other_client.cookies.update(client.cookies)
+        other = other_client.post("/api/projects/q/ingest")
     finally:
         release.set()
         runner.join(timeout=60)

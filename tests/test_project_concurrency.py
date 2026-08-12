@@ -14,6 +14,8 @@ import zipfile
 
 from fastapi.testclient import TestClient
 
+from tests.auth_helpers import signed_in_admin
+
 _BODY = (b"unit price 1000 USD. This synthetic fixture body is padded with "
          b"filler prose so its character count clears the pipeline's "
          b"minimum-extractable-text guard, letting the extraction logic "
@@ -25,7 +27,22 @@ def _client(tmp_path, monkeypatch) -> TestClient:
     monkeypatch.setenv("LLM_PROVIDER", "mock")
     import api.main as api_main
     monkeypatch.setattr(api_main, "ROOT", str(tmp_path))
-    return TestClient(api_main.app)
+    return signed_in_admin(TestClient(api_main.app), tmp_path)
+
+
+def _second_client(client) -> TestClient:
+    """A second transport sharing `client`'s session.
+
+    These tests deliberately drive the racing writer through its own
+    `TestClient`, so the two requests cannot be serialised by the transport.
+    That still has to carry a session now that every non-public `/api/` path
+    requires one — and it has to be the *same* session, since signing up a
+    second admin would collide on the email.
+    """
+    import api.main as api_main
+    other = TestClient(api_main.app)
+    other.cookies.update(client.cookies)
+    return other
 
 
 def _hold_first_project_write(monkeypatch, match=None):
@@ -110,7 +127,7 @@ def test_an_fx_write_during_a_run_is_not_lost(tmp_path, monkeypatch):
     fx_result: list = []
 
     def put_rates():
-        fx_result.append(TestClient(api_main.app).put(
+        fx_result.append(_second_client(client).put(
             "/api/projects/p/fx-rates", json={"rates": {"EUR": 1.08}}))
 
     try:
@@ -152,14 +169,14 @@ def test_concurrent_field_writes_do_not_overwrite_each_other(tmp_path, monkeypat
 
     first: list = []
     t1 = threading.Thread(target=lambda: first.append(
-        TestClient(api_main.app).put("/api/projects/p/fx-rates",
-                                     json={"rates": {"EUR": 1.08}})))
+        _second_client(client).put("/api/projects/p/fx-rates",
+                                   json={"rates": {"EUR": 1.08}})))
     t1.start()
     assert in_gap.wait(timeout=30), "the first write never reached its save"
 
     second: list = []
     t2 = threading.Thread(target=lambda: second.append(
-        TestClient(api_main.app).post(
+        _second_client(client).post(
             "/api/projects/p/requirements",
             files={"file": ("MR.docx", b"4.2.7 H2S at least 50 ppm",
                             "application/vnd.openxmlformats-officedocument"
@@ -235,8 +252,8 @@ def test_a_vendor_upload_during_another_write_is_not_lost(tmp_path, monkeypatch)
 
     first: list = []
     t1 = threading.Thread(target=lambda: first.append(
-        TestClient(api_main.app).put("/api/projects/p/fx-rates",
-                                     json={"rates": {"EUR": 1.08}})))
+        _second_client(client).put("/api/projects/p/fx-rates",
+                                   json={"rates": {"EUR": 1.08}})))
     t1.start()
     assert in_gap.wait(timeout=30), "the first write never reached its save"
 
@@ -245,7 +262,7 @@ def test_a_vendor_upload_during_another_write_is_not_lost(tmp_path, monkeypatch)
         zf.writestr("KERUI/quote.txt", _BODY)
     second: list = []
     t2 = threading.Thread(target=lambda: second.append(
-        TestClient(api_main.app).post(
+        _second_client(client).post(
             "/api/projects/p/vendors",
             files={"file": ("bids.zip", buf.getvalue(), "application/zip")})))
     t2.start()

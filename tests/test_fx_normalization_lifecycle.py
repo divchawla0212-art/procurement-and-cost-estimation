@@ -30,6 +30,7 @@ from procurement.renormalize import renormalize
 from procurement.statement import build_statement
 from procurement.store import events, layout, snapshots
 from shared.llm.mock_client import MockLLMClient
+from tests.auth_helpers import signed_in_admin
 
 _PAD = (b" This synthetic fixture body is padded with filler prose so its "
         b"character count clears the pipeline's minimum-extractable-text "
@@ -84,7 +85,7 @@ def _api_client(tmp_path, monkeypatch) -> TestClient:
     monkeypatch.setenv("LLM_PROVIDER", "mock")
     import api.main as api_main
     monkeypatch.setattr(api_main, "ROOT", str(tmp_path))
-    return TestClient(api_main.app)
+    return signed_in_admin(TestClient(api_main.app), tmp_path)
 
 
 def _event_actions(root, slug):

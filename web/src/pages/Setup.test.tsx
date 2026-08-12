@@ -9,6 +9,28 @@ import { render, screen, waitFor } from '@testing-library/react'
 import { Setup } from './Setup'
 import type { ProjectSetup } from '../types'
 
+// Setup reads the signed-in user to decide whether the editing controls are
+// live (`canEdit = user?.role === 'admin'`). These tests are about which
+// controls the *setup state* justifies showing, not about the role boundary,
+// so they run as an admin — the role for which every control below is
+// reachable. A reviewer's read-only view is covered by the auth suites.
+// Built once, outside the factory, so `useAuth()` returns a stable identity —
+// see the longer note on the same mock in `src/App.test.tsx`.
+const auth = vi.hoisted(() => ({
+  value: {
+    user: { id: 'u1', email: 'admin@example.com', role: 'admin' as const },
+    ready: true,
+    login: async () => ({ ok: true }),
+    signup: async () => ({ ok: true }),
+    logout: async () => {},
+  },
+}))
+
+vi.mock('../auth/context', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../auth/context')>()
+  return { ...actual, useAuth: () => auth.value }
+})
+
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
   return {

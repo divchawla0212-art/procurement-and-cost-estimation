@@ -1,5 +1,6 @@
-// The reachability rule for screens `02 Compliance matrix` and
-// `03 Comparative statement`. Pulled out of App.tsx (see BUG-001 in
+// The reachability rule for the screens that read a stored extraction —
+// `02 Overview`, `03 Compliance matrix` and `04 Comparative statement`.
+// Pulled out of App.tsx (see BUG-001 in
 // BUGS_TRACKER.md) so the rule can be unit-tested independently of whether
 // anything actually wires it into a `disabled` prop.
 //

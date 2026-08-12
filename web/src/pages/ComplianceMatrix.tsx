@@ -20,6 +20,8 @@ export interface ComplianceMatrixProps {
   slug: string
   projectName: string
   status: string
+  /** Pre-select the vendor filter — set when opened from the Overview. */
+  initialVendor?: string
 }
 
 const GROUP_ORDER: GroupKey[] = ['not_matched', 'needs_human', 'matched']
@@ -98,7 +100,7 @@ export function ComplianceMatrix(props: ComplianceMatrixProps): JSX.Element {
   const [view, setView] = useState<'worklist' | 'grid'>('worklist')
   const [query, setQuery] = useState('')
   const [verdicts, setVerdicts] = useState<Set<string>>(new Set())
-  const [vendor, setVendor] = useState('')
+  const [vendor, setVendor] = useState(props.initialVendor ?? '')
   const [matchedOpen, setMatchedOpen] = useState(false)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
 
@@ -111,7 +113,7 @@ export function ComplianceMatrix(props: ComplianceMatrixProps): JSX.Element {
   // BUG-001 (BUGS_TRACKER.md), design spec §1.1: `done_with_failures` admits
   // the user rather than blocking the screen, but says so — it does not name
   // the failed documents, since that means fetching `/extraction-status` from
-  // a screen that does not otherwise need it. `04 Extraction status` is one
+  // a screen that does not otherwise need it. `05 Extraction status` is one
   // click away and already reports exactly which documents failed.
   //
   // `status === 'failed'` is reachable here too (I2, final-review report):
@@ -127,13 +129,13 @@ export function ComplianceMatrix(props: ComplianceMatrixProps): JSX.Element {
     props.status === 'done_with_failures' ? (
       <div className="banner banner--warn" style={{ marginBottom: '1.2rem' }}>
         Some documents failed extraction, so this matrix may be incomplete.
-        See <b>04 Extraction status</b> for which ones.
+        See <b>05 Extraction status</b> for which ones.
       </div>
     ) : props.status === 'failed' ? (
       <div className="banner banner--warn" style={{ marginBottom: '1.2rem' }}>
         The most recent ingestion run failed to extract anything. You are
         viewing results from an earlier successful run. See{' '}
-        <b>04 Extraction status</b> for what happened.
+        <b>05 Extraction status</b> for what happened.
       </div>
     ) : null
 

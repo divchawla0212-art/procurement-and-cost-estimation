@@ -1,6 +1,94 @@
+import { useState } from 'react'
 import type { ReactNode } from 'react'
 import type { Coverage } from '../types'
 import { VERDICT_LABEL, VERDICTS, pct } from '../constants'
+
+/* -------------------------------------------------------------- PasswordField */
+
+/**
+ * A password input with a reveal toggle.
+ *
+ * Typing a password you cannot see is how typos become "wrong password" for
+ * an account that was never wrong — worse here than on most sites, because an
+ * admin sets a colleague's initial password and has to read it back to them.
+ *
+ * The toggle is never `disabled`, even while a form is submitting. A disabled
+ * button leaves the tab order, which blurs it if it has focus and drops the
+ * keyboard user to the top of the page; and revealing text you already typed
+ * is harmless mid-request. It is `aria-pressed` with a fixed label rather
+ * than a label that flips, so a screen reader announces one stable control
+ * changing state instead of two controls trading places.
+ */
+export function PasswordField({
+  id,
+  value,
+  onChange,
+  autoComplete,
+  minLength,
+  required = false,
+  disabled = false,
+  className = 'input',
+}: {
+  id: string
+  value: string
+  onChange: (next: string) => void
+  autoComplete: string
+  minLength?: number
+  required?: boolean
+  disabled?: boolean
+  /** The page's own input class — `input` and `field` differ in padding and
+   *  width, and each screen already commits to one. */
+  className?: string
+}) {
+  const [shown, setShown] = useState(false)
+  return (
+    <div className="pw">
+      <input
+        id={id}
+        className={`${className} pw-input`}
+        type={shown ? 'text' : 'password'}
+        autoComplete={autoComplete}
+        minLength={minLength}
+        required={required}
+        disabled={disabled}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      <button
+        type="button"
+        className="pw-eye"
+        aria-label="Show password"
+        aria-pressed={shown}
+        onClick={() => setShown((s) => !s)}
+        title={shown ? 'Hide password' : 'Show password'}
+      >
+        <EyeIcon open={shown} />
+      </button>
+    </div>
+  )
+}
+
+function EyeIcon({ open }: { open: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="18"
+      height="18"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      focusable="false"
+    >
+      <path d="M1.8 12S5.4 5.4 12 5.4 22.2 12 22.2 12 18.6 18.6 12 18.6 1.8 12 1.8 12Z" />
+      <circle cx="12" cy="12" r="3.2" />
+      {/* The slash means "hidden", so it shows when the password is masked. */}
+      {!open && <path d="M4 20 20 4" />}
+    </svg>
+  )
+}
 
 /* --------------------------------------------------------------- VerdictTag */
 

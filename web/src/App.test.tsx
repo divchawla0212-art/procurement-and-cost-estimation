@@ -1,15 +1,42 @@
-// BUG-001 (BUGS_TRACKER.md): screens `02 Compliance matrix` and
-// `03 Comparative statement` must be reachable only once a project's store
-// holds an extraction to read. I2 (final-review report) corrected the gate
-// from `status` to `has_results` directly — `status` can be `'failed'`
-// while the store still holds a complete prior extraction (CLAUDE.md: "a
-// failed extraction never blanks previously-good stored data") — so these
-// tests drive `has_results` explicitly rather than inferring it from
-// `status`.
+// BUG-001 (BUGS_TRACKER.md): the screens that read a stored extraction —
+// `02 Overview`, `03 Compliance matrix` and `04 Comparative statement` —
+// must be reachable only once a project's store holds an extraction to
+// read. I2 (final-review report) corrected the gate from `status` to
+// `has_results` directly — `status` can be `'failed'` while the store still
+// holds a complete prior extraction (CLAUDE.md: "a failed extraction never
+// blanks previously-good stored data") — so these tests drive `has_results`
+// explicitly rather than inferring it from `status`.
 import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import App from './App'
 import type { ProjectSetup, ProjectSummary } from './types'
+
+// App now gates every screen behind a confirmed session. These tests are
+// about the nav rail's reachability rules, not authentication, so they run
+// as an already-signed-in admin: `ready` true and a `user` present, which is
+// the state the rail renders in. The admin role keeps the role-filtered
+// entry visible so a nav regression there cannot hide behind a reviewer's
+// shorter list.
+//
+// The value is built once, outside the factory, and must stay that way:
+// App passes `user` in the dependency list of the `useAsync` that loads the
+// project roster, so a fresh object per `useAuth()` call is a new dependency
+// on every render — refetch, re-render, refetch, until the worker dies of
+// heap exhaustion rather than failing an assertion.
+const auth = vi.hoisted(() => ({
+  value: {
+    user: { id: 'u1', email: 'admin@example.com', role: 'admin' as const },
+    ready: true,
+    login: async () => ({ ok: true }),
+    signup: async () => ({ ok: true }),
+    logout: async () => {},
+  },
+}))
+
+vi.mock('./auth/context', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./auth/context')>()
+  return { ...actual, useAuth: () => auth.value }
+})
 
 vi.mock('./api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./api')>()

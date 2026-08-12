@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from procurement.pipeline import run_ingestion
 from procurement.store import events, snapshots
 
+from tests.auth_helpers import signed_in_admin
 from tests.test_pipeline_rfq import RfqClient
 from tests.test_pipeline_vocabulary import _project
 
@@ -22,7 +23,7 @@ def _client(tmp_path, monkeypatch) -> TestClient:
     monkeypatch.setenv("LLM_PROVIDER", "mock")
     import api.main as api_main
     monkeypatch.setattr(api_main, "ROOT", str(tmp_path))
-    return TestClient(api_main.app)
+    return signed_in_admin(TestClient(api_main.app), tmp_path)
 
 
 def _ingested(tmp_path, monkeypatch):
