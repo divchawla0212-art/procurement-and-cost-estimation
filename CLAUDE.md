@@ -25,8 +25,8 @@ untracked fixture directories are present, never in pass/fail:
 
 | where | baseline |
 |---|---|
-| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1179 passed, 3 skipped, 0 failed** |
-| CI, and any clean checkout | **1170 passed, 12 skipped, 0 failed** |
+| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1180 passed, 3 skipped, 0 failed** |
+| CI, and any clean checkout | **1171 passed, 12 skipped, 0 failed** |
 
 Anything else is a real regression.
 
@@ -45,11 +45,11 @@ pass on a workstation that has it and skip in CI.
 
 So the CI row is the workstation row with the four corpus-coverage passes, the
 three `data/` passes and the two `pdftotext` passes turned into skips —
-`1170 = 1179 - 4 - 3 - 2`, `12 = 3 + 4 + 3 + 2`; 1182 tests either way. When
+`1171 = 1180 - 4 - 3 - 2`, `12 = 3 + 4 + 3 + 2`; 1183 tests either way. When
 the counts move, measure the workstation row and derive the CI row from it;
 editing the two rows independently is how they drift apart.
 
-**The workstation row is measured, not derived**: **1179 passed, 3 skipped**,
+**The workstation row is measured, not derived**: **1180 passed, 3 skipped**,
 taken on 2026-08-13 on the `rfq-platform-phase-1` branch, in an environment
 with `pdftotext`, `data/` and an ingested multi-vendor `projects/` all present.
 That matters, because a row this file once carried was not. While the auth
@@ -60,7 +60,7 @@ have been real measurements, and the caveat that used to sit here is deleted
 rather than reworded. The CI row is still derived from the workstation row by
 the subtraction above; derive it that way again when the counts move.
 
-The jump from 1097 is the RFQ workflow: 82 tests across
+The jump from 1097 is the RFQ workflow: 83 tests across
 `test_workflow_stages.py`, `test_workflow_store.py`,
 `test_workflow_endpoints.py` and `test_workflow_persistence.py`. None of them
 touches a fixture directory or a provider key, so every one of them lands in
