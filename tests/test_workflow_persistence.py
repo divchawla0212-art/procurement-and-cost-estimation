@@ -310,6 +310,118 @@ def test_a_shortlist_link_survives_a_round_trip(tmp_path):
     assert loaded.rfqs_inviting(bidder.id) == ["ADP-RFQ-2026-014"]
 
 
+# -- clarifications ----------------------------------------------------------
+#
+# Two more fields on `WorkflowStore.__init__`, and CLAUDE.md names this file's
+# exact failure mode for such a field: no matching line in *both* `to_document`
+# and `from_document` and it silently fails to survive a restart. Both
+# directions are asserted directly rather than only through a screen.
+
+
+def rfq_with_a_query(root: str):
+    """Run 1 for the rows below: a saved store holding one frozen RFQ, one
+    invited bidder and one answered query."""
+    with persistence.locked_update(root) as store:
+        project, generator, _cable = project_and_items(store)
+        rfq = cover_with_rfq(store, project.id, [generator.id])
+        store.set_technical_package(
+            rfq.id, revision="Rev. A", basis_of_design="2 x 5 MW",
+            attachments=[Attachment(doc_code="GEN-DS-01", title="Datasheet",
+                                    revision="Rev. A")],
+        )
+        store.freeze_package(rfq.id, by="lead@example.com")
+        entry = store.add_shortlist_entry(
+            rfq.id, vendor_name="Al Munara Switchgear LLC", prequal_status="Approved",
+            scope_code_fit=True, included=True,
+        )
+        query = store.raise_query(
+            rfq.id, entry.id, question="Confirm the frame size.",
+            category="Technical", raised_on=date(2026, 8, 13),
+        )
+        store.answer_query(rfq.id, query.id, answer="Frame 6.", by="buyer@example.com")
+    return rfq.id, entry.id, query.id
+
+
+def test_a_query_survives_a_round_trip_with_every_field(tmp_path):
+    """Compared against the in-memory record, not against a second load — two
+    loads of the same broken document agree with each other."""
+    store, rfq_id = populated_store()
+    entry = store.shortlist_for(rfq_id)[0]
+    query = store.raise_query(rfq_id, entry.id, question="Confirm the frame size.",
+                              category="Technical", raised_on=date(2026, 8, 13))
+    store.answer_query(rfq_id, query.id, answer="Frame 6.", by="buyer@example.com")
+    before = store.queries_for(rfq_id)
+    persistence.save(str(tmp_path), store)
+
+    assert persistence.load(str(tmp_path)).queries_for(rfq_id) == before
+    assert [q.number for q in before] == ["TQ-001"]
+
+
+def test_an_addendum_survives_a_round_trip_with_every_field(tmp_path):
+    root = str(tmp_path)
+    rfq_id, _entry_id, _query_id = rfq_with_a_query(root)
+    with persistence.locked_update(root) as store:
+        draft = store.draft_addendum(
+            rfq_id, revision="Rev. B", summary="Frame size corrected.",
+            attachments=[Attachment(doc_code="GEN-DS-01", title="Datasheet",
+                                    revision="Rev. B")],
+            bid_due_date=date(2026, 10, 15),
+        )
+        store.issue_addendum(rfq_id, draft.id, by="buyer@example.com")
+
+    reloaded = persistence.load(root)
+    [addendum] = reloaded.addenda_for(rfq_id)
+    assert addendum.number == "ADD-01"
+    assert addendum.supersedes_revision == "Rev. A"
+    assert addendum.issued_by == "buyer@example.com"
+    assert reloaded.current_bid_due_date(rfq_id) == date(2026, 10, 15)
+    # The superseded package went with it, so the reloaded store agrees.
+    assert reloaded.get_technical_package(rfq_id).revision == "Rev. B"
+
+
+def test_the_document_carries_both_new_collections(tmp_path):
+    root = str(tmp_path)
+    rfq_with_a_query(root)
+    doc = json.loads(Path(persistence.workflow_path(root)).read_text(encoding="utf-8"))
+    assert {"queries", "addenda"} <= set(doc)
+    assert doc["queries"][0]["number"] == "TQ-001"
+    # Derived, never stored — the load has nothing to keep honest.
+    assert "status" not in doc["queries"][0]
+
+
+def test_a_document_written_before_clarifications_loads_as_an_empty_one(tmp_path):
+    """No version bump and no migration: a document with no `queries` key means
+    no queries, which is the correct reading of it."""
+    root = str(tmp_path)
+    rfq_id, _entry_id, _query_id = rfq_with_a_query(root)
+    path = Path(persistence.workflow_path(root))
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    del doc["queries"]
+    del doc["addenda"]
+    path.write_text(json.dumps(doc), encoding="utf-8")
+
+    loaded = persistence.load(root)
+    assert loaded.queries_for(rfq_id) == []
+    assert loaded.addenda_for(rfq_id) == []
+    assert loaded.list_projects()          # everything else still loaded
+    # No migration, so the version never moved to accommodate the new keys.
+    assert doc["version"] == 1
+
+
+def test_clarification_ids_survive_a_round_trip(tmp_path):
+    """Every write addresses by id. A regenerated id would make "answer this
+    one" hit a different row after a restart — this file's silent failure."""
+    root = str(tmp_path)
+    rfq_id, _entry_id, query_id = rfq_with_a_query(root)
+    with persistence.locked_update(root) as store:
+        draft = store.draft_addendum(rfq_id, revision="Rev. B", summary="s",
+                                     attachments=[])
+
+    reloaded = persistence.load(root)
+    assert [q.id for q in reloaded.queries_for(rfq_id)] == [query_id]
+    assert [a.id for a in reloaded.addenda_for(rfq_id)] == [draft.id]
+
+
 # -- the two-run mutation matrix ---------------------------------------------
 #
 # Every row below mutates the store between two runs and then reads run 2 *from

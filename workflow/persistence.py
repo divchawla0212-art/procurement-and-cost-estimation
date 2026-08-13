@@ -23,6 +23,7 @@ from typing import Iterator
 from procurement.store import layout
 from workflow.models.bid import Bid, BidShortlist, VdrlReceipt
 from workflow.models.bidder import Bidder
+from workflow.models.clarification import Addendum, ClarificationQuery
 from workflow.models.project import Item, Project
 from workflow.models.rfq import (
     RfqRecord,
@@ -75,6 +76,20 @@ def to_document(store: WorkflowStore) -> dict:
             for r in receipts
         ],
         "bid_shortlists": [s.model_dump(mode="json") for s in store._bid_shortlists.values()],
+        # Only what is stored. A query's state and an addendum's draft flag are
+        # computed from the timestamps beside them, so writing them here would
+        # put a second copy in the document for the first update to disagree
+        # with — the same reasoning as `effective_prequal` above.
+        "queries": [
+            q.model_dump(mode="json")
+            for queries in store._queries.values()
+            for q in queries
+        ],
+        "addenda": [
+            a.model_dump(mode="json")
+            for addenda in store._addenda.values()
+            for a in addenda
+        ],
     }
 
 
@@ -111,6 +126,15 @@ def from_document(doc: dict) -> WorkflowStore:
     for record in doc.get("receipts", []):
         receipt = VdrlReceipt(**record)
         store._receipts.setdefault(receipt.bid_id, []).append(receipt)
+    # `.get` with a default, so a document written before clarifications existed
+    # loads as an RFQ with no queries and no addenda. The correct reading of a
+    # missing key, not a migration — which is why `VERSION` does not move.
+    for record in doc.get("queries", []):
+        query = ClarificationQuery(**record)
+        store._queries.setdefault(query.rfq_id, []).append(query)
+    for record in doc.get("addenda", []):
+        addendum = Addendum(**record)
+        store._addenda.setdefault(addendum.rfq_id, []).append(addendum)
 
     return store
 
