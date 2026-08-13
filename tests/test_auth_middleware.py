@@ -1,5 +1,7 @@
 """Key-free tests for the fail-closed authentication middleware (invariant A1)."""
 
+import pytest
+
 from fastapi.testclient import TestClient
 
 from api.auth.middleware import PUBLIC_PATHS
@@ -127,3 +129,69 @@ def test_a_valid_session_reaches_a_guarded_route(tmp_path, monkeypatch):
                          json={"email": "reviewer@test.local", "password": "testpassword"})
     assert signup.status_code == 201
     assert client.get("/api/projects").status_code == 200
+
+
+# -- the development bypass --------------------------------------------------
+#
+# `AUTH_DISABLED=1` exists so the front end can be opened without signing in
+# while the RFQ workflow is being built. It is off unless the variable is set,
+# it never widens `PUBLIC_PATHS`, and it refuses to invent an identity: with no
+# administrator in the store there is nobody to act as, so it stays fail-closed.
+
+def _bypass_client(tmp_path, monkeypatch) -> TestClient:
+    monkeypatch.setenv("PROCUREMENT_PROJECTS_ROOT", str(tmp_path))
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.setenv("AUTH_DISABLED", "1")
+    import api.main as api_main
+    monkeypatch.setattr(api_main, "ROOT", str(tmp_path))
+    return TestClient(api_main.app)
+
+
+def test_bypass_is_off_unless_the_variable_says_otherwise(tmp_path, monkeypatch):
+    monkeypatch.delenv("AUTH_DISABLED", raising=False)
+    client = _anon_client(tmp_path, monkeypatch)
+    from api.auth import store
+    store.create_user(str(tmp_path), "admin@gmail.com", "hash", "admin")
+    assert client.get("/api/auth/me").status_code == 401
+
+
+@pytest.mark.parametrize("value", ["0", "false", "no", ""])
+def test_only_a_truthy_value_enables_the_bypass(tmp_path, monkeypatch, value):
+    monkeypatch.setenv("AUTH_DISABLED", value)
+    client = _anon_client(tmp_path, monkeypatch)
+    from api.auth import store
+    store.create_user(str(tmp_path), "admin@gmail.com", "hash", "admin")
+    assert client.get("/api/auth/me").status_code == 401
+
+
+def test_bypass_admits_an_unauthenticated_caller_as_the_admin(tmp_path, monkeypatch):
+    client = _bypass_client(tmp_path, monkeypatch)
+    from api.auth import store
+    store.create_user(str(tmp_path), "admin@gmail.com", "hash", "admin")
+
+    res = client.get("/api/auth/me")
+    assert res.status_code == 200
+    assert res.json()["email"] == "admin@gmail.com"
+    assert res.json()["role"] == "admin"
+
+
+def test_bypass_reaches_the_workflow_routes_too(tmp_path, monkeypatch):
+    client = _bypass_client(tmp_path, monkeypatch)
+    from api.auth import store
+    store.create_user(str(tmp_path), "admin@gmail.com", "hash", "admin")
+    assert client.get("/api/workflow/stages").status_code == 200
+
+
+def test_bypass_with_no_administrator_stays_closed(tmp_path, monkeypatch):
+    """It borrows an existing identity; it does not mint one. An empty store
+    has nobody to act as, and inventing a user would put a real account in
+    auth.json that nobody asked for."""
+    client = _bypass_client(tmp_path, monkeypatch)
+    assert client.get("/api/auth/me").status_code == 401
+
+
+def test_bypass_does_not_widen_the_public_allowlist(tmp_path, monkeypatch):
+    """The bypass is a separate switch, not an edit to PUBLIC_PATHS — so
+    turning it off restores the fail-closed behaviour exactly."""
+    from api.auth.middleware import PUBLIC_PATHS as paths
+    assert paths == {"/api/health", "/api/auth/login", "/api/auth/signup"}

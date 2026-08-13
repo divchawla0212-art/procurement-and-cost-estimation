@@ -28,6 +28,12 @@
     reloader's child process out of the picture; use it if you are not editing
     Python.
 
+.PARAMETER NoAuth
+    Start with authentication disabled (AUTH_DISABLED=1), so the front end
+    opens without a sign-in. Every request is served as the first administrator
+    in auth.json, or as DEV_USER_EMAIL if that is set. Development only -- do
+    not use it anywhere another person can reach the port.
+
 .PARAMETER SkipWebInstall
     Don't offer to run `npm --prefix web install` when web/node_modules is
     missing — fail instead. For unattended runs.
@@ -50,6 +56,7 @@ param(
     [int]$WebPort = 5173,
     [switch]$NoBrowser,
     [switch]$NoReload,
+    [switch]$NoAuth,
     [switch]$SkipWebInstall
 )
 
@@ -155,6 +162,19 @@ if ($ApiPort -ne 8000) {
 Assert-PortFree $ApiPort 'api'
 Assert-PortFree $WebPort 'web'
 Write-Ok "ports              $ApiPort, $WebPort free"
+
+# Set for this process, so the uvicorn child inherits it. Not persisted: a new
+# terminal is authenticated again, which is the right default for a switch that
+# turns authentication off.
+if ($NoAuth) {
+    $env:AUTH_DISABLED = '1'
+    Write-Warn "-NoAuth: authentication is DISABLED. Every request is served as"
+    Write-Host "                     the first admin in auth.json. Development only." -ForegroundColor DarkGray
+} else {
+    # Clear it, so a value left over in this shell cannot silently disable auth
+    # on a run that did not ask for it.
+    Remove-Item Env:\AUTH_DISABLED -ErrorAction SilentlyContinue
+}
 Write-Host ""
 
 # -- launch ------------------------------------------------------------------

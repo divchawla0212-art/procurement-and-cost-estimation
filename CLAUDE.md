@@ -25,8 +25,8 @@ untracked fixture directories are present, never in pass/fail:
 
 | where | baseline |
 |---|---|
-| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1220 passed, 3 skipped, 0 failed** |
-| CI, and any clean checkout | **1211 passed, 12 skipped, 0 failed** |
+| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1229 passed, 3 skipped, 0 failed** |
+| CI, and any clean checkout | **1220 passed, 12 skipped, 0 failed** |
 
 Anything else is a real regression.
 
@@ -45,11 +45,11 @@ pass on a workstation that has it and skip in CI.
 
 So the CI row is the workstation row with the four corpus-coverage passes, the
 three `data/` passes and the two `pdftotext` passes turned into skips —
-`1211 = 1220 - 4 - 3 - 2`, `12 = 3 + 4 + 3 + 2`; 1223 tests either way. When
+`1220 = 1229 - 4 - 3 - 2`, `12 = 3 + 4 + 3 + 2`; 1232 tests either way. When
 the counts move, measure the workstation row and derive the CI row from it;
 editing the two rows independently is how they drift apart.
 
-**The workstation row is measured, not derived**: **1220 passed, 3 skipped**,
+**The workstation row is measured, not derived**: **1229 passed, 3 skipped**,
 taken on 2026-08-13 on the `rfq-platform-phase-1` branch, in an environment
 with `pdftotext`, `data/` and an ingested multi-vendor `projects/` all present.
 That matters, because a row this file once carried was not. While the auth
@@ -156,6 +156,17 @@ atomic write keep all three consistent. Written **only** from
 - Sessions persist `sha256(token)` only. `password_hash` is never a field on
   `User`, so it cannot reach a response body; `store.password_hash_for` is the
   one reader of the digest.
+- **`AUTH_DISABLED=1` is a development bypass, off unless set.** It serves an
+  unauthenticated caller as the first administrator in `auth.json` (or
+  `DEV_USER_EMAIL`), so the front end opens without signing in. It is a
+  separate switch, *not* an edit to `PUBLIC_PATHS` — that set stays pinned at
+  three by `test_the_allowlist_is_exactly_these_three_paths`, and turning the
+  bypass off restores fail-closed exactly. It never mints a user: with no
+  administrator in the store there is nobody to act as and it stays closed. A
+  real session still wins, so actions keep their real attribution. Reach it
+  with `.
+un.ps1 -NoAuth`; never run it anywhere another person can reach the
+  port.
 - **Startup signs everyone out.** `api.main`'s lifespan calls
   `store.clear_sessions`, so launching the platform always lands on the
   sign-in page rather than dropping whoever signed in last back inside as

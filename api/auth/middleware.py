@@ -11,13 +11,47 @@ in review.
 This module answers only "is there a valid session?". Whether *this* user may
 touch *that* project is Task 7's authorization layer.
 """
+import logging
+import os
+
 from fastapi.responses import JSONResponse
 
 from api.auth import store
 from api.auth.routes import COOKIE_NAME
 
+log = logging.getLogger(__name__)
+
 # Exactly three. Adding a fourth is a reviewable decision, not a detail.
 PUBLIC_PATHS = {"/api/health", "/api/auth/login", "/api/auth/signup"}
+
+# Values that turn the development bypass on. Anything else — including the
+# variable being absent, empty, "0" or "false" — leaves authentication on.
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def bypass_enabled() -> bool:
+    """Whether `AUTH_DISABLED` is set to something affirmative.
+
+    Read at call time, not at import, so a test can set it per-case and so the
+    launcher can turn it on without the import order mattering.
+    """
+    return os.environ.get("AUTH_DISABLED", "").strip().lower() in _TRUTHY
+
+
+def _bypass_user(root: str):
+    """The identity an unauthenticated caller acts as when the bypass is on.
+
+    It **borrows** an existing account and never mints one: inventing a user
+    would put a real row in `auth.json` that nobody created, with a role nobody
+    granted. `DEV_USER_EMAIL` picks a specific account; otherwise the first
+    administrator is used. With no administrator at all there is nobody to act
+    as, and the middleware stays fail-closed rather than inventing someone.
+    """
+    wanted = os.environ.get("DEV_USER_EMAIL", "").strip()
+    if wanted:
+        return store.find_by_email(root, wanted)
+    admins = [u for u in store.list_users(root) if u.role == "admin"]
+    return admins[0] if admins else None
 
 
 def install(app) -> None:
@@ -47,6 +81,20 @@ def install(app) -> None:
         import api.main as api_main
 
         user = store.resolve_session(api_main.ROOT, request.cookies.get(COOKIE_NAME, ""))
+
+        if user is None and bypass_enabled():
+            # Development bypass. Deliberately placed *after* the normal
+            # resolve, so a real session still wins and is still attributed to
+            # the person holding it — the bypass only fills the gap where a
+            # 401 would otherwise be.
+            user = _bypass_user(api_main.ROOT)
+            if user is not None:
+                log.warning(
+                    "AUTH_DISABLED is set: serving %s as %s with no session. "
+                    "Never run this way anywhere reachable by anyone else.",
+                    path, user.email,
+                )
+
         if user is None:
             return JSONResponse({"detail": "authentication required"}, status_code=401)
         request.state.user = user
