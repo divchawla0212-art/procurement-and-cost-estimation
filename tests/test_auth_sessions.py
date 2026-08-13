@@ -22,6 +22,54 @@ def test_plaintext_token_is_never_stored(tmp_path):
     assert token not in raw
 
 
+def test_clear_sessions_empties_the_collection(tmp_path):
+    """Launching the platform must land on the sign-in page, not inside it.
+
+    A session outlives a restart by design — the row is in auth.json and the
+    cookie carries a 7-day max-age — so forcing the prompt means dropping the
+    server-side rows. `resolve_session` answers None when nothing matches, so
+    a browser that still holds the cookie presents an inert one.
+    """
+    root = str(tmp_path)
+    store.create_session(root, _user(root, "a@b.com").id)
+    store.create_session(root, _user(root, "c@d.com", role="reviewer").id)
+
+    store.clear_sessions(root)
+
+    assert store.read_auth(root)["sessions"] == []
+
+
+def test_clear_sessions_invalidates_a_token_that_previously_resolved(tmp_path):
+    root = str(tmp_path)
+    token = store.create_session(root, _user(root).id)
+    assert store.resolve_session(root, token) is not None
+
+    store.clear_sessions(root)
+
+    assert store.resolve_session(root, token) is None
+
+
+def test_clear_sessions_touches_nothing_but_sessions(tmp_path):
+    """Signing everyone out must not cost anyone their account or access."""
+    root = str(tmp_path)
+    admin = _user(root, "boss@b.com")
+    reviewer = _user(root, "rev@b.com", role="reviewer")
+    store.grant(root, reviewer.id, "gas-14", granted_by=admin.id)
+    store.create_session(root, reviewer.id)
+
+    store.clear_sessions(root)
+
+    doc = store.read_auth(root)
+    assert {u["email"] for u in doc["users"]} == {"boss@b.com", "rev@b.com"}
+    assert [g["slug"] for g in doc["grants"]] == ["gas-14"]
+
+
+def test_clear_sessions_on_an_untouched_store_is_a_no_op(tmp_path):
+    root = str(tmp_path)
+    store.clear_sessions(root)
+    assert store.read_auth(root)["sessions"] == []
+
+
 def test_unknown_and_malformed_tokens_resolve_to_none(tmp_path):
     root = str(tmp_path)
     _user(root)

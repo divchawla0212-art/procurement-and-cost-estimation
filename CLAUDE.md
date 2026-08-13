@@ -25,8 +25,8 @@ untracked fixture directories are present, never in pass/fail:
 
 | where | baseline |
 |---|---|
-| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1180 passed, 3 skipped, 0 failed** |
-| CI, and any clean checkout | **1171 passed, 12 skipped, 0 failed** |
+| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1187 passed, 3 skipped, 0 failed** |
+| CI, and any clean checkout | **1178 passed, 12 skipped, 0 failed** |
 
 Anything else is a real regression.
 
@@ -45,11 +45,11 @@ pass on a workstation that has it and skip in CI.
 
 So the CI row is the workstation row with the four corpus-coverage passes, the
 three `data/` passes and the two `pdftotext` passes turned into skips —
-`1171 = 1180 - 4 - 3 - 2`, `12 = 3 + 4 + 3 + 2`; 1183 tests either way. When
+`1178 = 1187 - 4 - 3 - 2`, `12 = 3 + 4 + 3 + 2`; 1190 tests either way. When
 the counts move, measure the workstation row and derive the CI row from it;
 editing the two rows independently is how they drift apart.
 
-**The workstation row is measured, not derived**: **1180 passed, 3 skipped**,
+**The workstation row is measured, not derived**: **1187 passed, 3 skipped**,
 taken on 2026-08-13 on the `rfq-platform-phase-1` branch, in an environment
 with `pdftotext`, `data/` and an ingested multi-vendor `projects/` all present.
 That matters, because a row this file once carried was not. While the auth
@@ -156,6 +156,14 @@ atomic write keep all three consistent. Written **only** from
 - Sessions persist `sha256(token)` only. `password_hash` is never a field on
   `User`, so it cannot reach a response body; `store.password_hash_for` is the
   one reader of the digest.
+- **Startup signs everyone out.** `api.main`'s lifespan calls
+  `store.clear_sessions`, so launching the platform always lands on the
+  sign-in page rather than dropping whoever signed in last back inside as
+  whatever account that was. The session cookie is a browser-session cookie
+  (no `max_age`) for the same reason. Both halves matter: the server-side row
+  is what `resolve_session` actually checks, so clearing it is what makes a
+  still-held cookie inert. The deliberate cost is that restarting the API
+  signs out every user, not just the person restarting it.
 - Roles are `admin` and `reviewer`, and **no route changes a role** — it is
   set once at creation. Signup always creates a reviewer.
 - A project slug is matched against `list_projects` (which reads `os.listdir`),

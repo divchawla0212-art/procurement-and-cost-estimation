@@ -28,7 +28,7 @@ document directly -- deliberately, not by omission.
 | 5 | a role is changed reviewer -> admin between requests          | A2        | `test_promotion_to_admin_takes_effect_without_a_re_login` |
 | 6 | a password is changed while a second session is live          | S3        | `test_password_change_keeps_the_changer_in_and_signs_the_other_out` |
 | 7 | a route is added to `app.routes` with no guard                | A1        | already covered -- see note below, not duplicated here |
-| 8 | the process restarts between requests                         | S3        | `test_a_session_survives_a_process_restart` |
+| 8 | the process restarts between requests                         | S3        | `test_a_process_restart_signs_everyone_out_but_keeps_their_account` |
 | 9 | `ALLOW_SIGNUP` flips 1 -> 0 between requests                   | --        | `test_disabling_signup_mid_session_blocks_new_signups_not_existing_sessions` |
 | 10| the same email signs up twice concurrently                    | S1        | `test_two_concurrent_signups_for_the_same_email_leave_exactly_one_user` |
 | 11| a user is deleted while holding grants                        | S4        | `test_deleting_a_user_who_holds_grants_leaves_no_grant_behind` |
@@ -55,10 +55,15 @@ subprocesses against the same `auth.json`), not a fresh `TestClient` against
 the same long-lived Python process. A fresh `TestClient` still shares the
 same interpreter, the same imported modules, and any module-level state a
 broken implementation might use to cache sessions in memory -- so it would
-not detect that class of defect. Only tearing down the process and starting
-a new one proves sessions are recovered from the file rather than survived
-in memory. See `test_a_session_survives_a_process_restart` for the concrete
-probe that confirms this distinction actually matters.
+not detect that class of defect, and the boot that clears sessions would
+never actually run.
+
+Note the direction of row 8: a restart now signs everyone out, because
+`api.main`'s lifespan calls `store.clear_sessions` so that launching the
+platform always lands on the sign-in page. Sessions being file-backed rather
+than in-memory is still what row 8 defends -- it is proved by reading the
+row this pytest process can see but did not write, not by the session
+outliving the restart.
 """
 import os
 import pathlib
@@ -335,17 +340,27 @@ def _stop_server(proc: subprocess.Popen) -> None:
         proc.wait(timeout=5)
 
 
-def test_a_session_survives_a_process_restart(tmp_path):
-    """Row 8 defends S3, and is the reason sessions are persisted to
-    `auth.json` at all rather than kept in memory.
+def test_a_process_restart_signs_everyone_out_but_keeps_their_account(tmp_path):
+    """Row 8 defends S3 across a real process boundary.
 
-    This runs two real, separate `uvicorn` processes against the same
+    This test used to assert the opposite -- that a session *survives* a
+    restart. That was the deliberate behaviour until launching the platform
+    was found to drop whoever signed in last straight back inside, as
+    whatever account that happened to be. `api.main`'s lifespan now calls
+    `store.clear_sessions`, so the policy is inverted and this test with it.
+
+    What has **not** changed is the property row 8 exists to defend: sessions
+    are server-side state in `auth.json`, not an in-memory cache. That is now
+    proved by the first half below -- this pytest process reads the file and
+    sees the row that a *different* OS process wrote -- rather than by the
+    session outliving a restart, which it deliberately no longer does.
+
+    Two real, separate `uvicorn` processes against the same
     `PROCUREMENT_PROJECTS_ROOT`, killing the first before starting the
     second -- a genuine process boundary. A fresh `TestClient` against the
     same long-lived pytest process would not do the same job: it shares the
-    interpreter, so any module-level cache a broken implementation kept
-    sessions in would still be there. Only ending the process and starting a
-    new one proves the session survives strictly because it was on disk.
+    interpreter, so a module-level cache would still be there, and the boot
+    that does the clearing would never actually happen.
 
     This repo has no `pytest-timeout` (adding one would be a new runtime
     dependency, which the global constraints forbid), so a genuinely hung
@@ -364,6 +379,12 @@ def test_a_session_survives_a_process_restart(tmp_path):
         assert res.status_code == 201  # run 1
         cookie = res.cookies.get("te_session")
         assert cookie
+
+        # Written to disk by the server process, read here by the test
+        # process: sessions are file-backed, not held in run 1's memory.
+        doc = auth_store.read_auth(root)
+        assert len(doc["sessions"]) == 1
+        assert cookie not in open(auth_store.auth_path(root), encoding="utf-8").read()
     finally:
         _stop_server(proc1)  # the restart
 
@@ -371,8 +392,15 @@ def test_a_session_survives_a_process_restart(tmp_path):
     proc2, base2 = _start_server(root, port2)
     try:
         me = httpx.get(base2 + "/api/auth/me", cookies={"te_session": cookie})
-        assert me.status_code == 200  # run 2, brand-new process
-        assert me.json()["email"] == "restart@t.local"
+        assert me.status_code == 401, "a restart must not let the old cookie back in"
+        assert auth_store.read_auth(root)["sessions"] == []
+
+        # Signing everyone out is not deleting anyone: the account that run 1
+        # created is still there to log back into.
+        again = httpx.post(base2 + "/api/auth/login",
+                           json={"email": "restart@t.local", "password": "testpassword"})
+        assert again.status_code == 200
+        assert again.json()["email"] == "restart@t.local"
     finally:
         _stop_server(proc2)
 

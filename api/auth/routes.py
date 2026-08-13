@@ -57,9 +57,13 @@ class PasswordChange(BaseModel):
 
 
 def set_session_cookie(response: Response, token: str, request: Request) -> None:
+    # No max_age and no expires, deliberately: this is a browser-session
+    # cookie, gone when the browser closes. A persistent one outlived both the
+    # browser and the API, so a stale session let a relaunch skip the sign-in
+    # page entirely. `SESSION_TTL_SECONDS` still bounds the server-side row,
+    # which is the half that actually decides whether a token is valid.
     response.set_cookie(
         COOKIE_NAME, token,
-        max_age=store.SESSION_TTL_SECONDS,
         httponly=True,
         samesite="Lax",
         secure=request.url.scheme == "https",

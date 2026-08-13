@@ -84,7 +84,17 @@ def _provider_ready(provider: str) -> bool:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan: seed admin on startup."""
+    """Application lifespan: sign everyone out, then seed admin on startup.
+
+    Sessions are revoked first so that launching the platform always lands on
+    the sign-in page. They are server-side state in `auth.json` and outlive
+    the process, so without this a relaunch drops whoever signed in last
+    straight back inside, as whatever account that happened to be.
+
+    The cost is deliberate and worth stating: restarting the API signs out
+    every user, not just the one restarting it.
+    """
+    auth_store.clear_sessions(ROOT)
     bootstrap.seed_admin_if_empty(ROOT)
     yield
 

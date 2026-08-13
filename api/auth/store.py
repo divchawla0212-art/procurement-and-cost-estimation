@@ -324,6 +324,22 @@ def delete_session(root: str, token: str) -> None:
         ])
 
 
+def clear_sessions(root: str) -> None:
+    """Revoke every session. Called once per boot from `api.main`'s lifespan.
+
+    A session is server-side state that outlives the process, so without this
+    a relaunch of the platform drops whoever last signed in straight back
+    inside — and as whichever account that was, which is how a reviewer
+    session came to be the one waiting after a restart.
+
+    Users and grants are untouched: signing everyone out must not cost anyone
+    their account or their project access. No pruning branch is needed here
+    the way `delete_session` needs one — `[]` is already exactly no rows.
+    """
+    with locked_update(root) as doc:
+        doc["sessions"] = []
+
+
 def delete_sessions_for(root: str, user_id: str, *, keep_token: str | None = None) -> None:
     """Revoke a user's sessions, optionally keeping one.
 

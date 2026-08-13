@@ -116,3 +116,61 @@ def test_no_response_ever_carries_a_password_hash(tmp_path, monkeypatch):
                 client.post("/api/auth/login", json={"email": "a@b.com", "password": "longenough"})]:
         assert "password_hash" not in res.text
         assert "scrypt$" not in res.text
+
+
+def test_login_cookie_dies_with_the_browser(tmp_path, monkeypatch):
+    """No Max-Age and no Expires: a persistent cookie is what silently carried a
+    stale reviewer session into a fresh launch of the platform."""
+    client = _client(tmp_path, monkeypatch)
+    client.post("/api/auth/signup", json={"email": "a@b.com", "password": "longenough"})
+
+    res = client.post("/api/auth/login", json={"email": "a@b.com", "password": "longenough"})
+    assert res.status_code == 200
+
+    cookie = res.headers["set-cookie"]
+    assert "te_session=" in cookie
+    assert "max-age" not in cookie.lower(), cookie
+    assert "expires" not in cookie.lower(), cookie
+    # the protections that must survive the change
+    assert "httponly" in cookie.lower()
+    assert "samesite=lax" in cookie.lower()
+
+
+def test_app_startup_signs_everyone_out(tmp_path, monkeypatch):
+    """The reported bug, end to end: a session that was valid before the API
+    started must not let anyone straight back in after it starts.
+
+    Bare TestClient() does not run lifespan; only `with TestClient(app) as c:`
+    does — same reason as test_auth_bootstrap.py's startup test.
+    """
+    monkeypatch.setenv("PROCUREMENT_PROJECTS_ROOT", str(tmp_path))
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.delenv("ADMIN_EMAIL", raising=False)
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+    import api.main as api_main
+    monkeypatch.setattr(api_main, "ROOT", str(tmp_path))
+
+    from api.auth import store as auth_store
+    user = auth_store.create_user(str(tmp_path), "abc@gmail.com", "hash", "reviewer")
+    stale = auth_store.create_session(str(tmp_path), user.id)
+    assert auth_store.resolve_session(str(tmp_path), stale) is not None
+
+    with TestClient(api_main.app) as client:
+        assert auth_store.resolve_session(str(tmp_path), stale) is None
+        client.cookies.set("te_session", stale)
+        assert client.get("/api/auth/me").status_code == 401
+
+
+def test_startup_leaves_a_session_created_after_it_alone(tmp_path, monkeypatch):
+    """Only sessions predating the boot are cleared — signing in after startup
+    has to work, or nobody can use the app at all."""
+    monkeypatch.setenv("PROCUREMENT_PROJECTS_ROOT", str(tmp_path))
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.delenv("ADMIN_EMAIL", raising=False)
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+    import api.main as api_main
+    monkeypatch.setattr(api_main, "ROOT", str(tmp_path))
+
+    with TestClient(api_main.app) as client:
+        client.post("/api/auth/signup", json={"email": "a@b.com", "password": "longenough"})
+        assert client.get("/api/auth/me").status_code == 200
