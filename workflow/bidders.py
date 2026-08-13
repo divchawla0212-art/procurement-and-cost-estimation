@@ -23,7 +23,7 @@ from datetime import date, timedelta
 
 from pydantic import BaseModel, Field
 
-from workflow.models.bidder import Bidder
+from workflow.models.bidder import ADNOC, Bidder
 from workflow.models.rfq import RfqRecord
 
 # How long before a lapse is worth mentioning. Long enough that a renewal can
@@ -46,6 +46,35 @@ _STATUS_BLOCKERS = {
         "{name} was declined at prequalification and is not approved to bid."
     ),
 }
+
+
+# Whose Approved Vendor List counts as *the client's*. One constant, so a second
+# client's AVL is a one-line change here rather than a redesign. It is not
+# per-project: `Project.client` is free text ("Al Dhafra Petroleum"), and
+# inferring an approving organisation from it would be guessing.
+CLIENT_APPROVER = ADNOC
+
+
+def missing_client_approval(bidder: Bidder) -> str | None:
+    """None when the bidder is on the client's Approved Vendor List.
+
+    Derived, never stored, for the same reason `PrequalStatus` has no "Expired"
+    member: a stored copy is wrong the moment `approved_by` is edited, and
+    keeping it honest would need a sweep job nobody has written.
+
+    The predicate is the *absence of the client approver*, not the presence of
+    Astra, so a bidder with an empty `approved_by` is caught too — a vendor
+    nobody has approved is at least as worth flagging as one only we approved.
+    The two cases share a rule but not a sentence, because the action they call
+    for differs.
+    """
+    if CLIENT_APPROVER in bidder.approved_by:
+        return None
+    held = ", ".join(bidder.approved_by)
+    return (
+        f"{bidder.name} is not on the {CLIENT_APPROVER} Approved Vendor List"
+        + (f" — approved by {held} only." if held else " and has no approval recorded.")
+    )
 
 
 class Suitability(BaseModel):

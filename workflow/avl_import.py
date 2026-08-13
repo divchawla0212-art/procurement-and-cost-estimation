@@ -29,10 +29,7 @@ from typing import Iterable
 
 import openpyxl
 
-from workflow.models.bidder import Bidder
-
-ADNOC = "ADNOC"
-ASTRA = "Astra"
+from workflow.models.bidder import ADNOC, ASTRA, Bidder
 
 # Canonical header -> attribute. The first four are required; without them
 # there is no bidder to build.

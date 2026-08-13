@@ -13,10 +13,16 @@ freezing it.
 phase 1 plan shipped a message that broke it. A reader told only "not approved"
 has to guess whether renewing would help; one told the date it lapsed does not.
 """
+import importlib
 from datetime import date
 
-from workflow.bidders import Suitability, effective_prequal, evaluate
-from workflow.models.bidder import Bidder
+from workflow.bidders import (
+    Suitability,
+    effective_prequal,
+    evaluate,
+    missing_client_approval,
+)
+from workflow.models.bidder import ADNOC, ASTRA, Bidder
 from workflow.models.rfq import RfqRecord
 
 TODAY = date(2026, 8, 13)
@@ -196,3 +202,57 @@ def test_a_bidder_with_no_categories_at_all_is_a_mismatch():
     result = evaluate(a_bidder(trade_categories=[]), an_rfq(), TODAY)
     assert not result.scope_fit
     assert result.eligible
+
+
+# -- the client approval gap -------------------------------------------------
+#
+# Derived from `approved_by`, for the same reason `Expired` is derived from
+# `prequal_expires_on`: a stored copy is wrong the moment the list is edited.
+
+
+def test_a_client_approved_bidder_has_no_gap():
+    assert missing_client_approval(a_bidder(approved_by=[ADNOC])) is None
+
+
+def test_holding_both_approvals_is_still_no_gap():
+    assert missing_client_approval(a_bidder(approved_by=[ADNOC, ASTRA])) is None
+
+
+def test_an_astra_only_bidder_names_what_it_holds_instead():
+    gap = missing_client_approval(a_bidder(approved_by=[ASTRA]))
+    assert gap == (
+        "Al Munara Switchgear LLC is not on the ADNOC Approved Vendor List "
+        "— approved by Astra only."
+    )
+
+
+def test_a_bidder_with_no_approval_at_all_says_so_differently():
+    """One rule, two sentences. "We approved them, the client has not" and
+    "nobody has approved them" call for different actions, so they must not
+    render identically."""
+    gap = missing_client_approval(a_bidder(approved_by=[]))
+    assert gap == (
+        "Al Munara Switchgear LLC is not on the ADNOC Approved Vendor List "
+        "and has no approval recorded."
+    )
+
+
+def test_the_rule_is_absence_of_the_client_not_presence_of_astra():
+    """A bidder on some third party's list, and on neither of ours, is caught
+    by the same rule — the predicate is 'the client approver is absent', which
+    cannot be sidestepped by leaving `approved_by` empty or filling it with
+    something else."""
+    gap = missing_client_approval(a_bidder(approved_by=["Some Other Operator"]))
+    assert gap is not None
+    assert "approved by Some Other Operator only." in gap
+
+
+def test_the_pure_module_does_not_import_a_spreadsheet_library():
+    """`bidders.py` promises no I/O. Naming the client approver must not be
+    what breaks that promise."""
+    import sys
+
+    for module in ("workflow.bidders", "workflow.models.bidder", "openpyxl"):
+        sys.modules.pop(module, None)
+    importlib.import_module("workflow.bidders")
+    assert "openpyxl" not in sys.modules

@@ -4,6 +4,13 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+# The organisations whose approved-vendor lists this platform knows about.
+# They live here, next to the `approved_by` field they annotate, rather than in
+# `avl_import` — that module imports `openpyxl`, and `workflow/bidders.py` needs
+# to name the client approver without taking a spreadsheet library with it.
+ADNOC = "ADNOC"
+ASTRA = "Astra"
+
 # There is deliberately no "Expired" member. Expiry is a function of
 # `prequal_expires_on` and the date you ask on, so storing it would mean
 # storing a value that is wrong the day after it is written — and staying
