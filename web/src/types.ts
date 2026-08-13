@@ -362,6 +362,65 @@ export interface RfqDetail {
   vdrl: VdrlLine[]
   bids: BidWithVdrl[]
   bid_selection: BidSelection | null
+  queries: ClarificationQuery[]
+  addenda: Addendum[]
+  /** The latest issued addendum's due date, or null. Derived server-side; an
+   *  RFQ with no addendum has no due date here, and the screen says so rather
+   *  than inventing one. */
+  bid_due_date: string | null
+}
+
+/* ------------------------------------------------------- clarifications */
+
+/** A bidder's question and what was answered.
+ *
+ *  `state` and `circulated` are computed server-side and sent alongside the
+ *  record, never re-derived here: withdrawal beats an answer, and that rule
+ *  belongs in one place.
+ *
+ *  `restricted_reason` null means the answer went to the whole included
+ *  shortlist. There is deliberately no `circulate` boolean — one would make a
+ *  restricted answer indistinguishable from an oversight. */
+export interface ClarificationQuery {
+  id: string
+  rfq_id: string
+  number: string
+  /** The `ShortlistEntry` who asked. `raised_by_name` beside it is a snapshot
+   *  of what they were called at the time, not a live mirror of the registry. */
+  raised_by_entry_id: string
+  raised_by_name: string
+  raised_on: string
+  category: 'Technical' | 'Commercial'
+  question: string
+  answer: string | null
+  answered_by: string | null
+  answered_at: string | null
+  restricted_reason: string | null
+  withdrawn_reason: string | null
+  withdrawn_by: string | null
+  withdrawn_at: string | null
+  state: 'Open' | 'Answered' | 'Withdrawn'
+  circulated: boolean
+}
+
+/** A numbered amendment to an issued RFQ.
+ *
+ *  `supersedes_revision` and `revision` together make the addenda list the
+ *  package's revision trail. `draft` is computed from `issued_at`; an issued
+ *  addendum can be neither edited nor deleted, because bidders hold it. */
+export interface Addendum {
+  id: string
+  rfq_id: string
+  number: string
+  supersedes_revision: string
+  revision: string
+  summary: string
+  attachments: Attachment[]
+  arising_from_query_ids: string[]
+  bid_due_date: string | null
+  issued_at: string | null
+  issued_by: string | null
+  draft: boolean
 }
 
 /* ------------------------------------------------------------- bidders */

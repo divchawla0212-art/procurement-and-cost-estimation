@@ -131,6 +131,9 @@ function detail(over: Partial<RfqDetail> = {}): RfqDetail {
     vdrl: [],
     bids: [],
     bid_selection: null,
+    queries: [],
+    addenda: [],
+    bid_due_date: null,
     ...over,
   }
 }

@@ -3,6 +3,7 @@ import type { JSX } from 'react'
 import { fetchRfq, transitionRfq } from '../api'
 import { useAsync } from '../useAsync'
 import { Card, ErrorState, LoadingState } from '../components/primitives'
+import { ClarificationsStep } from './wizard/ClarificationsStep'
 import { IssuedStep } from './wizard/IssuedStep'
 import { ScopingStep } from './wizard/ScopingStep'
 import { ShortlistingStep } from './wizard/ShortlistingStep'
@@ -44,7 +45,8 @@ const STEP_BLURB: Record<string, string> = {
   Shortlisting:
     'Invite bidders from the registry, get the list approved, and attach the TBE template.',
   Issued: 'List the documents each vendor must return with their bid.',
-  Clarifications: 'Technical queries are handled here before bids are opened.',
+  Clarifications:
+    'Bidders ask, you answer, and every answer goes to the whole shortlist unless you record why it does not.',
 }
 
 export function RfqWizard({
@@ -154,10 +156,7 @@ export function RfqWizard({
         ) : null}
         {step === 'Issued' ? <IssuedStep data={data} run={run} busy={busy} /> : null}
         {step === 'Clarifications' ? (
-          <p className="muted">
-            Nothing to capture here yet — technical queries arrive with the
-            agent work.
-          </p>
+          <ClarificationsStep data={data} run={run} busy={busy} tick={tick} />
         ) : null}
       </Card>
 

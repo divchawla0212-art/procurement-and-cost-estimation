@@ -1,10 +1,12 @@
 import type {
+  Addendum,
   AdminUser,
   Bidder,
   BidderDetail,
   BidderInput,
   BidderSummary,
   Candidate,
+  ClarificationQuery,
   ComplianceMatrix,
   ExtractionStatus,
   ProjectDetail,
@@ -456,4 +458,101 @@ export function transitionRfq(
     'POST',
     { target, reason: reason ?? null },
   )
+}
+
+/* The Clarifications step's writes. The server owns every rule, so these carry
+   no validation of their own - including the circulation rule: `answerQuery`
+   omits `restricted_reason` entirely rather than sending an empty string, so a
+   circulated answer is never recorded as restricted with no text. */
+
+export function raiseQuery(
+  rfqId: string,
+  body: {
+    raised_by_entry_id: string
+    category: "Technical" | "Commercial"
+    question: string
+    raised_on: string
+  },
+): Promise<ClarificationQuery> {
+  return sendJson<ClarificationQuery>(
+    `/api/workflow/rfqs/${encodeURIComponent(rfqId)}/queries`,
+    "POST",
+    body,
+  )
+}
+
+export function answerQuery(
+  rfqId: string,
+  queryId: string,
+  body: { answer: string; restricted_reason?: string },
+): Promise<ClarificationQuery> {
+  return sendJson<ClarificationQuery>(
+    `/api/workflow/rfqs/${encodeURIComponent(rfqId)}/queries/${encodeURIComponent(queryId)}/answer`,
+    "POST",
+    body,
+  )
+}
+
+export function withdrawQuery(
+  rfqId: string,
+  queryId: string,
+  reason: string,
+): Promise<ClarificationQuery> {
+  return sendJson<ClarificationQuery>(
+    `/api/workflow/rfqs/${encodeURIComponent(rfqId)}/queries/${encodeURIComponent(queryId)}/withdraw`,
+    "POST",
+    { reason },
+  )
+}
+
+export function draftAddendum(
+  rfqId: string,
+  body: {
+    revision: string
+    summary: string
+    attachments: Attachment[]
+    arising_from_query_ids?: string[]
+    bid_due_date?: string | null
+  },
+): Promise<Addendum> {
+  return sendJson<Addendum>(
+    `/api/workflow/rfqs/${encodeURIComponent(rfqId)}/addenda`,
+    "POST",
+    body,
+  )
+}
+
+export function updateAddendum(
+  rfqId: string,
+  addendumId: string,
+  body: Partial<{
+    revision: string
+    summary: string
+    attachments: Attachment[]
+    arising_from_query_ids: string[]
+    bid_due_date: string | null
+  }>,
+): Promise<Addendum> {
+  return sendJson<Addendum>(
+    `/api/workflow/rfqs/${encodeURIComponent(rfqId)}/addenda/${encodeURIComponent(addendumId)}`,
+    "PATCH",
+    body,
+  )
+}
+
+/** The one sanctioned door through the frozen-package rule. Who issued it comes
+ *  from the session, so the body is deliberately empty. */
+export function issueAddendum(rfqId: string, addendumId: string): Promise<Addendum> {
+  return sendJson<Addendum>(
+    `/api/workflow/rfqs/${encodeURIComponent(rfqId)}/addenda/${encodeURIComponent(addendumId)}/issue`,
+    "POST",
+    {},
+  )
+}
+
+export function deleteAddendum(rfqId: string, addendumId: string): Promise<void> {
+  return fetch(
+    `/api/workflow/rfqs/${encodeURIComponent(rfqId)}/addenda/${encodeURIComponent(addendumId)}`,
+    { method: "DELETE" },
+  ).then(expectNoContent)
 }
