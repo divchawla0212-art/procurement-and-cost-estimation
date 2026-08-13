@@ -26,10 +26,11 @@ from pydantic import BaseModel
 
 from api.auth.deps import current_user
 from api.auth.models import User
-from workflow import persistence
+from workflow import clarifications, persistence
 from workflow.bidders import effective_prequal, evaluate
 from workflow.gates import GateResult, check_gate
 from workflow.models.bidder import Bidder, PrequalStatus
+from workflow.models.clarification import Addendum, ClarificationQuery, QueryCategory
 from workflow.models.project import Item, ProjectStatus
 from workflow.models.rfq import Attachment
 from workflow.stages import STAGE_ORDER, Stage
@@ -212,6 +213,50 @@ class VdrlLineIn(BaseModel):
     title: str
     doc_type: str
     mandatory: bool = True
+
+
+class QueryIn(BaseModel):
+    raised_by_entry_id: str
+    category: QueryCategory
+    question: str
+    raised_on: date
+
+
+class AnswerIn(BaseModel):
+    answer: str
+    # Absent means circulate. The screen omits the field rather than sending an
+    # empty string, so an unrestricted answer is never recorded as restricted
+    # with no text — the same shape the invite control uses for override_reason.
+    restricted_reason: str | None = None
+
+
+class WithdrawIn(BaseModel):
+    reason: str
+
+
+class AddendumIn(BaseModel):
+    revision: str
+    summary: str
+    attachments: list[Attachment] = []
+    arising_from_query_ids: list[str] = []
+    bid_due_date: date | None = None
+
+
+class AddendumPatch(BaseModel):
+    """Partial: `model_dump(exclude_unset=True)` is what makes an absent field
+    mean "leave it alone" rather than "clear it". The immutable fields are not
+    declared here at all, so naming one is a 422 before the store sees it — and
+    the store refuses them again, for a caller that bypasses this model."""
+
+    revision: str | None = None
+    summary: str | None = None
+    attachments: list[Attachment] | None = None
+    arising_from_query_ids: list[str] | None = None
+    bid_due_date: date | None = None
+
+
+class IssueIn(BaseModel):
+    """Empty on purpose: who issued it comes from the session, not the body."""
 
 
 @router.get("/stages")
@@ -471,6 +516,23 @@ def create_rfq(body: RfqIn) -> dict:
     return rfq.model_dump(mode="json")
 
 
+def _query_payload(query: ClarificationQuery) -> dict:
+    """`state` and `circulated` are computed here rather than stored, so no
+    screen re-derives that withdrawal beats an answer."""
+    return {
+        **query.model_dump(mode="json"),
+        "state": clarifications.state(query),
+        "circulated": clarifications.is_circulated(query),
+    }
+
+
+def _addendum_payload(addendum: Addendum) -> dict:
+    return {
+        **addendum.model_dump(mode="json"),
+        "draft": clarifications.is_draft(addendum),
+    }
+
+
 def _next_forward_gate(store: WorkflowStore, rfq_id: str, stage: Stage) -> GateResult:
     """Gate status for the natural next stage in process order. The terminal
     stage has no successor, so there is nothing left to block."""
@@ -523,6 +585,14 @@ def get_rfq(rfq_id: str) -> dict:
         "vdrl": [line.model_dump(mode="json") for line in store.vdrl_for(rfq_id)],
         "bids": bids,
         "bid_selection": selection.model_dump(mode="json") if selection else None,
+        "queries": [_query_payload(q) for q in store.queries_for(rfq_id)],
+        "addenda": [_addendum_payload(a) for a in store.addenda_for(rfq_id)],
+        # Derived from the latest issued addendum, never stored: see
+        # `WorkflowStore.current_bid_due_date`. An RFQ with no addendum has no
+        # due date here, rather than an invented one.
+        "bid_due_date": (
+            due.isoformat() if (due := store.current_bid_due_date(rfq_id)) else None
+        ),
     }
 
 
@@ -669,6 +739,11 @@ def remove_shortlist_entry(rfq_id: str, entry_id: str) -> None:
             store.remove_shortlist_entry(rfq_id, entry_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        # The entry raised a clarification, so removing it would orphan a query.
+        # Both entities exist and the request is well-formed — the workflow says
+        # no, which is the same 409 every other refusal in this module answers.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/rfqs/{rfq_id}/shortlist/approve")
@@ -720,3 +795,126 @@ def remove_vdrl_line(rfq_id: str, line_id: str) -> None:
             store.remove_vdrl_line(rfq_id, line_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+# -- clarifications ----------------------------------------------------------
+#
+# Same shape as every other write in this module: the whole store method runs
+# inside `locked_update`, so the reads that gate it and the write itself are one
+# critical section, and a refusal leaves the document untouched.
+#
+# There is deliberately no GET for either collection. `get_rfq` already returns
+# every artifact its gates read, and the Clarifications gate now reads both.
+
+
+@router.post("/rfqs/{rfq_id}/queries", status_code=201)
+def raise_query(rfq_id: str, body: QueryIn) -> dict:
+    try:
+        with persistence.locked_update(_root()) as store:
+            query = store.raise_query(
+                rfq_id,
+                entry_id=body.raised_by_entry_id,
+                question=body.question,
+                category=body.category,
+                raised_on=body.raised_on,
+            )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _query_payload(query)
+
+
+@router.post("/rfqs/{rfq_id}/queries/{query_id}/answer")
+def answer_query(
+    rfq_id: str, query_id: str, body: AnswerIn, user: User = Depends(current_user)
+) -> dict:
+    try:
+        with persistence.locked_update(_root()) as store:
+            query = store.answer_query(
+                rfq_id,
+                query_id,
+                answer=body.answer,
+                by=user.email,
+                restricted_reason=body.restricted_reason,
+            )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _query_payload(query)
+
+
+@router.post("/rfqs/{rfq_id}/queries/{query_id}/withdraw")
+def withdraw_query(
+    rfq_id: str, query_id: str, body: WithdrawIn, user: User = Depends(current_user)
+) -> dict:
+    try:
+        with persistence.locked_update(_root()) as store:
+            query = store.withdraw_query(
+                rfq_id, query_id, reason=body.reason, by=user.email
+            )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _query_payload(query)
+
+
+@router.post("/rfqs/{rfq_id}/addenda", status_code=201)
+def draft_addendum(rfq_id: str, body: AddendumIn) -> dict:
+    try:
+        with persistence.locked_update(_root()) as store:
+            addendum = store.draft_addendum(
+                rfq_id,
+                revision=body.revision,
+                summary=body.summary,
+                attachments=body.attachments,
+                arising_from_query_ids=body.arising_from_query_ids,
+                bid_due_date=body.bid_due_date,
+            )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _addendum_payload(addendum)
+
+
+@router.patch("/rfqs/{rfq_id}/addenda/{addendum_id}")
+def patch_addendum(rfq_id: str, addendum_id: str, body: AddendumPatch) -> dict:
+    try:
+        with persistence.locked_update(_root()) as store:
+            addendum = store.update_addendum(
+                rfq_id, addendum_id, body.model_dump(exclude_unset=True)
+            )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _addendum_payload(addendum)
+
+
+@router.post("/rfqs/{rfq_id}/addenda/{addendum_id}/issue")
+def issue_addendum(
+    rfq_id: str, addendum_id: str, body: IssueIn, user: User = Depends(current_user)
+) -> dict:
+    """The one sanctioned door through the frozen-package rule. Four reads gate
+    it, all of them inside the store method this block runs."""
+    try:
+        with persistence.locked_update(_root()) as store:
+            addendum = store.issue_addendum(rfq_id, addendum_id, by=user.email)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _addendum_payload(addendum)
+
+
+@router.delete("/rfqs/{rfq_id}/addenda/{addendum_id}", status_code=204)
+def delete_addendum(rfq_id: str, addendum_id: str) -> None:
+    try:
+        with persistence.locked_update(_root()) as store:
+            store.delete_addendum(rfq_id, addendum_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
