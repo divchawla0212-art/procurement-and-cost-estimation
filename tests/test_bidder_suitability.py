@@ -32,6 +32,10 @@ def a_bidder(**overrides) -> Bidder:
     defaults = dict(
         name="Al Munara Switchgear LLC",
         country="United Arab Emirates",
+        # On the client's list by default. Without this the happy-path bidder
+        # is one nobody has approved, and every "nothing to say" assertion in
+        # this file would be asserting the wrong thing.
+        approved_by=[ADNOC],
         trade_categories=["Electrical"],
         prequal_status="Approved",
         prequal_expires_on=date(2027, 3, 31),
@@ -256,3 +260,49 @@ def test_the_pure_module_does_not_import_a_spreadsheet_library():
         sys.modules.pop(module, None)
     importlib.import_module("workflow.bidders")
     assert "openpyxl" not in sys.modules
+
+
+def test_a_bidder_off_the_client_list_is_cautioned_but_still_eligible():
+    """The whole decision this feature turns on. Asserted as `eligible is True`
+    directly, not inferred from an empty `blockers` list, because those are two
+    different claims and only one of them is the promise made to the user."""
+    result = evaluate(a_bidder(approved_by=[ASTRA]), an_rfq(), TODAY)
+    assert result.eligible is True
+    assert result.blockers == []
+    assert result.cautions == [
+        "Al Munara Switchgear LLC is not on the ADNOC Approved Vendor List "
+        "— approved by Astra only."
+    ]
+
+
+def test_a_bidder_with_no_approval_is_cautioned_but_still_eligible():
+    result = evaluate(a_bidder(approved_by=[]), an_rfq(), TODAY)
+    assert result.eligible is True
+    assert result.blockers == []
+    assert any("has no approval recorded." in c for c in result.cautions)
+
+
+def test_the_cautions_read_prequalification_then_approval_then_scope():
+    """Order is fixed, not incidental — the list is rendered in order, and a
+    later edit that appends in the wrong place silently reorders a screen."""
+    bidder = a_bidder(
+        approved_by=[ASTRA],
+        prequal_expires_on=date(2026, 9, 1),   # inside the caution window
+        trade_categories=["Mechanical"],        # mismatches the rfq's discipline
+    )
+    result = evaluate(bidder, an_rfq(), TODAY)
+    assert len(result.cautions) == 3
+    assert "expires on" in result.cautions[0]
+    assert "Approved Vendor List" in result.cautions[1]
+    assert "Not registered for" in result.cautions[2]
+
+
+def test_a_blocked_bidder_off_the_client_list_reports_both_separately():
+    """The gap never migrates into `blockers`, even when the bidder has real
+    ones — otherwise it would start demanding an override_reason."""
+    bidder = a_bidder(approved_by=[ASTRA], on_hold=True, hold_reason="NCRs open")
+    result = evaluate(bidder, an_rfq(), TODAY)
+    assert result.eligible is False
+    assert any("NCRs open" in b for b in result.blockers)
+    assert not any("Approved Vendor List" in b for b in result.blockers)
+    assert any("Approved Vendor List" in c for c in result.cautions)

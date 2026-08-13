@@ -146,6 +146,13 @@ def evaluate(bidder: Bidder, rfq: RfqRecord, as_of: date) -> Suitability:
                 f"{EXPIRY_CAUTION_DAYS} days — renew it before bids are due."
             )
 
+    # Position is deliberate: prequalification → approval → scope. The list is
+    # rendered in order, and "are they approved at all" precedes "approved for
+    # this trade".
+    gap = missing_client_approval(bidder)
+    if gap:
+        cautions.append(gap)
+
     scope_fit = _matches_scope(bidder, rfq)
     if not scope_fit:
         # Short on purpose: on a registry of any size this sentence appears
