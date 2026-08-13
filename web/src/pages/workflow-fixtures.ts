@@ -110,6 +110,9 @@ export const APPROVED_BIDDER: BidderSummary = {
   represented_manufacturers: ['SCHNEIDER ELECTRIC'],
   notes: null,
   effective_prequal: 'Approved',
+  // On the client's list, so there is no gap to report. The two fixtures that
+  // spread this one also carry ADNOC, so they inherit the right value.
+  approval_caution: null,
   invited_count: 0,
 }
 

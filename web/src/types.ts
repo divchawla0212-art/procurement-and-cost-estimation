@@ -465,6 +465,10 @@ export type BidderInput = Omit<Bidder, 'id'>
  *  definitions of "expired" to keep in step. */
 export interface BidderSummary extends Bidder {
   effective_prequal: string
+  /** The server's sentence when this bidder is not on the client's Approved
+   *  Vendor List, or `null` when they are. Rendered verbatim — deriving it here
+   *  from `approved_by` would be a second definition of the rule. */
+  approval_caution: string | null
   invited_count: number
 }
 

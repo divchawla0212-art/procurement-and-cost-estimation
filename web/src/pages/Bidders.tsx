@@ -132,6 +132,14 @@ function BidderCard({
         <p className="warn">On hold: {bidder.hold_reason ?? 'no reason recorded'}</p>
       )}
 
+      {/* Below the hold, so a bidder who is both shows both facts in reading
+          order. Rendered verbatim: the sentence is the server's, and testing
+          `approved_by` for the client's name here would be a second
+          definition of the rule. */}
+      {bidder.approval_caution && (
+        <p className="warn">{bidder.approval_caution}</p>
+      )}
+
       <details className="pcard-details">
         <summary>Details</summary>
         <dl className="pcard-kv">

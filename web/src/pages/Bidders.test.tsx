@@ -230,6 +230,34 @@ describe('Bidders', () => {
     expect(screen.getByText(/Nothing matches that search/)).toBeTruthy()
   })
 
+  it('renders the server sentence when a bidder is off the client list', async () => {
+    // Rendered verbatim. Rebuilding the sentence here from `approved_by` would
+    // be a second definition of the rule, and the two would drift.
+    vi.mocked(fetchBidders).mockResolvedValue([
+      {
+        ...APPROVED_BIDDER,
+        approved_by: ['Astra'],
+        approval_caution:
+          'Al Munara Switchgear LLC is not on the ADNOC Approved Vendor List — approved by Astra only.',
+      },
+    ])
+
+    render(<Bidders />)
+
+    expect(
+      await screen.findByText(/not on the ADNOC Approved Vendor List/),
+    ).toBeTruthy()
+  })
+
+  it('says nothing when the bidder is on the client list', async () => {
+    vi.mocked(fetchBidders).mockResolvedValue([APPROVED_BIDDER])
+
+    render(<Bidders />)
+
+    await screen.findByText('Al Munara Switchgear LLC')
+    expect(screen.queryByText(/Approved Vendor List/)).toBeNull()
+  })
+
   it('reports a country the registry does not hold rather than inventing one', async () => {
     // AVL-imported bidders have no country: the export only carries the
     // manufacturer's.
