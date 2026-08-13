@@ -13,6 +13,19 @@
     uvicorn reloader's worker and npm's node child, which a plain Stop-Process
     would orphan and leave holding the ports.
 
+    PORTS. Both ports are made available before anything is launched, rather
+    than merely checked. A port held by this repo's own leftovers — a uvicorn or
+    vite that outlived its terminal, or a Ctrl+C that missed a child — is
+    reclaimed automatically, because restarting a dev server this script started
+    loses nothing. A port held by anything else is reported and refused, not
+    killed: 8000 is a popular default, and silently taskkilling whatever answers
+    on it eventually takes out a database or a colleague's service. Pass -Force
+    to take those too.
+
+    Reclaiming kills the outermost process of the holder's tree rather than the
+    listener itself, since uvicorn --reload and npm run dev are supervisors that
+    would otherwise respawn a replacement onto the same port.
+
 .PARAMETER ApiPort
     Port for the FastAPI backend. Default 8000. See the note on -ApiPort below
     before changing it.
@@ -38,11 +51,25 @@
     Don't offer to run `npm --prefix web install` when web/node_modules is
     missing — fail instead. For unattended runs.
 
+.PARAMETER Force
+    Also reclaim a port held by a process this script did not start. Without it
+    such a port is reported, with its command line, and the run stops. With it
+    the holder's process tree is killed. Read the command line the refusal
+    prints before reaching for this.
+
 .EXAMPLE
     .\run.ps1
 
 .EXAMPLE
     .\run.ps1 -WebPort 5174 -NoBrowser
+
+.EXAMPLE
+    # A previous run left uvicorn holding 8000: reclaimed automatically.
+    .\run.ps1
+
+.EXAMPLE
+    # Something else holds 8000 and you have read what it is.
+    .\run.ps1 -Force
 
 .NOTES
     If PowerShell refuses to run this with an execution-policy error, allow
@@ -57,7 +84,8 @@ param(
     [switch]$NoBrowser,
     [switch]$NoReload,
     [switch]$NoAuth,
-    [switch]$SkipWebInstall
+    [switch]$SkipWebInstall,
+    [switch]$Force
 )
 
 Set-StrictMode -Version Latest
@@ -74,8 +102,72 @@ function Write-Ok($Message) { Write-Host "  $Message" -ForegroundColor Green }
 function Write-Warn($Message) { Write-Host "  $Message" -ForegroundColor Yellow }
 function Write-Bad($Message) { Write-Host "  $Message" -ForegroundColor Red }
 
+# -- ports -------------------------------------------------------------------
+#
+# The common startup failure is this script's *own* leftovers: a previous run
+# whose uvicorn or vite outlived its terminal, or a Ctrl+C that missed a child.
+# Those are reclaimed automatically — nothing is lost by restarting a dev server
+# this repo started.
+#
+# Anything else is refused rather than killed. Port 8000 is a popular default,
+# and a script that silently taskkills whatever answers on it will one day take
+# out a database, a colleague's service, or an unrelated container. `-Force`
+# says "yes, that one too", deliberately, per run.
+
+function Get-ProcessInfo([int]$TargetId) {
+    try {
+        return Get-CimInstance Win32_Process -Filter "ProcessId = $TargetId" -ErrorAction Stop
+    } catch {
+        return $null
+    }
+}
+
+function Get-SelfAncestry {
+    # This process and every ancestor of it. Nothing here may ever be killed:
+    # the walk in Get-ReclaimTarget climbs parent links, and the terminal running
+    # this script has the repo path on its own command line too — without this
+    # guard a stale-port cleanup could close the window it is printing into.
+    $ids = @($PID)
+    $current = $PID
+    for ($hop = 0; $hop -lt 12; $hop++) {
+        $info = Get-ProcessInfo $current
+        if (-not $info) { break }
+        $parentId = [int]$info.ParentProcessId
+        if ($parentId -le 0 -or $ids -contains $parentId) { break }
+        $ids += $parentId
+        $current = $parentId
+    }
+    return $ids
+}
+
+function Test-OursCommandLine([string]$CommandLine) {
+    if ([string]::IsNullOrWhiteSpace($CommandLine)) { return $false }
+
+    # The API is matched on its ASGI target alone, and that is not laziness:
+    # a venv's python.exe reports its *base* interpreter on the command line
+    # (anaconda, pyenv, a symlinked venv), so the observed line is
+    #
+    #     "C:\...\anaconda3\python.exe" -m uvicorn api.main:app --port 8000 --reload
+    #
+    # with the repo path nowhere in it. Requiring the path here would classify
+    # this script's own leftover API as a stranger and refuse to reclaim it,
+    # which is the single case this whole section exists for.
+    #
+    # `api.main:app` is specific enough to carry that on its own. The one thing
+    # it also matches is the same application served from a *different worktree*
+    # of this repo — which is deliberate: two checkouts cannot share a port
+    # anyway, and it is still this app rather than someone else's service.
+    if ($CommandLine -match 'api\.main:app') { return $true }
+
+    # node and npm are generic, so the web server has to prove it is this
+    # checkout — and unlike python it always can, because vite is resolved
+    # through web/node_modules and the path is right there on the line.
+    if (-not $CommandLine.ToLowerInvariant().Contains($Root.ToLowerInvariant())) { return $false }
+    return $CommandLine -match 'vite|npm'
+}
+
 function Get-PortHolder([int]$Port) {
-    # Returns the owning process, or $null when the port is free.
+    # Returns the listening process, or $null when the port is free.
     try {
         $conn = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop |
             Select-Object -First 1
@@ -83,23 +175,63 @@ function Get-PortHolder([int]$Port) {
         return $null   # no listener on that port
     }
     if (-not $conn) { return $null }
-    try {
-        return Get-Process -Id $conn.OwningProcess -ErrorAction Stop
-    } catch {
-        # A listener we cannot resolve to a process is still a listener.
-        return [pscustomobject]@{ Id = $conn.OwningProcess; ProcessName = '<unknown>' }
+
+    $holderId = [int]$conn.OwningProcess
+    $info = Get-ProcessInfo $holderId
+    # A listener we cannot resolve is still a listener, and it is never "ours":
+    # with no command line there is no evidence it belongs to this checkout.
+    return [pscustomobject]@{
+        Id          = $holderId
+        ProcessName = if ($info) { $info.Name } else { '<unknown>' }
+        CommandLine = if ($info) { $info.CommandLine } else { $null }
+        IsOurs      = if ($info) { Test-OursCommandLine $info.CommandLine } else { $false }
     }
 }
 
-function Assert-PortFree([int]$Port, [string]$Label) {
-    $holder = Get-PortHolder $Port
-    if (-not $holder) { return }
+function Get-ReclaimTarget($Holder, $SelfIds) {
+    # Climb to the outermost ancestor that is still one of ours.
+    #
+    # `uvicorn --reload` is a supervisor with a worker child, and `npm run dev`
+    # is cmd.exe -> node -> node. The listener is the innermost of those, and
+    # killing only it lets the supervisor respawn a replacement onto the same
+    # port — so the port never actually frees. Killing the outermost with
+    # taskkill /T takes the whole tree at once.
+    $targetId = $Holder.Id
+    $current = Get-ProcessInfo $Holder.Id
+    for ($hop = 0; $hop -lt 6; $hop++) {
+        if (-not $current) { break }
+        $parentId = [int]$current.ParentProcessId
+        if ($parentId -le 0) { break }
+        if ($SelfIds -contains $parentId) { break }     # never cross into our own chain
+        $parent = Get-ProcessInfo $parentId
+        if (-not $parent) { break }
+        if (-not (Test-OursCommandLine $parent.CommandLine)) { break }
+        $targetId = $parentId
+        $current = $parent
+    }
+    return $targetId
+}
 
-    Write-Bad "Port $Port ($Label) is already in use by $($holder.ProcessName) (PID $($holder.Id))."
+function Wait-PortFree([int]$Port, [int]$TimeoutSeconds = 10) {
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        if (-not (Get-PortHolder $Port)) { return $true }
+        Start-Sleep -Milliseconds 250
+    }
+    return $false
+}
+
+function Deny-Port($Holder, [int]$Port, [string]$Label) {
+    Write-Bad "Port $Port ($Label) is held by $($Holder.ProcessName) (PID $($Holder.Id)), which this script did not start."
+    if ($Holder.CommandLine) {
+        Write-Host "      $($Holder.CommandLine)" -ForegroundColor DarkGray
+    }
     Write-Host ""
-    Write-Host "  Either stop it:" -ForegroundColor DarkGray
-    Write-Host "      Stop-Process -Id $($holder.Id)" -ForegroundColor DarkGray
-    Write-Host "  or run this script on a different port:" -ForegroundColor DarkGray
+    Write-Host "  Stop it yourself:" -ForegroundColor DarkGray
+    Write-Host "      Stop-Process -Id $($Holder.Id)" -ForegroundColor DarkGray
+    Write-Host "  or let this script take it (it will be killed, so read the line above first):" -ForegroundColor DarkGray
+    Write-Host "      .\run.ps1 -Force" -ForegroundColor DarkGray
+    Write-Host "  or run on a different port:" -ForegroundColor DarkGray
     if ($Label -eq 'web') {
         Write-Host "      .\run.ps1 -WebPort $($Port + 1)" -ForegroundColor DarkGray
     } else {
@@ -107,6 +239,49 @@ function Assert-PortFree([int]$Port, [string]$Label) {
     }
     Write-Host ""
     throw "Port $Port is not free."
+}
+
+function Initialize-Port([int]$Port, [string]$Label) {
+    # Attempts, not one shot: a supervisor can respawn a worker onto the port
+    # between the kill and the re-check, and the second pass then sees the new
+    # holder rather than reporting a stale success.
+    $selfIds = Get-SelfAncestry
+
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        $holder = Get-PortHolder $Port
+        if (-not $holder) {
+            if ($attempt -gt 1) { Write-Ok "port $Port ($Label) reclaimed" }
+            return
+        }
+
+        if ($selfIds -contains $holder.Id) {
+            # Only reachable if this script is somehow already serving the port.
+            Write-Bad "Port $Port ($Label) is held by this script's own process tree (PID $($holder.Id))."
+            throw "Port $Port is not free."
+        }
+
+        if (-not ($holder.IsOurs -or $Force)) { Deny-Port $holder $Port $Label }
+
+        $why = if ($holder.IsOurs) { 'left over from a previous run' } else { 'taken by -Force' }
+        Write-Warn "port $Port ($Label) held by $($holder.ProcessName) (PID $($holder.Id)) - $why, reclaiming."
+
+        $targetId = Get-ReclaimTarget $holder $selfIds
+        if ($targetId -ne $holder.Id) {
+            Write-Host "                     killing the supervisor (PID $targetId) so it cannot respawn." -ForegroundColor DarkGray
+        }
+        & taskkill.exe /PID $targetId /T /F *> $null
+
+        if (Wait-PortFree $Port) {
+            Write-Ok "port $Port ($Label) reclaimed"
+            return
+        }
+    }
+
+    $stubborn = Get-PortHolder $Port
+    Write-Bad "Port $Port ($Label) is still held after 3 attempts by $($stubborn.ProcessName) (PID $($stubborn.Id))."
+    Write-Host "  It may need elevation, or it may be respawning from a supervisor outside this repo." -ForegroundColor DarkGray
+    Write-Host ""
+    throw "Port $Port could not be freed."
 }
 
 # -- preflight ---------------------------------------------------------------
@@ -159,8 +334,8 @@ if ($ApiPort -ne 8000) {
     Write-Host "                     /api to 127.0.0.1:8000. Edit that target to match." -ForegroundColor DarkGray
 }
 
-Assert-PortFree $ApiPort 'api'
-Assert-PortFree $WebPort 'web'
+Initialize-Port $ApiPort 'api'
+Initialize-Port $WebPort 'web'
 Write-Ok "ports              $ApiPort, $WebPort free"
 
 # Set for this process, so the uvicorn child inherits it. Not persisted: a new

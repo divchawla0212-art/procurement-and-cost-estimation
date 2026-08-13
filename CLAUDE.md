@@ -122,9 +122,27 @@ behind a skip guard, not behind a repository secret.
 
 The app runs via [`run.ps1`](run.ps1) at the repo root — one command for both
 servers, with preflight checks and a clean Ctrl+C. Use it rather than bare
-`uvicorn` / `npm run dev`. `.claude/launch.json` still defines `procurement-api`
-and `enterprise-web` for the preview tooling; note that both hardcode their
-ports, so a preview server and `run.ps1` cannot be up at once.
+`uvicorn` / `npm run dev`.
+
+**It makes its ports available rather than just checking them.** A port held by
+this repo's own leftovers is reclaimed automatically; a port held by anything
+else is reported with its command line and refused, and `-Force` is what takes
+those. "Ours" is deliberately asymmetric: the web server has to prove it is this
+checkout (`vite` plus the repo path on its command line), while the API is
+matched on `api.main:app` alone — a venv's `python.exe` reports its *base*
+interpreter, so the observed line is `…anaconda3\python.exe -m uvicorn
+api.main:app …` with the repo path nowhere in it. Requiring the path there would
+refuse to reclaim the script's own leftover API, which is the one case the
+feature exists for. Reclaiming kills the outermost process of the holder's tree,
+because `uvicorn --reload` and `npm run dev` are supervisors that respawn a
+worker onto the same port otherwise, and it never crosses into this script's own
+ancestry — the terminal running `run.ps1` also carries the repo path.
+
+`.claude/launch.json` still defines `procurement-api` and `enterprise-web` for
+the preview tooling, and both hardcode their ports. They can no longer both be
+up *by accident*: a preview-started vite matches the "ours" test, so `run.ps1`
+now reclaims its port instead of refusing to start. Stop the preview server
+first if you wanted it.
 
 ## Store invariants — violating these corrupts award decisions
 
