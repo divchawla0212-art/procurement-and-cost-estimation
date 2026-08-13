@@ -311,4 +311,37 @@ describe('ProjectDetail', () => {
 
     expect(await screen.findByText(/does not belong to project/i)).toBeInTheDocument()
   })
+  it('clears the live-period caution once the item it described is deleted', async () => {
+    // Found by walking the running app: the caution outlived its item and sat
+    // there describing something no longer on screen.
+    vi.mocked(fetchWorkflowProject)
+      .mockResolvedValueOnce(detail({ items: [] }))
+      .mockResolvedValue(detail())
+    vi.mocked(createWorkflowItem).mockResolvedValue({
+      ...GENERATOR,
+      required_on_site: '2030-06-01',
+      live_period_warning:
+        '2030-06-01 falls outside the project live period (2026-01-01 to 2029-12-31)',
+    })
+    vi.mocked(deleteWorkflowItem).mockResolvedValue(undefined)
+
+    renderDetail()
+    fireEvent.click(await screen.findByRole('button', { name: /add item/i }))
+    fillItemForm()
+    fireEvent.click(screen.getByRole('button', { name: /save item/i }))
+    await screen.findByText(/falls outside the project live period/i)
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Delete Gas generator' }),
+    )
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Confirm delete of Gas generator' }),
+    )
+
+    await waitFor(() =>
+      expect(
+        screen.queryByText(/falls outside the project live period/i),
+      ).not.toBeInTheDocument(),
+    )
+  })
 })

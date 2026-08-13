@@ -75,7 +75,7 @@ The web suite is separate and not part of either row above — both rows are
 `python -m pytest` counts. Run it with `npm test` under `web/` (vitest,
 non-watching, exits non-zero on failure); `npm run build` also type-checks the
 test files, since `web/tsconfig.app.json` includes `src`. CI runs both, in the
-`web` job of the same workflow. It stands at **105 passed** across 13 files.
+`web` job of the same workflow. It stands at **106 passed** across 13 files.
 
 `web/src/pages/workflow-fixtures.ts` is test data in a non-test module on
 purpose. Importing fixtures from a `.test.tsx` file re-runs that file's

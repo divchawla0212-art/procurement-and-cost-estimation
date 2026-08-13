@@ -102,6 +102,10 @@ export function ProjectDetail({
     })
     try {
       await deleteWorkflowItem(projectId, itemId)
+      // The caution belongs to the item that was last saved. Once an item is
+      // gone, a caution about its delivery date is describing something the
+      // reader can no longer see — worse than showing nothing.
+      setWarning(null)
       reload()
     } catch (err) {
       setRowError((prev) => ({ ...prev, [itemId]: (err as Error).message }))
