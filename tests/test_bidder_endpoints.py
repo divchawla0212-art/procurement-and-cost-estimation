@@ -62,6 +62,7 @@ def create_bidder(client: TestClient, **overrides) -> dict:
         "trade_categories": ["Electrical"],
         "prequal_status": "Approved",
         "prequal_expires_on": "2027-03-31",
+        "approved_by": ["ADNOC"],
         **overrides,
     }
     r = client.post("/api/workflow/bidders", json=body)
@@ -335,3 +336,61 @@ def test_a_shortlist_post_with_neither_a_vendor_id_nor_a_name_is_422(tmp_path, m
     rfq_id = create_rfq(client)
     r = client.post(f"/api/workflow/rfqs/{rfq_id}/shortlist", json={"included": True})
     assert r.status_code == 422
+
+
+# -- the client-approval caution ----------------------------------------------
+
+
+def test_the_roster_reports_a_bidder_off_the_client_list(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    create_bidder(client, approved_by=["Astra"])
+
+    roster = client.get("/api/workflow/bidders").json()["bidders"]
+    assert roster[0]["approval_caution"] == (
+        "Al Munara Switchgear LLC is not on the ADNOC Approved Vendor List "
+        "— approved by Astra only."
+    )
+
+
+def test_a_client_approved_bidder_carries_no_caution(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    create_bidder(client)
+
+    roster = client.get("/api/workflow/bidders").json()["bidders"]
+    assert roster[0]["approval_caution"] is None
+
+
+def test_the_single_bidder_view_carries_it_too(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    bidder = create_bidder(client, approved_by=[])
+
+    body = client.get(f"/api/workflow/bidders/{bidder['id']}").json()
+    assert "has no approval recorded." in body["approval_caution"]
+
+
+def test_the_caution_follows_a_patch_with_no_second_write(tmp_path, monkeypatch):
+    """Derived, not stored: correcting `approved_by` is the only edit needed."""
+    client = _client(tmp_path, monkeypatch)
+    bidder = create_bidder(client, approved_by=["Astra"])
+
+    r = client.patch(
+        f"/api/workflow/bidders/{bidder['id']}", json={"approved_by": ["ADNOC", "Astra"]}
+    )
+    assert r.status_code == 200, r.text
+    body = client.get(f"/api/workflow/bidders/{bidder['id']}").json()
+    assert body["approval_caution"] is None
+
+
+def test_a_bidder_off_the_client_list_needs_no_override_to_be_shortlisted(
+    tmp_path, monkeypatch
+):
+    """A caution is not a blocker. If this ever 409s, the feature has changed
+    meaning."""
+    client = _client(tmp_path, monkeypatch)
+    rfq_id = create_rfq(client)
+    bidder = create_bidder(client, approved_by=["Astra"])
+
+    r = client.post(
+        f"/api/workflow/rfqs/{rfq_id}/shortlist", json={"vendor_id": bidder["id"]}
+    )
+    assert r.status_code == 201, r.text

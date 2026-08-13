@@ -27,7 +27,7 @@ from pydantic import BaseModel
 from api.auth.deps import current_user
 from api.auth.models import User
 from workflow import clarifications, persistence
-from workflow.bidders import effective_prequal, evaluate
+from workflow.bidders import effective_prequal, evaluate, missing_client_approval
 from workflow.gates import GateResult, check_gate
 from workflow.models.bidder import Bidder, PrequalStatus
 from workflow.models.clarification import Addendum, ClarificationQuery, QueryCategory
@@ -422,15 +422,17 @@ def delete_item(project_id: str, item_id: str) -> None:
 
 
 def _bidder_payload(store: WorkflowStore, bidder: Bidder, as_of: date) -> dict:
-    """A bidder, plus the two values a screen must not compute for itself.
+    """A bidder, plus the three values a screen must not compute for itself.
 
-    `effective_prequal` is derived rather than stored, so there has to be
-    exactly one definition of it and this is where callers read it. Letting a
-    screen compare `prequal_expires_on` to its own clock would be a second.
+    `effective_prequal` and `approval_caution` are both derived rather than
+    stored, so there has to be exactly one definition of each and this is where
+    callers read them. Letting a screen compare `prequal_expires_on` to its own
+    clock, or test `approved_by` for the client's name, would be a second.
     """
     return {
         **bidder.model_dump(mode="json"),
         "effective_prequal": effective_prequal(bidder, as_of),
+        "approval_caution": missing_client_approval(bidder),
         "invited_count": len(store.rfqs_inviting(bidder.id)),
     }
 
