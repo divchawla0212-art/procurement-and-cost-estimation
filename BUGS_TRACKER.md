@@ -6,9 +6,35 @@ below it. Add new bugs at the **top** of the open table so the newest is first.
 - **ID** — `BUG-001`, `BUG-002`, … never reused, even after a bug is closed.
 - **Severity** — `S1` data loss / wrong award decision · `S2` feature broken, no
   workaround · `S3` broken with a workaround · `S4` cosmetic or annoyance.
+- **Category** — `Front end` · `Back end` · `Cloud`. See the rule below.
 - **Status** — `Open` · `Investigating` · `Fixed` (merged, not yet verified) ·
   `Closed` (verified) · `Won't fix` (say why in the section).
 - **Dates** are absolute, `YYYY-MM-DD`. No "yesterday", no "last week".
+
+## Categories
+
+| Category | What belongs in it |
+|---|---|
+| **Front end** | `web/` — the React SPA. Rendering, navigation, forms, client state, accessibility, copy. A bug fixable entirely inside `web/src` is a front-end bug. |
+| **Back end** | `api/`, `procurement/`, `workflow/`, `shared/`, `cost_estimation/` — routes, the stores and their invariants, extraction, gates, auth. |
+| **Cloud** | Deployment and anything outside the application process: the container image and `docker-compose.yml`, hosting, CI (`.github/workflows/`), and the managed services phase 2 names — object storage, a managed database, hosted identity. |
+
+**A bug that spans two layers is filed under the deeper one**, with the other
+half named in its **Area**. The test is not "where is it visible" but "what must
+change to fix it": BUG-006 is *seen* in a React banner, but no amount of
+front-end work produces progress the API never reports, so it is a back-end bug.
+By the same test, a defect *reproduced* through Docker is not thereby a cloud
+bug — BUG-004 was found by running the published image with no `.env`, and the
+fix was three lines in `api/main.py`. Cloud is for defects whose fix lands in the
+image, the compose file, the workflow, or a provisioned service.
+
+**Cloud has no entries yet, and that is a real statement, not an oversight.**
+Every deployment concern this repository has met so far has resolved to
+application code. The category exists because phase 2 is where that changes —
+the readiness note
+([`2026-08-13-rfq-platform-phases-2-5-readiness.md`](docs/superpowers/plans/2026-08-13-rfq-platform-phases-2-5-readiness.md))
+names RDS, S3 and Entra SSO, and the first bug that cannot be fixed by editing
+Python or TypeScript belongs here.
 
 A bug is only `Closed` once two things are true:
 
@@ -30,13 +56,40 @@ A bug is only `Closed` once two things are true:
 
 ## Open
 
+### Front end
+
+_None open._
+
+### Back end
+
 | ID | Severity | Area | Summary | Reported | Status |
 |---|---|---|---|---|---|
+| BUG-015 | S3 | workflow/models, api, web | The Add item form compels a quantity, unit, discipline and AED value that procurement does not have when an item is first written down — and the model makes all four mandatory, so the form cannot simply stop asking | 2026-08-13 | Open |
 | BUG-013 | S3 | auth / api | `POST /api/auth/login` has no rate limit or lockout, so password guessing is unbounded | 2026-08-06 | Open |
 | BUG-007 | S3 | web / api / procurement/pipeline | After a run ends `done_with_failures`, the only retry controls are project-wide — nothing re-extracts one document, or one vendor's documents | 2026-08-05 | Open |
 | BUG-006 | S3 | web / api | Extraction reports no live progress: a 12-minute run shows one static banner, while the per-document events that would fill it are already being written to disk | 2026-08-05 | Open |
 
+BUG-006 and BUG-007 both surface in `web/` and are filed here anyway: neither
+can be fixed from the front end. BUG-006 needs an endpoint over the event log
+and a run that outlives its request; BUG-007 needs a scope parameter
+`run_ingestion` does not take. Their front-end halves are the smaller,
+later half of each fix.
+
+### Cloud
+
+_None open._
+
 ## Closed
+
+### Front end
+
+| ID | Severity | Area | Summary | Closed | Fixed in | Spec / Plan |
+|---|---|---|---|---|---|---|
+| BUG-014 | S4 | web | The project roster put eight columns of detail on one row per project, which stops being readable at about four projects | 2026-08-13 | `3e3eaf8` | none — see the Fix block |
+| BUG-003 | S4 | web | Empty states still tell the user to run ingestion "in the Streamlit portal", which no longer exists | 2026-08-05 | `d3cfa61` | [spec](docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md) / [plan](docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md) |
+| BUG-001 | S3 | web | Compliance matrix and comparative statement are reachable before ingestion has completed | 2026-08-05 | `88f0403` (harness: `042e8fa`) | [spec](docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md) / [plan](docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md) |
+
+### Back end
 
 | ID | Severity | Area | Summary | Closed | Fixed in | Spec / Plan |
 |---|---|---|---|---|---|---|
@@ -47,9 +100,16 @@ A bug is only `Closed` once two things are true:
 | BUG-008 | S3 | procurement/store, api | Nothing serialised two ingestion runs, and `atomic_write_json` shared one fixed `.tmp` name, so concurrent writers interleaved into one snapshot | 2026-08-05 | `5080a2c` | none — see the Fix block; measured, not designed up front |
 | BUG-005 | S1 | procurement/normalize | A project ships with no FX rates, and an unconfigured currency is silently converted at 1.0 — a EUR bid is ranked as if €1 = $1 | 2026-08-05 | `3dc1e5f`, `cb8e673` | [spec](docs/superpowers/specs/2026-08-05-fx-rate-normalization-design.md) / [plan](docs/superpowers/plans/2026-08-05-fx-rate-normalization.md) |
 | BUG-004 | S1 | api | With no `LLM_PROVIDER` set, ingestion silently falls back to the **mock** provider and stores fabricated facts as `ok` | 2026-08-05 | `dfc3f37`, `9d3ba95`, `cddbea1` | [spec](docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md) / [plan](docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md) |
-| BUG-003 | S4 | web | Empty states still tell the user to run ingestion "in the Streamlit portal", which no longer exists | 2026-08-05 | `d3cfa61` | [spec](docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md) / [plan](docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md) |
 | BUG-002 | S3 | api / procurement/pipeline | No way to force a full re-extraction: `run_ingestion(force=True)` is unreachable from the API and the UI | 2026-08-05 | `f095220`, `7f066e4` | [spec](docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md) / [plan](docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md) |
-| BUG-001 | S3 | web | Compliance matrix and comparative statement are reachable before ingestion has completed | 2026-08-05 | `88f0403` (harness: `042e8fa`) | [spec](docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md) / [plan](docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md) |
+
+BUG-011 shipped a sign-in screen and a role-filtered rail, and is still a
+back-end bug: the boundary it was about is enforced by the session middleware,
+and every `/api/` route refuses a reviewer whether or not the nav ever mentioned
+it. The front-end half is presentation.
+
+### Cloud
+
+_None closed — none filed. See **Categories** above for why the section exists._
 
 ---
 
@@ -2061,3 +2121,243 @@ Section 10, "Out of scope", of the auth design:
   for one account is rejected without a password check, and that a correct
   password still succeeds once the window has passed._
 - **Verified:** _unfixed_
+
+
+---
+
+## BUG-014 — The project roster is a wall of columns that stops being readable at four projects
+
+- **Severity:** S4
+- **Category:** Front end
+- **Area:** `web/src/pages/Projects.tsx`, `web/src/theme.css`
+- **Status:** Closed
+- **Reported:** 2026-08-13
+- **Reporter:** Rahul Jana (client-reported, with a screenshot)
+
+### What happens
+
+`Projects.tsx` rendered the roster as one `<table>` row per project across eight
+columns — Name, Code, Client, Location, Live period, Status, Items, RFQs. Every
+field of every project sat on screen at once, on one line each.
+
+With the two projects that existed when it was built, that reads fine. The
+report came with a screenshot of exactly two rows, and the complaint was about
+what happens next: at project 3, 4, 5 the reader has to scan **horizontally** to
+find a field and **vertically** to find the project, and the column headers are
+at the top of the table rather than anywhere near the row being read. Long
+values make it worse — `Al Dhafra Petroleum` and `Haliba field, UAE` are
+ordinary values that push the numeric columns off to the right.
+
+The information was all there. Nothing was truncated and nothing was wrong. It
+simply had no shape: eight equally-weighted columns give the reader no cue about
+which two or three actually distinguish one project from another.
+
+### What should happen
+
+One card per project, titled with the project name, with the detail folded away
+behind a disclosure the reader opens when they want it.
+
+Collapsed, a card should carry only what tells two projects apart at a glance —
+the name, the code, how much work is under it, and whether it is live. Opened,
+it carries the full record: project code, client, location, live period,
+currency, status, items, RFQs raised.
+
+### Reproduce
+
+1. Sign in and open `01 Projects & items`.
+2. Create four or five projects with realistic names, clients and locations.
+
+**Reproduces:** always — it is a layout property, not a state-dependent one.
+
+```
+Two projects, as reported:
+
+  Name                        Code     Client               Location          Live period                Status  Items  RFQs
+  Haliba Field Development    HAL      Al Dhafra Petroleum  Haliba field, UAE 2026-01-01 → 2029-12-31    Active  7      7
+  haliba_1                    12hal34  client#1             Dubai,UAE         2026-08-04 → 2028-08-11    Active  0      0
+
+Eight columns, and the two numbers a reader actually compares (Items, RFQs)
+are the last two, furthest from the name that identifies the row.
+```
+
+### Environment
+
+- Branch / commit: `rfq-platform-phase-1` @ `3e081ab`
+- Python / Node: 3.12.3 / v24.15.0
+- Provider: n/a — pure layout, no server involvement
+- Data: any roster with more than about three projects
+
+### Notes
+
+- **2026-08-13** — S4: nothing is wrong, missing or unreachable, and no decision
+  is made on wrong information. It is a legibility complaint about a screen
+  shipped the same day, which is the cheapest possible moment to change it.
+- **2026-08-13** — The roster is the app's front door (`App.tsx` lands here on
+  sign-in), so it is the first thing every user sees and the screen that sets
+  the expectation for the rest. That is why an S4 here was worth doing
+  immediately rather than queuing.
+- **2026-08-13** — **Found while fixing this, not fixed by it:** the app shell
+  is desktop-only. At a 375px viewport `.rail` measures **1110px** and the page
+  scrolls horizontally, on every screen — the rail's grid column does not
+  collapse. The card grid itself is fluid (`auto-fill, minmax(320px, 1fr)`) and
+  fills whatever width it is handed, so it is not the cause and cannot be the
+  cure. Filing that is a separate piece of work: it touches `.shell`, `.rail`
+  and every screen, not this one.
+
+### Fix
+
+- **Spec:** none — a layout change to a screen shipped the same day, with the
+  target shape given directly in the report (cards, title = project name,
+  detail behind a dropdown, and the field list).
+- **Plan:** none — single-file change plus its stylesheet; the surrounding work
+  is [`2026-08-13-project-item-hierarchy.md`](docs/superpowers/plans/2026-08-13-project-item-hierarchy.md),
+  whose Task 6 built the table this replaces.
+- **Design change:** the table becomes a `.project-grid` of `<article className="pcard">`
+  cards. The detail sits in a native `<details>`/`<summary>` rather than a
+  JS-toggled div, for two reasons: the disclosure is keyboard-operable and
+  announced as expanded/collapsed without any of that being written by hand,
+  and the card holds **no state of its own**, so a roster reload cannot collapse
+  a card the reader had just opened. `Status` deliberately appears twice — as a
+  coloured pill on the collapsed card, which is the at-a-glance signal, and as a
+  row inside the details, which is the full record. The pill carries its own
+  word as well as its colour, the same rule the verdict palette follows.
+- **Commit / PR:** `3e3eaf8`
+- **Test:** `web/src/pages/Projects.test.tsx` — 7 tests replacing the single
+  table-row assertion: one card per project titled with the project name; the
+  counts and status visible while collapsed; counts singularised so a card never
+  reads `1 items`; the disclosure closed by default with its fields present in
+  the DOM; all eight detail labels in order once opened; opening one card
+  leaving its neighbour closed; and the status modifier class (`On Hold` →
+  `pcard-status--on-hold`) alongside the word. The first, fourth and sixth fail
+  against the old table markup — there is no `article`, no `heading` level 3 and
+  no `details` element in it.
+- **Verified:** yes. Web **112 passed** across 13 files, `npm run build` clean,
+  and checked in the running app via `./run.ps1`: two cards rendered in a
+  two-column grid at 1280px (`469.6px 469.6px`), the disclosure closed by
+  default, and all eight labels present in order once opened.
+
+
+---
+
+## BUG-015 — The Add item form collects quantities, units and money that procurement does not want at this stage
+
+- **Severity:** S3
+- **Category:** Back end (the form is the visible half; the model is what forces it)
+- **Area:** `workflow/models/project.py`, `api/workflow_routes.py`, `workflow/store.py`, `web/src/pages/forms.tsx`
+- **Status:** Open
+- **Reported:** 2026-08-13
+- **Reporter:** Rahul Jana (client-reported, with a screenshot)
+
+### What happens
+
+Adding an item asks for eight fields. Four of them are commercial detail that
+procurement does not have — and does not want to invent — at the point an item
+is first written down:
+
+| field | model | wanted? |
+|---|---|---|
+| `item_type` | `str` | yes — the thing being procured |
+| `description` | `str` | yes — its detail |
+| `required_on_site` | `date \| None` | yes — when it is needed |
+| `qty` | `float` | **no** |
+| `uom` | `str` | **no** |
+| `discipline` | `str` | **no** |
+| `estimated_value_aed` | `int` | **no** |
+
+All four unwanted ones are **required** on the model
+(`workflow/models/project.py:33-46`) and on `ItemIn`
+(`api/workflow_routes.py:61-69`), so the form cannot simply stop showing them —
+a hidden field would have to send *something*, and there is no honest value to
+send. `qty: 0` and `estimated_value_aed: 0` are exactly the coercion CLAUDE.md's
+store invariant forbids: "Missing data is never coerced to a passing or zero
+value. An unfound parameter is omitted, not emitted as `0` or `""`."
+
+That is why this is filed under **Back end** despite being reported against a
+form. Deleting the inputs from `forms.tsx` is the smaller, later half; the model
+is what makes them mandatory.
+
+### What should happen
+
+An item carries three things at this stage:
+
+1. **Name** — what we want to procure.
+2. **Details** — what it is.
+3. **Estimated date** — when we are trying to have it.
+
+No quantities, no units, no money. The value estimate that a tender actually
+turns on already lives on the RFQ (`RfqRecord.value_estimate_aed`), raised later
+when there is a basis for it — so removing it from the item does not lose the
+number, it stops asking for it a step too early.
+
+**Open design questions, to settle before implementing:**
+
+- **Do the four fields go, or become optional?** Removing them is cleaner and
+  matches the report. But `Item` is persisted in `workflow.json`, so any
+  existing item carries values for all four, and `from_document` rebuilds
+  `Item(**record)` directly (`workflow/persistence.py:86`). Dropping a field
+  makes those records fail to load unless the removal tolerates extra keys or a
+  migration drops them. Optional-with-default is the lower-risk shape and keeps
+  the door open if a later stage wants them back.
+- **What replaces them where they are already rendered?** `qty`, `uom`,
+  `discipline` and `estimated_value_aed` appear as columns in the items table
+  (`ProjectDetail.tsx`) and as `Metric`s on the item detail
+  (`ItemDetail.tsx`). Both need re-laying-out, not just de-populating.
+- **Is `item_type` the "name" field, or does a new `name` appear beside it?**
+  The report says "the name of the item that we want to procure", and
+  `item_type` currently holds exactly that (`Gas generator`, `HV cable`) — but
+  its docstring calls it a catalogue reference for cross-project questions
+  (`project.py:34-35`), which is a different intent. Renaming it in the UI while
+  it stays `item_type` on the wire is the cheap answer; deciding it is really a
+  name is the honest one.
+- **`live_period_warning` depends on `required_on_site`**, which stays — so the
+  advisory caution and its tests are unaffected either way. Worth confirming
+  rather than assuming.
+
+### Reproduce
+
+1. Open `01 Projects & items`, open a project, press **Add item**.
+2. Read the form.
+
+**Reproduces:** always
+
+```
+Fields presented, in order:
+
+  Item type              ← wanted
+  Description            ← wanted
+  Quantity               ← not wanted
+  Unit of measure        ← not wanted
+  Discipline             ← not wanted
+  Estimated value (AED)  ← not wanted
+  Required on site       ← wanted
+  Long lead (checkbox)   ← not raised either way in the report
+```
+
+### Environment
+
+- Branch / commit: `rfq-platform-phase-1` @ `3e3eaf8`
+- Python / Node: 3.12.3 / v24.15.0
+- Provider: n/a
+- Data: any project
+
+### Notes
+
+- **2026-08-13** — S3 rather than S4: this is not cosmetic. The form compels a
+  number the user does not have, and whatever they type to get past it is stored
+  as though it were procurement's estimate. A made-up quantity that later reads
+  as real is a worse outcome than an ugly form.
+- **2026-08-13** — The screenshot shows `QUANTITY` holding **-1**. The field
+  takes `type="number"` with `step="any"` and no `min`, and `qty: float` has no
+  constraint, so a negative quantity is accepted and stored today. Not filed
+  separately: the fix for this bug deletes the field, and a validation rule
+  added now would be written and then removed. **If the four fields are made
+  optional rather than removed, this note becomes its own bug** — an optional
+  field that still accepts -1 is the same defect with a smaller blast radius.
+- **2026-08-13** — `is_long_lead` was not mentioned in the report. It is a flag
+  rather than a number and does not carry the same "invent a value" cost, so it
+  is left in scope-questions rather than assumed removed. Ask before deleting
+  it.
+- **2026-08-13** — Nothing in `workflow/gates.py` reads any of the four fields;
+  the stage gates turn on the technical package, the shortlist and the TBE
+  template. So removing them does not weaken a gate. Confirmed by reading
+  `gates.py` in full, not by grep alone.
