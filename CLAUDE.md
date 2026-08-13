@@ -25,8 +25,8 @@ untracked fixture directories are present, never in pass/fail:
 
 | where | baseline |
 |---|---|
-| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1097 passed, 3 skipped, 0 failed** |
-| CI, and any clean checkout | **1088 passed, 12 skipped, 0 failed** |
+| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1179 passed, 3 skipped, 0 failed** |
+| CI, and any clean checkout | **1170 passed, 12 skipped, 0 failed** |
 
 Anything else is a real regression.
 
@@ -45,26 +45,32 @@ pass on a workstation that has it and skip in CI.
 
 So the CI row is the workstation row with the four corpus-coverage passes, the
 three `data/` passes and the two `pdftotext` passes turned into skips —
-`1088 = 1097 - 4 - 3 - 2`, `12 = 3 + 4 + 3 + 2`; 1100 tests either way. When
+`1170 = 1179 - 4 - 3 - 2`, `12 = 3 + 4 + 3 + 2`; 1182 tests either way. When
 the counts move, measure the workstation row and derive the CI row from it;
 editing the two rows independently is how they drift apart.
 
-**The workstation row is measured, not derived**: **1097 passed, 3 skipped**,
-taken on 2026-08-12 on the merge of this branch with the auth work, in an
-environment with `pdftotext`, `data/` and an ingested multi-vendor `projects/`
-all present. That matters, because the row it replaces was not. While the auth
+**The workstation row is measured, not derived**: **1179 passed, 3 skipped**,
+taken on 2026-08-13 on the `rfq-platform-phase-1` branch, in an environment
+with `pdftotext`, `data/` and an ingested multi-vendor `projects/` all present.
+That matters, because a row this file once carried was not. While the auth
 branch was in flight the workstation figure was *derived backwards* — measured
 on a checkout that had neither fixture directory, then extrapolated upward —
-and was flagged in this file as an assumption rather than a result. It is now
-a real measurement, and the caveat that used to sit here is deleted rather
-than reworded. The CI row is still derived from it by the subtraction above;
-derive it that way again when the counts move.
+and was flagged here as an assumption rather than a result. Both rows since
+have been real measurements, and the caveat that used to sit here is deleted
+rather than reworded. The CI row is still derived from the workstation row by
+the subtraction above; derive it that way again when the counts move.
+
+The jump from 1097 is the RFQ workflow: 82 tests across
+`test_workflow_stages.py`, `test_workflow_store.py`,
+`test_workflow_endpoints.py` and `test_workflow_persistence.py`. None of them
+touches a fixture directory or a provider key, so every one of them lands in
+both rows.
 
 The web suite is separate and not part of either row above — both rows are
 `python -m pytest` counts. Run it with `npm test` under `web/` (vitest,
 non-watching, exits non-zero on failure); `npm run build` also type-checks the
 test files, since `web/tsconfig.app.json` includes `src`. CI runs both, in the
-`web` job of the same workflow. It stands at **36 passed** across 6 files.
+`web` job of the same workflow. It stands at **45 passed** across 8 files.
 
 Component tests that render `App` or `Setup` must mock `auth/context`'s
 `useAuth`, and must return a **stable** object from it — build the value once
@@ -154,6 +160,47 @@ atomic write keep all three consistent. Written **only** from
   never by asking the filesystem whether a path exists. Windows and macOS
   resolve paths case-insensitively; CI does not, so that class of bug cannot
   fail on CI.
+
+## RFQ workflow invariants — `<ROOT>/workflow.json`
+
+The eight-stage RFQ process lives in the top-level `workflow/` package, with
+its routes in `api/workflow_routes.py`. It is deliberately **not** part of
+`procurement/`: that package's store has the snapshot invariants above
+(`generation`, `field_path` by id, orphan pruning) and this one does not share
+them, so keeping them apart stops a reader assuming one set covers both.
+
+- **Stage codes are fixed**, and `TRANSITIONS` is **deny-by-default** — an edge
+  absent from that table is refused. Every stage needs an entry, including the
+  terminal `PO_ISSUED`, so `is_allowed` answers "no" instead of raising.
+- **Only forward transitions are gated.** The backward edges are the documented
+  recoveries — retender and renegotiate — and a forward gate must never block
+  one, or a stuck RFQ has no way out.
+- **A gate never returns a bare `False`.** `GateResult` carries a reason, and a
+  blocked transition raises with it; the route surfaces that sentence as a 409.
+  A reason must name the whole exit criterion, not the nearer half of it.
+- **History is append-only.** A backward transition appends; it never rewrites
+  or removes an earlier entry. The second pass through a stage is a second
+  entry, which is why `to_stage` alone is not a unique key within one history.
+- **`workflow.json` holds exactly the entities the store holds.** `save`
+  replaces the document wholesale, so an entity removed in memory cannot
+  survive on disk. Any field added to `WorkflowStore.__init__` needs a matching
+  line in **both** `to_document` and `from_document`, or it silently fails to
+  survive a restart.
+- **Every write, and every decision that gates one, happens inside
+  `persistence.locked_update`.** This is the same rule as the auth store and
+  for the same reason: a check in the route and a write in the store are two
+  critical sections, so two concurrent transitions could each read "gate open".
+  `WorkflowStore.transition` therefore runs inside the block, never against a
+  store loaded before it. The write lands only on a clean exit, so a refused
+  transition leaves the document untouched.
+- **Workflow routes are not on `middleware.PUBLIC_PATHS`** and must not be.
+  `test_auth_middleware.py`'s route sweep covers them; a new path parameter
+  needs adding to that test's probe substitutions, which is what its assertion
+  is there to force.
+- **`WorkflowStore` knows nothing about disk.** Serialization lives in
+  `workflow/persistence.py`, the one module allowed to touch the store's dicts
+  directly, so replacing the JSON file with a database is a change to that
+  module alone.
 
 ## Planning convention
 
