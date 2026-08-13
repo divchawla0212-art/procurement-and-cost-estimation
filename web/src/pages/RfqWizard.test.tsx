@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { RfqWizard } from './RfqWizard'
-import type { RfqDetail } from '../types'
+import type { Candidate, RfqDetail, ShortlistEntry } from '../types'
+import { APPROVED_BIDDER, EXPIRED_BIDDER } from './workflow-fixtures'
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
@@ -11,6 +12,8 @@ vi.mock('../api', async (importOriginal) => {
     transitionRfq: vi.fn(),
     freezeTechnicalPackage: vi.fn(),
     addShortlistEntry: vi.fn(),
+    inviteRegisteredBidder: vi.fn(),
+    fetchCandidates: vi.fn(),
     removeShortlistEntry: vi.fn(),
     approveShortlist: vi.fn(),
     setTbeTemplate: vi.fn(),
@@ -22,11 +25,61 @@ vi.mock('../api', async (importOriginal) => {
 import {
   addShortlistEntry,
   approveShortlist,
+  fetchCandidates,
   fetchRfq,
   freezeTechnicalPackage,
+  inviteRegisteredBidder,
   removeShortlistEntry,
   transitionRfq,
 } from '../api'
+
+/** A shortlist entry as the server returns it once a registry bidder has been
+ *  invited: the name and prequal status are the registry's, not the caller's. */
+function entry(over: Partial<ShortlistEntry> = {}): ShortlistEntry {
+  return {
+    id: 'sle_1',
+    rfq_id: 'rfq_abc',
+    vendor_id: 'bdr_almunara',
+    vendor_name: 'Al Munara Switchgear LLC',
+    prequal_status: 'Approved',
+    scope_code_fit: true,
+    included: true,
+    override_by: null,
+    override_reason: null,
+    ...over,
+  }
+}
+
+function candidate(over: Partial<Candidate> = {}): Candidate {
+  return {
+    bidder: APPROVED_BIDDER,
+    suitability: {
+      eligible: true,
+      scope_fit: true,
+      effective_prequal: 'Approved',
+      blockers: [],
+      cautions: [],
+    },
+    shortlisted: false,
+    ...over,
+  }
+}
+
+const BLOCKED_CANDIDATE: Candidate = {
+  bidder: EXPIRED_BIDDER,
+  suitability: {
+    eligible: false,
+    scope_fit: false,
+    effective_prequal: 'Expired',
+    blockers: [
+      'Prequalification lapsed on 2026-05-09 and must be renewed before Sandstone Piping Industries can be invited.',
+    ],
+    cautions: [
+      'Sandstone Piping Industries is not registered for Mechanical (Wellhead tie-in materials).',
+    ],
+  },
+  shortlisted: false,
+}
 
 const STAGES = [
   'Scoping',
@@ -67,8 +120,9 @@ function detail(over: Partial<RfqDetail> = {}): RfqDetail {
   }
 }
 
-async function show(data: RfqDetail) {
+async function show(data: RfqDetail, candidates: Candidate[] = []) {
   vi.mocked(fetchRfq).mockResolvedValue(data)
+  vi.mocked(fetchCandidates).mockResolvedValue(candidates)
   render(<RfqWizard rfqId="rfq_abc" stages={STAGES} onBack={() => {}} />)
   await waitFor(() => {
     expect(screen.queryByText(/Loading RFQ…/i)).not.toBeInTheDocument()
@@ -132,19 +186,9 @@ describe('RfqWizard', () => {
           frozen_at: '2026-08-13T10:00:00Z',
           frozen_by: 'lead@adp.ae',
         },
-        shortlist: [
-          {
-            id: 'sle_1',
-            rfq_id: 'rfq_abc',
-            vendor_name: 'Galfar',
-            prequal_status: 'Qualified',
-            scope_code_fit: true,
-            included: true,
-            override_by: null,
-            override_reason: null,
-          },
-        ],
+        shortlist: [entry()],
       }),
+      [candidate({ shortlisted: true })],
     )
 
     fireEvent.click(screen.getByRole('button', { name: /Shortlisting/ }))
@@ -153,39 +197,118 @@ describe('RfqWizard', () => {
     expect(screen.getByRole('button', { name: 'Remove' })).toBeInTheDocument()
   })
 
-  it('adds and removes a shortlist vendor', async () => {
-    vi.mocked(addShortlistEntry).mockResolvedValue({
-      id: 'sle_2', rfq_id: 'rfq_abc', vendor_name: 'Petrofac',
-      prequal_status: 'Qualified', scope_code_fit: true, included: true,
-      override_by: null, override_reason: null,
-    })
-    vi.mocked(removeShortlistEntry).mockResolvedValue(undefined)
-    await show(
-      detail({
-        rfq: { ...detail().rfq, stage: 'Shortlisting' },
-        shortlist: [
-          {
-            id: 'sle_1', rfq_id: 'rfq_abc', vendor_name: 'Galfar',
-            prequal_status: 'Qualified', scope_code_fit: true, included: true,
-            override_by: null, override_reason: null,
-          },
-        ],
+  it('invites a bidder from the registry, sending only the id', async () => {
+    // Not the name, prequal status or scope fit: those come from the registry,
+    // and a screen that sent them would be claiming they were its to decide.
+    vi.mocked(inviteRegisteredBidder).mockResolvedValue(entry())
+    await show(detail({ rfq: { ...detail().rfq, stage: 'Shortlisting' } }), [
+      candidate(),
+    ])
+
+    fireEvent.click(await screen.findByRole('button', { name: /Invite Al Munara/ }))
+
+    await waitFor(() =>
+      expect(inviteRegisteredBidder).toHaveBeenCalledWith('rfq_abc', {
+        vendor_id: 'bdr_almunara',
       }),
     )
+  })
 
-    fireEvent.change(screen.getByLabelText('Vendor name'), { target: { value: 'Petrofac' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Add vendor' }))
-    await waitFor(() => {
-      expect(addShortlistEntry).toHaveBeenCalledWith(
-        'rfq_abc',
-        expect.objectContaining({ vendor_name: 'Petrofac', included: true }),
-      )
+  it('shows a blocked candidate\u2019s blockers rather than hiding the control', async () => {
+    await show(detail({ rfq: { ...detail().rfq, stage: 'Shortlisting' } }), [
+      BLOCKED_CANDIDATE,
+    ])
+
+    expect(
+      await screen.findByText(/Prequalification lapsed on 2026-05-09/),
+    ).toBeInTheDocument()
+    expect(screen.getByText(/not registered for Mechanical/)).toBeInTheDocument()
+  })
+
+  it('sends the override reason typed against a blocked candidate', async () => {
+    vi.mocked(inviteRegisteredBidder).mockResolvedValue(
+      entry({ vendor_id: 'bdr_sandstone', override_reason: 'Sole source' }),
+    )
+    await show(detail({ rfq: { ...detail().rfq, stage: 'Shortlisting' } }), [
+      BLOCKED_CANDIDATE,
+    ])
+
+    fireEvent.change(await screen.findByLabelText(/Reason for inviting Sandstone/), {
+      target: { value: 'Sole source for the 16-inch jig' },
     })
+    fireEvent.click(screen.getByRole('button', { name: /Invite Sandstone/ }))
+
+    await waitFor(() =>
+      expect(inviteRegisteredBidder).toHaveBeenCalledWith('rfq_abc', {
+        vendor_id: 'bdr_sandstone',
+        override_reason: 'Sole source for the 16-inch jig',
+      }),
+    )
+  })
+
+  it('surfaces the refusal when a blocked bidder is invited with no reason', async () => {
+    vi.mocked(inviteRegisteredBidder).mockRejectedValue(
+      new Error(
+        'Prequalification lapsed on 2026-05-09. Record a reason to invite them anyway.',
+      ),
+    )
+    await show(detail({ rfq: { ...detail().rfq, stage: 'Shortlisting' } }), [
+      BLOCKED_CANDIDATE,
+    ])
+
+    fireEvent.click(await screen.findByRole('button', { name: /Invite Sandstone/ }))
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Record a reason to invite them anyway/),
+      ).toBeInTheDocument(),
+    )
+  })
+
+  it('marks a candidate already invited rather than offering them twice', async () => {
+    await show(
+      detail({ rfq: { ...detail().rfq, stage: 'Shortlisting' }, shortlist: [entry()] }),
+      [candidate({ shortlisted: true })],
+    )
+
+    expect(await screen.findByText('Invited')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Invite Al Munara/ })).toBeNull()
+  })
+
+  it('removes a shortlisted vendor by id', async () => {
+    vi.mocked(removeShortlistEntry).mockResolvedValue(undefined)
+    await show(
+      detail({ rfq: { ...detail().rfq, stage: 'Shortlisting' }, shortlist: [entry()] }),
+      [candidate({ shortlisted: true })],
+    )
 
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
-    await waitFor(() => {
-      expect(removeShortlistEntry).toHaveBeenCalledWith('rfq_abc', 'sle_1')
+
+    await waitFor(() =>
+      expect(removeShortlistEntry).toHaveBeenCalledWith('rfq_abc', 'sle_1'),
+    )
+  })
+
+  it('still takes a one-off vendor by hand, behind a disclosure', async () => {
+    vi.mocked(addShortlistEntry).mockResolvedValue(
+      entry({ id: 'sle_2', vendor_id: null, vendor_name: 'A one-off fabricator' }),
+    )
+    await show(detail({ rfq: { ...detail().rfq, stage: 'Shortlisting' } }))
+
+    fireEvent.change(await screen.findByLabelText('Vendor name'), {
+      target: { value: 'A one-off fabricator' },
     })
+    fireEvent.click(screen.getByRole('button', { name: 'Add vendor' }))
+
+    await waitFor(() =>
+      expect(addShortlistEntry).toHaveBeenCalledWith(
+        'rfq_abc',
+        expect.objectContaining({
+          vendor_name: 'A one-off fabricator',
+          included: true,
+        }),
+      ),
+    )
   })
 
   it('warns that changing vendors re-opens approval', async () => {

@@ -1,5 +1,10 @@
 import type {
   AdminUser,
+  Bidder,
+  BidderDetail,
+  BidderInput,
+  BidderSummary,
+  Candidate,
   ComplianceMatrix,
   ExtractionStatus,
   ProjectDetail,
@@ -195,6 +200,52 @@ export function runIngestion(
   )
 }
 
+/* ------------------------------------------------------------- bidders */
+//
+// The registry is organisation-wide, so none of these paths hangs off a
+// project. `effective_prequal` and `invited_count` arrive computed; nothing
+// here recomputes them.
+
+export function fetchBidders(): Promise<BidderSummary[]> {
+  return getJson<{ bidders: BidderSummary[] }>('/api/workflow/bidders').then(
+    (body) => body.bidders,
+  )
+}
+
+export function fetchBidder(bidderId: string): Promise<BidderDetail> {
+  return getJson(`/api/workflow/bidders/${encodeURIComponent(bidderId)}`)
+}
+
+export function createBidder(body: BidderInput): Promise<Bidder> {
+  return sendJson('/api/workflow/bidders', 'POST', body)
+}
+
+/** Partial by contract, like `updateWorkflowProject`: send only what changed. */
+export function updateBidder(
+  bidderId: string,
+  changes: Partial<BidderInput>,
+): Promise<Bidder> {
+  return sendJson(
+    `/api/workflow/bidders/${encodeURIComponent(bidderId)}`,
+    'PATCH',
+    changes,
+  )
+}
+
+/** A 409 carries the server's sentence naming the RFQs that block the delete.
+ *  `expectNoContent` raises it verbatim for the screen to show. */
+export function deleteBidder(bidderId: string): Promise<void> {
+  return fetch(`/api/workflow/bidders/${encodeURIComponent(bidderId)}`, {
+    method: 'DELETE',
+  }).then(expectNoContent)
+}
+
+export function fetchCandidates(rfqId: string): Promise<Candidate[]> {
+  return getJson<{ candidates: Candidate[] }>(
+    `/api/workflow/rfqs/${encodeURIComponent(rfqId)}/candidates`,
+  ).then((body) => body.candidates)
+}
+
 /* ------------------------------------------- workflow projects and items */
 //
 // The hierarchy the RFQ process hangs off: a project, its equipment items, and
@@ -310,6 +361,21 @@ export function freezeTechnicalPackage(rfqId: string): Promise<TechnicalPackage>
     `/api/workflow/rfqs/${encodeURIComponent(rfqId)}/technical-package/freeze`,
     'POST',
     {},
+  )
+}
+
+/** Two shapes, one route. With a `vendor_id` the server takes the vendor's
+ *  name, prequal status and scope fit from the registry and ignores anything
+ *  sent alongside — so this deliberately does not send them, rather than
+ *  sending values it has no business deciding. */
+export function inviteRegisteredBidder(
+  rfqId: string,
+  body: { vendor_id: string; included?: boolean; override_reason?: string | null },
+): Promise<ShortlistEntry> {
+  return sendJson<ShortlistEntry>(
+    `/api/workflow/rfqs/${encodeURIComponent(rfqId)}/shortlist`,
+    'POST',
+    body,
   )
 }
 

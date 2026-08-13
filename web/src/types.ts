@@ -293,6 +293,11 @@ export interface TechnicalPackage {
 export interface ShortlistEntry {
   id: string
   rfq_id: string
+  /** Set when the vendor came from the registry, null for a genuine one-off
+   *  typed in by hand. The three fields below are a snapshot taken when the
+   *  entry was added, not a live mirror of the registry — a later rename or
+   *  suspension does not rewrite the record of what was decided. */
+  vendor_id: string | null
   vendor_name: string
   prequal_status: string
   scope_code_fit: boolean
@@ -357,6 +362,62 @@ export interface RfqDetail {
   vdrl: VdrlLine[]
   bids: BidWithVdrl[]
   bid_selection: BidSelection | null
+}
+
+/* ------------------------------------------------------------- bidders */
+
+export type PrequalStatus =
+  | 'Approved'
+  | 'Under review'
+  | 'Suspended'
+  | 'Not qualified'
+
+export interface Bidder {
+  id: string
+  name: string
+  country: string
+  currency: string
+  trade_categories: string[]
+  prequal_status: PrequalStatus
+  prequal_expires_on: string | null
+  on_hold: boolean
+  hold_reason: string | null
+  turnover_band: string | null
+  performance_rating: number | null
+  past_awards: number
+  notes: string | null
+}
+
+export type BidderInput = Omit<Bidder, 'id'>
+
+/** A roster row. `effective_prequal` may read `Expired`, which no stored
+ *  `prequal_status` ever does — expiry is derived server-side against today's
+ *  date, and this screen must never recompute it, or there would be two
+ *  definitions of "expired" to keep in step. */
+export interface BidderSummary extends Bidder {
+  effective_prequal: string
+  invited_count: number
+}
+
+export interface BidderDetail extends BidderSummary {
+  invited_by: string[]
+}
+
+/** Why a bidder may or may not be invited to one specific RFQ. A blocker is
+ *  somebody's explicit refusal and needs an override reason to get past; a
+ *  caution decides nothing and is shown so the decision is informed. */
+export interface Suitability {
+  eligible: boolean
+  scope_fit: boolean
+  effective_prequal: string
+  blockers: string[]
+  cautions: string[]
+}
+
+export interface Candidate {
+  bidder: BidderSummary
+  suitability: Suitability
+  shortlisted: boolean
 }
 
 /* ------------------------------------------- workflow projects and items */

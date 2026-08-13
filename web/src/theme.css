@@ -1146,6 +1146,31 @@ p.warn { margin: 0.5rem 0 0; }
   color: #7a470a;
 }
 
+/* The prequalification chips reuse the project-status palette rather than
+   inventing a second one: both answer "can work proceed here", so a reader who
+   has learned one colour has learned both. `Expired` and `Suspended` are
+   deliberately the same red — the remedies differ but the answer today does
+   not. */
+.pcard-status--approved {
+  background: var(--pass-soft);
+  border-color: #bfe3d1;
+  color: #145a43;
+}
+
+.pcard-status--under-review {
+  background: var(--deviation-soft);
+  border-color: #f0d6a8;
+  color: #7a470a;
+}
+
+.pcard-status--expired,
+.pcard-status--suspended,
+.pcard-status--not-qualified {
+  background: var(--fail-soft);
+  border-color: #e9c3c3;
+  color: #8a2020;
+}
+
 .pcard-status--closed {
   background: var(--unanswered-soft);
   border-color: var(--border-strong);
@@ -1276,4 +1301,38 @@ p.warn { margin: 0.5rem 0 0; }
 
 .crumb-sep {
   color: var(--muted-2);
+}
+
+/* The candidate list on the Shortlisting step. A list of blocks rather than a
+   table: each candidate carries a variable number of blocker and caution
+   sentences, and a table cell holding three sentences is unreadable at the
+   width the rest of the row wants. */
+.candidatelist {
+  list-style: none;
+  margin: 0.6rem 0 1.2rem;
+  padding: 0;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.candidate {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.75rem 0.9rem;
+  background: var(--surface);
+}
+
+.candidate-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.candidate-head > b {
+  margin-right: auto;
+}
+
+.candidate > p {
+  margin: 0.35rem 0 0;
 }

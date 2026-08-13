@@ -11,6 +11,7 @@
  * Nothing in `src/` imports this at runtime, so it never reaches the bundle.
  */
 import type {
+  BidderSummary,
   Rfq,
   WorkflowItem,
   WorkflowProject,
@@ -88,4 +89,44 @@ export function detail(
   over: Partial<WorkflowProjectDetail> = {},
 ): WorkflowProjectDetail {
   return { project: HALIBA_PROJECT, items: [GENERATOR], rfqs: [], ...over }
+}
+
+/* --------------------------------------------------------------- bidders */
+
+export const APPROVED_BIDDER: BidderSummary = {
+  id: 'bdr_almunara',
+  name: 'Al Munara Switchgear LLC',
+  country: 'United Arab Emirates',
+  currency: 'AED',
+  trade_categories: ['Electrical', 'LV switchgear'],
+  prequal_status: 'Approved',
+  prequal_expires_on: '2028-03-31',
+  on_hold: false,
+  hold_reason: null,
+  turnover_band: 'AED 50–100m',
+  performance_rating: 4.4,
+  past_awards: 7,
+  notes: null,
+  effective_prequal: 'Approved',
+  invited_count: 0,
+}
+
+/** Stored as `Approved`; the server's derived value says otherwise. The gap
+ *  between those two fields is the thing the roster has to render correctly. */
+export const EXPIRED_BIDDER: BidderSummary = {
+  ...APPROVED_BIDDER,
+  id: 'bdr_sandstone',
+  name: 'Sandstone Piping Industries',
+  trade_categories: ['Piping', 'Structural steel'],
+  prequal_expires_on: '2026-05-09',
+  effective_prequal: 'Expired',
+}
+
+export const SUSPENDED_BIDDER: BidderSummary = {
+  ...APPROVED_BIDDER,
+  id: 'bdr_gulfcrescent',
+  name: 'Gulf Crescent Fabricators',
+  trade_categories: ['Structural steel'],
+  prequal_status: 'Suspended',
+  effective_prequal: 'Suspended',
 }

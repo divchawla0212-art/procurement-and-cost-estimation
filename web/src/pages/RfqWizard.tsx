@@ -4,15 +4,17 @@ import {
   addShortlistEntry,
   addVdrlLine,
   approveShortlist,
+  fetchCandidates,
   fetchRfq,
   freezeTechnicalPackage,
+  inviteRegisteredBidder,
   removeShortlistEntry,
   removeVdrlLine,
   setTbeTemplate,
   setTechnicalPackage,
   transitionRfq,
 } from '../api'
-import type { Attachment, RfqDetail } from '../types'
+import type { Attachment, Candidate, RfqDetail } from '../types'
 import { useAsync } from '../useAsync'
 import { Card, ErrorState, LoadingState } from '../components/primitives'
 
@@ -44,7 +46,8 @@ const WIZARD_STAGES = ['Scoping', 'Shortlisting', 'Issued', 'Clarifications'] as
 
 const STEP_BLURB: Record<string, string> = {
   Scoping: 'Define the package and freeze it. Vendors bid against this revision.',
-  Shortlisting: 'Choose who is invited, get the list approved, and attach the TBE template.',
+  Shortlisting:
+    'Invite bidders from the registry, get the list approved, and attach the TBE template.',
   Issued: 'List the documents each vendor must return with their bid.',
   Clarifications: 'Technical queries are handled here before bids are opened.',
 }
@@ -152,7 +155,7 @@ export function RfqWizard({
         <p className="muted">{STEP_BLURB[step]}</p>
         {step === 'Scoping' ? <ScopingStep data={data} run={run} busy={busy} /> : null}
         {step === 'Shortlisting' ? (
-          <ShortlistingStep data={data} run={run} busy={busy} />
+          <ShortlistingStep data={data} run={run} busy={busy} tick={tick} />
         ) : null}
         {step === 'Issued' ? <IssuedStep data={data} run={run} busy={busy} /> : null}
         {step === 'Clarifications' ? (
@@ -206,11 +209,15 @@ type StepProps = {
   data: RfqDetail
   run: (action: () => Promise<unknown>) => Promise<void>
   busy: boolean
+  /** The wizard's reload counter. Only the Shortlisting step needs it: it
+   *  loads a second resource, and that resource changes when a write here
+   *  succeeds. */
+  tick: number
 }
 
 /* ------------------------------------------------------------------ Scoping */
 
-function ScopingStep({ data, run, busy }: StepProps) {
+function ScopingStep({ data, run, busy }: Omit<StepProps, 'tick'>) {
   const pkg = data.technical_package
   const frozen = Boolean(pkg?.frozen_at)
   const [revision, setRevision] = useState(pkg?.revision ?? '')
@@ -383,18 +390,30 @@ function AttachmentTable({
 
 /* ------------------------------------------------------------- Shortlisting */
 
-function ShortlistingStep({ data, run, busy }: StepProps) {
-  const [vendor, setVendor] = useState('')
-  const [prequal, setPrequal] = useState('Qualified')
-  const [scopeFit, setScopeFit] = useState(true)
-  const [included, setIncluded] = useState(true)
+/**
+ * Who is invited, chosen from the registry rather than typed from memory.
+ *
+ * The candidate list is the whole registry judged against *this* RFQ, so the
+ * reader decides with the same information the server will decide with. A
+ * blocked bidder keeps their Invite control — it is the override reason beside
+ * it that makes including them a recorded, attributed act, and hiding the
+ * control would only send the decision back to a spreadsheet.
+ *
+ * Inviting sends `vendor_id` and nothing else. The name, prequal status and
+ * scope fit are the registry's, snapshotted server-side at the moment of the
+ * decision; a screen that sent them would be claiming they were its to decide.
+ */
+function ShortlistingStep({ data, run, busy, tick }: StepProps) {
   const [criteria, setCriteria] = useState((data.tbe_template?.criteria ?? []).join('\n'))
+  // Keyed on the wizard's tick as well as the RFQ, so inviting somebody
+  // refreshes who is still available rather than leaving a stale list.
+  const candidates = useAsync(() => fetchCandidates(data.rfq.id), [data.rfq.id, tick])
 
   return (
     <>
-      <h3>Vendors</h3>
+      <h3>Invited bidders</h3>
       {data.shortlist.length === 0 ? (
-        <p className="muted">No vendors yet.</p>
+        <p className="muted">Nobody invited yet.</p>
       ) : (
         <table className="table">
           <thead>
@@ -402,17 +421,35 @@ function ShortlistingStep({ data, run, busy }: StepProps) {
               <th scope="col">Vendor</th>
               <th scope="col">Prequalification</th>
               <th scope="col">Scope fit</th>
-              <th scope="col">Included</th>
+              <th scope="col">Recorded exception</th>
               <th scope="col" />
             </tr>
           </thead>
           <tbody>
             {data.shortlist.map((e) => (
               <tr key={e.id}>
-                <td>{e.vendor_name}</td>
+                <td>
+                  {e.vendor_name}
+                  {e.vendor_id ? null : (
+                    <span className="muted"> · not in the registry</span>
+                  )}
+                </td>
+                {/* The status as it was when the invitation was issued, not as
+                    it is today. That is what makes this row an audit trail. */}
                 <td>{e.prequal_status}</td>
                 <td>{e.scope_code_fit ? 'yes' : 'no'}</td>
-                <td>{e.included ? 'yes' : 'no'}</td>
+                <td>
+                  {e.override_reason ? (
+                    <>
+                      {e.override_reason}
+                      {e.override_by ? (
+                        <span className="muted"> — {e.override_by}</span>
+                      ) : null}
+                    </>
+                  ) : (
+                    <span className="muted">—</span>
+                  )}
+                </td>
                 <td>
                   <button
                     type="button"
@@ -429,59 +466,33 @@ function ShortlistingStep({ data, run, busy }: StepProps) {
         </table>
       )}
 
-      <div className="fxrow">
-        <input
-          className="input"
-          aria-label="Vendor name"
-          placeholder="Vendor"
-          value={vendor}
-          onChange={(e) => setVendor(e.target.value)}
-        />
-        <select
-          className="input"
-          aria-label="Prequalification status"
-          value={prequal}
-          onChange={(e) => setPrequal(e.target.value)}
-        >
-          <option>Qualified</option>
-          <option>Under review</option>
-          <option>Not qualified</option>
-        </select>
-        <label>
-          <input
-            type="checkbox"
-            checked={scopeFit}
-            onChange={(e) => setScopeFit(e.target.checked)}
-          />{' '}
-          Scope fit
-        </label>
-        <label>
-          <input
-            type="checkbox"
-            checked={included}
-            onChange={(e) => setIncluded(e.target.checked)}
-          />{' '}
-          Include
-        </label>
-        <button
-          type="button"
-          className="btn btn--quiet"
-          disabled={busy || !vendor.trim()}
-          onClick={() =>
-            run(async () => {
-              await addShortlistEntry(data.rfq.id, {
-                vendor_name: vendor.trim(),
-                prequal_status: prequal,
-                scope_code_fit: scopeFit,
-                included,
-              })
-              setVendor('')
-            })
-          }
-        >
-          Add vendor
-        </button>
-      </div>
+      <h3>Registry</h3>
+      {candidates.loading ? (
+        <p className="muted">Loading bidders…</p>
+      ) : candidates.error ? (
+        <p className="warn">{candidates.error}</p>
+      ) : (candidates.data ?? []).length === 0 ? (
+        <p className="muted">
+          The bidder registry is empty. Add bidders under Bidders, and they will
+          be offered here with their prequalification checked for you.
+        </p>
+      ) : (
+        <ul className="candidatelist">
+          {(candidates.data ?? []).map((c) => (
+            <CandidateRow key={c.bidder.id} candidate={c} rfqId={data.rfq.id} run={run} busy={busy} />
+          ))}
+        </ul>
+      )}
+
+      <details className="pcard-details">
+        <summary>Add a vendor who is not in the registry</summary>
+        <p className="muted">
+          For a genuine one-off. Nothing is checked, because there is no
+          registry record to check against — so the prequalification you type
+          here is a claim, not a verified fact.
+        </p>
+        <UnregisteredVendorRow rfqId={data.rfq.id} run={run} busy={busy} />
+      </details>
 
       <p className={data.shortlist_approved ? 'muted' : 'warn'}>
         {data.shortlist_approved
@@ -529,9 +540,158 @@ function ShortlistingStep({ data, run, busy }: StepProps) {
   )
 }
 
+function CandidateRow({
+  candidate,
+  rfqId,
+  run,
+  busy,
+}: {
+  candidate: Candidate
+  rfqId: string
+  run: (action: () => Promise<unknown>) => Promise<void>
+  busy: boolean
+}) {
+  const [reason, setReason] = useState('')
+  const { bidder, suitability } = candidate
+  const shortName = bidder.name.split(/\s+/)[0]
+
+  return (
+    <li className="candidate">
+      <div className="candidate-head">
+        <b>{bidder.name}</b>
+        <span
+          className={`pcard-status pcard-status--${suitability.effective_prequal
+            .toLowerCase()
+            .replace(/\s+/g, '-')}`}
+        >
+          {suitability.effective_prequal}
+        </span>
+        {candidate.shortlisted ? (
+          <span className="muted">Invited</span>
+        ) : (
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={busy}
+            onClick={() =>
+              run(() =>
+                inviteRegisteredBidder(rfqId, {
+                  vendor_id: bidder.id,
+                  // Omitted entirely when empty, so an eligible bidder is not
+                  // recorded as carrying an exception with no text.
+                  ...(reason.trim() ? { override_reason: reason.trim() } : {}),
+                }),
+              )
+            }
+          >
+            Invite {bidder.name}
+          </button>
+        )}
+      </div>
+
+      <p className="muted">
+        {bidder.trade_categories.join(' · ') || 'No trade categories recorded'}
+        {' · '}
+        {bidder.country}
+      </p>
+
+      {suitability.blockers.map((b) => (
+        <p className="warn" key={b}>
+          {b}
+        </p>
+      ))}
+      {suitability.cautions.map((c) => (
+        <p className="muted" key={c}>
+          {c}
+        </p>
+      ))}
+
+      {!suitability.eligible && !candidate.shortlisted ? (
+        <>
+          <label className="field-label" htmlFor={`override-${bidder.id}`}>
+            Reason for inviting {shortName} anyway
+          </label>
+          <input
+            id={`override-${bidder.id}`}
+            className="input"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+          />
+        </>
+      ) : null}
+    </li>
+  )
+}
+
+/** The old free-text row, unchanged in what it posts. Kept for the genuine
+ *  one-off rather than deleted: forcing every urgent vendor through
+ *  registration is how a shortlist ends up being kept somewhere else. */
+function UnregisteredVendorRow({
+  rfqId,
+  run,
+  busy,
+}: {
+  rfqId: string
+  run: (action: () => Promise<unknown>) => Promise<void>
+  busy: boolean
+}) {
+  const [vendor, setVendor] = useState('')
+  const [prequal, setPrequal] = useState('Under review')
+  const [scopeFit, setScopeFit] = useState(true)
+
+  return (
+    <div className="fxrow">
+      <input
+        className="input"
+        aria-label="Vendor name"
+        placeholder="Vendor"
+        value={vendor}
+        onChange={(e) => setVendor(e.target.value)}
+      />
+      <select
+        className="input"
+        aria-label="Prequalification status"
+        value={prequal}
+        onChange={(e) => setPrequal(e.target.value)}
+      >
+        <option>Approved</option>
+        <option>Under review</option>
+        <option>Suspended</option>
+        <option>Not qualified</option>
+      </select>
+      <label>
+        <input
+          type="checkbox"
+          checked={scopeFit}
+          onChange={(e) => setScopeFit(e.target.checked)}
+        />{' '}
+        Scope fit
+      </label>
+      <button
+        type="button"
+        className="btn btn--quiet"
+        disabled={busy || !vendor.trim()}
+        onClick={() =>
+          run(async () => {
+            await addShortlistEntry(rfqId, {
+              vendor_name: vendor.trim(),
+              prequal_status: prequal,
+              scope_code_fit: scopeFit,
+              included: true,
+            })
+            setVendor('')
+          })
+        }
+      >
+        Add vendor
+      </button>
+    </div>
+  )
+}
+
 /* ------------------------------------------------------------------- Issued */
 
-function IssuedStep({ data, run, busy }: StepProps) {
+function IssuedStep({ data, run, busy }: Omit<StepProps, 'tick'>) {
   const [code, setCode] = useState('')
   const [title, setTitle] = useState('')
   const [docType, setDocType] = useState('Datasheet')

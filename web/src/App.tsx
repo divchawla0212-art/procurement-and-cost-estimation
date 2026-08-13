@@ -13,11 +13,13 @@ import { ComparativeStatement } from './pages/ComparativeStatement'
 import { ExtractionStatus } from './pages/ExtractionStatus'
 import { Setup } from './pages/Setup'
 import { Admin } from './pages/Admin'
+import { Bidders } from './pages/Bidders'
 import { RfqWorkflow } from './pages/RfqWorkflow'
 import { Projects } from './pages/Projects'
 
 type View =
   | 'projects'
+  | 'bidders'
   | 'dashboard'
   | 'setup'
   | 'overview'
@@ -63,17 +65,21 @@ const NAV: {
   // entry is called "Bid sets" rather than "Projects" for the same reason —
   // two rail entries reading "Projects" over two different stores is the first
   // confusion a reader hits. Unifying the two identities is phase 2.
+  // Bidders sits between the two because that is the order the work happens
+  // in: you have projects and their items, you have a list of who may bid, and
+  // only then is there an RFQ to raise against both.
   { view: 'projects', index: '01', label: 'Projects & items', group: 'RFQ process', needsProject: false, needsReview: false },
-  { view: 'workflow', index: '02', label: 'RFQ workflow', group: 'RFQ process', needsProject: false, needsReview: false },
-  { view: 'dashboard', index: '03', label: 'Bid sets', group: 'Bid evaluation', needsProject: false, needsReview: false },
-  { view: 'setup', index: '04', label: 'Set up & ingest', group: 'Bid evaluation', needsProject: false, needsReview: false },
-  { view: 'extraction', index: '05', label: 'Extraction status', group: 'Bid evaluation', needsProject: true, needsReview: false },
-  { view: 'overview', index: '06', label: 'Overview', group: 'Bid evaluation', needsProject: true, needsReview: true },
-  { view: 'matrix', index: '07', label: 'Compliance matrix', group: 'Bid evaluation', needsProject: true, needsReview: true },
-  { view: 'statement', index: '08', label: 'Comparative statement', group: 'Bid evaluation', needsProject: true, needsReview: true },
+  { view: 'bidders', index: '02', label: 'Bidders', group: 'RFQ process', needsProject: false, needsReview: false },
+  { view: 'workflow', index: '03', label: 'RFQ workflow', group: 'RFQ process', needsProject: false, needsReview: false },
+  { view: 'dashboard', index: '04', label: 'Bid sets', group: 'Bid evaluation', needsProject: false, needsReview: false },
+  { view: 'setup', index: '05', label: 'Set up & ingest', group: 'Bid evaluation', needsProject: false, needsReview: false },
+  { view: 'extraction', index: '06', label: 'Extraction status', group: 'Bid evaluation', needsProject: true, needsReview: false },
+  { view: 'overview', index: '07', label: 'Overview', group: 'Bid evaluation', needsProject: true, needsReview: true },
+  { view: 'matrix', index: '08', label: 'Compliance matrix', group: 'Bid evaluation', needsProject: true, needsReview: true },
+  { view: 'statement', index: '09', label: 'Comparative statement', group: 'Bid evaluation', needsProject: true, needsReview: true },
   {
     view: 'admin',
-    index: '09',
+    index: '10',
     label: 'Users and access',
     group: 'Administration',
     needsProject: false,
@@ -361,6 +367,7 @@ export default function App() {
               <ExtractionStatus slug={active.slug} projectName={active.name} />
             )}
             {view === 'projects' && <Projects key={navEpoch} />}
+            {view === 'bidders' && <Bidders key={navEpoch} />}
             {view === 'workflow' && <RfqWorkflow key={navEpoch} />}
             {view === 'admin' && user.role === 'admin' && (
               // The role check is repeated here rather than trusted from the
