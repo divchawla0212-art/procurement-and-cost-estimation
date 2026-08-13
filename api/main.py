@@ -26,6 +26,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import dotenv
 
@@ -601,5 +602,47 @@ def ingest(
 # every /api route, and only when a build is present — a source checkout without
 # `npm run build` keeps serving the API alone.
 _WEB_DIST = os.environ.get("WEB_DIST", os.path.join(os.path.dirname(__file__), "..", "web", "dist"))
+
+
+class _SpaFiles(StaticFiles):
+    """`StaticFiles`, plus the client-side routes it knows nothing about.
+
+    Every screen has a URL now, so the browser will ask this server for paths
+    like `/projects/prj_5049beff` that exist only in the React bundle's route
+    table. Plain `StaticFiles(html=True)` serves `index.html` for *directory*
+    requests and 404s everything else, so without this every bookmarked or
+    shared deep link breaks on reload.
+
+    Only a missing *file* falls through to the app shell. A real asset is still
+    served as itself — answering `/assets/index-abc.js` with HTML is a blank
+    page and a syntax error in the console, which is a worse failure than the
+    404 it replaces.
+
+    `/api/*` never reaches here: this is mounted after every API route, so
+    FastAPI matches those first, and an unmatched one is refused by the auth
+    middleware before routing is consulted at all. That carve-out is the point —
+    a catch-all that answered `/api/typo` with a 200 and a page would turn a
+    readable refusal into a JSON parse error at the call site.
+
+    Serving the shell without a session is not a hole. It is the same static
+    HTML for everyone, it carries no project data, and every byte the screens
+    render arrives through `/api`, which fails closed.
+    """
+
+    async def get_response(self, path: str, scope):
+        # Starlette signals a missing file by *raising* rather than returning a
+        # 404 response, so both have to be handled: the raise is the live path
+        # today, and the returned-404 branch keeps this correct if that changes.
+        try:
+            response = await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code != 404:
+                raise
+            return await super().get_response("index.html", scope)
+        if response.status_code == 404:
+            return await super().get_response("index.html", scope)
+        return response
+
+
 if os.path.isdir(_WEB_DIST):
-    app.mount("/", StaticFiles(directory=_WEB_DIST, html=True), name="web")
+    app.mount("/", _SpaFiles(directory=_WEB_DIST, html=True), name="web")
