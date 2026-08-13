@@ -39,6 +39,7 @@ def test_every_api_route_outside_the_allowlist_requires_a_session(tmp_path, monk
                 .replace("{user_id}", "any")
                 .replace("{project_id}", "any")
                 .replace("{rfq_id}", "any")
+                .replace("{item_id}", "any")
                 .replace("{entry_id}", "any")
                 .replace("{line_id}", "any")
             )

@@ -516,3 +516,232 @@ def test_a_frozen_package_refuses_a_later_edit_with_409(tmp_path, monkeypatch):
 
     body = client.get(f"/api/workflow/rfqs/{rfq_id}").json()
     assert body["technical_package"]["revision"] == "Rev. B"
+
+
+# -- projects and items: read, edit, delete ----------------------------------
+
+
+def create_item(client: TestClient, project_id: str, **over) -> dict:
+    body = {
+        "item_type": "Gas generator",
+        "description": "2 x 5 MW containerised",
+        "qty": 2,
+        "uom": "no",
+        "discipline": "Electrical",
+        "estimated_value_aed": 18_000_000,
+    }
+    body.update(over)
+    r = client.post(f"/api/workflow/projects/{project_id}/items", json=body)
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def raise_rfq(client: TestClient, project_id: str, item_ids: list[str]) -> dict:
+    r = client.post("/api/workflow/rfqs", json={
+        "project_id": project_id,
+        "item_ids": item_ids,
+        "reference": "ADP-RFQ-2026-014",
+        "package": "Power generation",
+        "discipline": "Electrical",
+        "value_estimate_aed": 18_000_000,
+    })
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def test_the_project_roster_carries_item_and_rfq_counts(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    project_id = create_project(client)
+    create_item(client, project_id)
+
+    row = client.get("/api/workflow/projects").json()["projects"][0]
+
+    assert row["item_count"] == 1
+    assert row["rfq_count"] == 0
+
+
+def test_project_detail_returns_project_items_and_rfqs(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    project_id = create_project(client)
+    item = create_item(client, project_id)
+    raise_rfq(client, project_id, [item["id"]])
+
+    body = client.get(f"/api/workflow/projects/{project_id}").json()
+
+    assert body["project"]["id"] == project_id
+    assert [i["id"] for i in body["items"]] == [item["id"]]
+    assert [r["reference"] for r in body["rfqs"]] == ["ADP-RFQ-2026-014"]
+
+
+def test_project_detail_404s_for_an_unknown_project(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    assert client.get("/api/workflow/projects/prj_missing").status_code == 404
+
+
+def test_patching_a_project_changes_only_what_was_sent(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    project_id = create_project(client)
+
+    r = client.patch(f"/api/workflow/projects/{project_id}", json={"status": "On Hold"})
+
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "On Hold"
+    assert r.json()["code"] == "HAL"      # untouched, because it was not sent
+
+
+def test_patching_an_unknown_project_404s(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    r = client.patch("/api/workflow/projects/prj_missing", json={"status": "Closed"})
+    assert r.status_code == 404
+
+
+def test_patching_a_project_to_an_unknown_status_is_422(tmp_path, monkeypatch):
+    """`status` is a Literal on the model, so an unknown value is a malformed
+    request, not a workflow refusal."""
+    client = _client(tmp_path, monkeypatch)
+    project_id = create_project(client)
+    r = client.patch(f"/api/workflow/projects/{project_id}", json={"status": "Mothballed"})
+    assert r.status_code == 422
+
+
+def test_patching_an_item_changes_only_what_was_sent(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    project_id = create_project(client)
+    item = create_item(client, project_id)
+
+    r = client.patch(
+        f"/api/workflow/projects/{project_id}/items/{item['id']}", json={"qty": 3}
+    )
+
+    assert r.status_code == 200, r.text
+    assert r.json()["qty"] == 3
+    assert r.json()["item_type"] == "Gas generator"
+
+
+def test_patching_an_item_through_the_wrong_project_404s(tmp_path, monkeypatch):
+    """The path names a parent; an item that is not that parent's is not found
+    under it, whatever the item id says."""
+    client = _client(tmp_path, monkeypatch)
+    project_id = create_project(client)
+    item = create_item(client, project_id)
+    other_id = create_project(client)
+
+    r = client.patch(
+        f"/api/workflow/projects/{other_id}/items/{item['id']}", json={"qty": 9}
+    )
+
+    assert r.status_code == 404
+    # And nothing was written: a 404 must not half-land an edit.
+    detail = client.get(f"/api/workflow/projects/{project_id}").json()
+    assert detail["items"][0]["qty"] == 2
+
+
+def test_an_item_dated_outside_the_live_period_warns_but_is_stored(tmp_path, monkeypatch):
+    """Advisory, not a refusal: needing something after a live period closes is
+    unusual, not impossible, and a hard block would make the field unusable in
+    exactly those cases."""
+    client = _client(tmp_path, monkeypatch)
+    project_id = create_project(client)   # live period 2026-01-01 .. 2029-12-31
+
+    body = create_item(client, project_id, required_on_site="2030-06-01")
+
+    assert body["live_period_warning"] is not None
+    assert "2030-06-01" in body["live_period_warning"]
+    assert len(client.get(f"/api/workflow/projects/{project_id}").json()["items"]) == 1
+
+
+def test_an_item_dated_inside_the_live_period_carries_no_warning(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    project_id = create_project(client)
+    body = create_item(client, project_id, required_on_site="2027-06-01")
+    assert body["live_period_warning"] is None
+
+
+def test_an_item_with_no_date_carries_no_warning(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    project_id = create_project(client)
+    assert create_item(client, project_id)["live_period_warning"] is None
+
+
+def test_patching_an_items_date_outside_the_live_period_warns(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    project_id = create_project(client)
+    item = create_item(client, project_id)
+
+    r = client.patch(
+        f"/api/workflow/projects/{project_id}/items/{item['id']}",
+        json={"required_on_site": "2030-06-01"},
+    )
+
+    assert r.status_code == 200, r.text
+    assert "live period" in r.json()["live_period_warning"].lower()
+
+
+def test_deleting_an_item_an_rfq_covers_is_409_and_writes_nothing(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    project_id = create_project(client)
+    item = create_item(client, project_id)
+    raise_rfq(client, project_id, [item["id"]])
+
+    r = client.delete(f"/api/workflow/projects/{project_id}/items/{item['id']}")
+
+    assert r.status_code == 409
+    assert "ADP-RFQ-2026-014" in r.json()["detail"]
+    assert len(client.get(f"/api/workflow/projects/{project_id}").json()["items"]) == 1
+
+
+def test_deleting_a_free_item_is_204(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    project_id = create_project(client)
+    item = create_item(client, project_id)
+
+    r = client.delete(f"/api/workflow/projects/{project_id}/items/{item['id']}")
+
+    assert r.status_code == 204
+    assert client.get(f"/api/workflow/projects/{project_id}").json()["items"] == []
+
+
+def test_deleting_an_item_through_the_wrong_project_404s(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    project_id = create_project(client)
+    item = create_item(client, project_id)
+    other_id = create_project(client)
+
+    r = client.delete(f"/api/workflow/projects/{other_id}/items/{item['id']}")
+
+    assert r.status_code == 404
+    assert len(client.get(f"/api/workflow/projects/{project_id}").json()["items"]) == 1
+
+
+def test_deleting_an_unknown_item_404s(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    project_id = create_project(client)
+    r = client.delete(f"/api/workflow/projects/{project_id}/items/itm_missing")
+    assert r.status_code == 404
+
+
+def test_deleting_a_project_holding_an_rfq_is_409(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    project_id = create_project(client)
+    item = create_item(client, project_id)
+    raise_rfq(client, project_id, [item["id"]])
+
+    r = client.delete(f"/api/workflow/projects/{project_id}")
+
+    assert r.status_code == 409
+    assert "ADP-RFQ-2026-014" in r.json()["detail"]
+    assert client.get(f"/api/workflow/projects/{project_id}").status_code == 200
+
+
+def test_deleting_a_project_takes_its_items_with_it(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    project_id = create_project(client)
+    create_item(client, project_id)
+
+    assert client.delete(f"/api/workflow/projects/{project_id}").status_code == 204
+    assert client.get("/api/workflow/projects").json()["projects"] == []
+
+
+def test_deleting_an_unknown_project_404s(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    assert client.delete("/api/workflow/projects/prj_missing").status_code == 404

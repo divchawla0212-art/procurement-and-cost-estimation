@@ -28,6 +28,7 @@ from api.auth.deps import current_user
 from api.auth.models import User
 from workflow import persistence
 from workflow.gates import GateResult, check_gate
+from workflow.models.project import Item, ProjectStatus
 from workflow.models.rfq import Attachment
 from workflow.stages import STAGE_ORDER, Stage
 from workflow.store import WorkflowStore
@@ -67,6 +68,41 @@ class ItemIn(BaseModel):
     estimated_value_aed: int
     required_on_site: date | None = None
     is_long_lead: bool = False
+
+
+class ProjectPatch(BaseModel):
+    """Every field optional: an absent key means "leave it alone", never "clear
+    it". `id` is deliberately not a field here — identity is not editable, and
+    `WorkflowStore` refuses it a second time for callers that never come
+    through this route.
+
+    `status` keeps its `ProjectStatus` literal rather than widening to `str`, so
+    an unknown status is a 422 from the request model rather than a value the
+    store has to reject.
+    """
+
+    name: str | None = None
+    code: str | None = None
+    client: str | None = None
+    location: str | None = None
+    live_period_start: date | None = None
+    live_period_end: date | None = None
+    currency: str | None = None
+    status: ProjectStatus | None = None
+
+
+class ItemPatch(BaseModel):
+    """Partial for the same reason as `ProjectPatch`. `project_id` is absent:
+    an item's parent is not editable."""
+
+    item_type: str | None = None
+    description: str | None = None
+    qty: float | None = None
+    uom: str | None = None
+    discipline: str | None = None
+    estimated_value_aed: int | None = None
+    required_on_site: date | None = None
+    is_long_lead: bool | None = None
 
 
 class RfqIn(BaseModel):
@@ -128,9 +164,53 @@ def get_stages() -> dict:
     return {"stages": [s.value for s in STAGE_ORDER]}
 
 
+def _item_payload(store: WorkflowStore, item: Item) -> dict:
+    """An item, plus the live-period caution when its delivery date falls
+    outside the project's window.
+
+    Non-blocking on purpose: needing something after a live period closes is
+    unusual, not impossible, and a hard refusal would make the field unusable in
+    exactly those cases. Merged into the item's own object rather than wrapping
+    it — the convention `get_rfq` already uses for a bid's VDRL tally, and it
+    keeps `response["id"]` working for callers that predate the warning.
+    """
+    warning = (
+        store.validate_against_live_period(item.project_id, item.required_on_site)
+        if item.required_on_site
+        else None
+    )
+    return {**item.model_dump(mode="json"), "live_period_warning": warning}
+
+
+def _owned_item(store: WorkflowStore, project_id: str, item_id: str) -> Item:
+    """The path names a parent, so an item belonging to a different project is
+    *not found* under this one. Returning it anyway would let a caller edit any
+    item by pairing its id with any project id.
+
+    Called inside `locked_update`, never before it: this is a read that gates a
+    write, and the `HTTPException` it raises leaves the block without reaching
+    `save`.
+    """
+    item = store.get_item(item_id)
+    if item is None or item.project_id != project_id:
+        raise HTTPException(status_code=404, detail=f"Unknown item: {item_id}")
+    return item
+
+
 @router.get("/projects")
 def list_projects() -> dict:
-    return {"projects": [p.model_dump(mode="json") for p in _read().list_projects()]}
+    """The roster the Projects screen reads. Counts are computed here so no
+    screen re-derives them from a list it only partly holds."""
+    store = _read()
+    rfqs = store.list_rfqs()
+    return {"projects": [
+        {
+            **p.model_dump(mode="json"),
+            "item_count": len(store.items_for_project(p.id)),
+            "rfq_count": sum(1 for r in rfqs if r.project_id == p.id),
+        }
+        for p in store.list_projects()
+    ]}
 
 
 @router.post("/projects", status_code=201)
@@ -138,6 +218,53 @@ def create_project(body: ProjectIn) -> dict:
     with persistence.locked_update(_root()) as store:
         project = store.create_project(**body.model_dump())
     return project.model_dump(mode="json")
+
+
+@router.get("/projects/{project_id}")
+def get_project(project_id: str) -> dict:
+    """One project with its items and its RFQs, in one response.
+
+    The detail screen renders all three, and three separate calls could return
+    three different generations of the document.
+    """
+    store = _read()
+    project = store.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"Unknown project: {project_id}")
+    return {
+        "project": project.model_dump(mode="json"),
+        "items": [i.model_dump(mode="json") for i in store.items_for_project(project_id)],
+        "rfqs": [r.model_dump(mode="json") for r in store.list_rfqs(project_id=project_id)],
+    }
+
+
+@router.patch("/projects/{project_id}")
+def patch_project(project_id: str, body: ProjectPatch) -> dict:
+    try:
+        with persistence.locked_update(_root()) as store:
+            # `exclude_unset` is what makes this partial: a field the client
+            # never sent is absent from the dict, so the store leaves it alone.
+            # `exclude_none` would be wrong — it cannot tell "not sent" from
+            # "sent as null".
+            project = store.update_project(project_id, body.model_dump(exclude_unset=True))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return project.model_dump(mode="json")
+
+
+@router.delete("/projects/{project_id}", status_code=204)
+def delete_project(project_id: str) -> None:
+    try:
+        with persistence.locked_update(_root()) as store:
+            store.delete_project(project_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        # The project exists and the request is well-formed; the workflow
+        # refuses because an RFQ still hangs off it.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/projects/{project_id}/items")
@@ -153,9 +280,37 @@ def create_item(project_id: str, body: ItemIn) -> dict:
     try:
         with persistence.locked_update(_root()) as store:
             item = store.create_item(project_id=project_id, **body.model_dump())
+            payload = _item_payload(store, item)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return item.model_dump(mode="json")
+    return payload
+
+
+@router.patch("/projects/{project_id}/items/{item_id}")
+def patch_item(project_id: str, item_id: str, body: ItemPatch) -> dict:
+    try:
+        with persistence.locked_update(_root()) as store:
+            _owned_item(store, project_id, item_id)
+            item = store.update_item(item_id, body.model_dump(exclude_unset=True))
+            payload = _item_payload(store, item)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return payload
+
+
+@router.delete("/projects/{project_id}/items/{item_id}", status_code=204)
+def delete_item(project_id: str, item_id: str) -> None:
+    try:
+        with persistence.locked_update(_root()) as store:
+            _owned_item(store, project_id, item_id)
+            store.delete_item(item_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        # An RFQ covers it. The item exists; the workflow refuses.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/rfqs")
