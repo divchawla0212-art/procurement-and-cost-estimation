@@ -39,33 +39,44 @@ type View =
 // carries it is hidden from a reviewer's nav. This is presentation only — the
 // server enforces the actual boundary, and every `/api/admin/*` route refuses
 // a reviewer whether or not this list ever mentioned it.
+// Grouped, because the two halves of this app answer different questions. The
+// RFQ process is where a package is scoped, issued and awarded; bid evaluation
+// is the ingestion pipeline and the screens that read what it extracted. They
+// share a project but not a workflow, and a single flat list of eight entries
+// invited the reading that ingestion *is* the process.
+type NavGroup = 'RFQ process' | 'Bid evaluation' | 'Administration'
+
 const NAV: {
   view: View
   index: string
   label: string
+  group: NavGroup
   needsProject: boolean
   needsReview: boolean
   roles?: Array<User['role']>
 }[] = [
-  { view: 'dashboard', index: '00', label: 'Dashboard', needsProject: false, needsReview: false },
-  { view: 'setup', index: '01', label: 'Set up & ingest', needsProject: false, needsReview: false },
-  { view: 'overview', index: '02', label: 'Overview', needsProject: true, needsReview: true },
-  { view: 'matrix', index: '03', label: 'Compliance matrix', needsProject: true, needsReview: true },
-  { view: 'statement', index: '04', label: 'Comparative statement', needsProject: true, needsReview: true },
-  { view: 'extraction', index: '05', label: 'Extraction status', needsProject: true, needsReview: false },
   // The RFQ workflow is project-agnostic in Phase 1: its projects are the
   // workflow store's own, not the ingestion `slug`s in the switcher above, so
   // it carries neither gate. Phase 2 unifies the two project identities.
-  { view: 'workflow', index: '06', label: 'RFQ workflow', needsProject: false, needsReview: false },
+  { view: 'workflow', index: '01', label: 'RFQ workflow', group: 'RFQ process', needsProject: false, needsReview: false },
+  { view: 'dashboard', index: '02', label: 'Projects', group: 'Bid evaluation', needsProject: false, needsReview: false },
+  { view: 'setup', index: '03', label: 'Set up & ingest', group: 'Bid evaluation', needsProject: false, needsReview: false },
+  { view: 'extraction', index: '04', label: 'Extraction status', group: 'Bid evaluation', needsProject: true, needsReview: false },
+  { view: 'overview', index: '05', label: 'Overview', group: 'Bid evaluation', needsProject: true, needsReview: true },
+  { view: 'matrix', index: '06', label: 'Compliance matrix', group: 'Bid evaluation', needsProject: true, needsReview: true },
+  { view: 'statement', index: '07', label: 'Comparative statement', group: 'Bid evaluation', needsProject: true, needsReview: true },
   {
     view: 'admin',
-    index: '07',
+    index: '08',
     label: 'Users and access',
+    group: 'Administration',
     needsProject: false,
     needsReview: false,
     roles: ['admin'],
   },
 ]
+
+const NAV_GROUPS: NavGroup[] = ['RFQ process', 'Bid evaluation', 'Administration']
 
 export default function App() {
   const { user, ready, logout } = useAuth()
@@ -79,7 +90,9 @@ export default function App() {
     () => (user ? fetchProjects() : Promise.resolve([])),
     [tick, user],
   )
-  const [view, setView] = useState<View>('dashboard')
+  // The RFQ process is the front door: signing in lands on the workflow, not
+  // on the project roster, which is a bid-evaluation screen one step in.
+  const [view, setView] = useState<View>('workflow')
   const [slug, setSlug] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   // A vendor to pre-select when the matrix is opened from the Overview, so a
@@ -197,28 +210,36 @@ export default function App() {
             </select>
           </div>
 
-          <div className="rail-label">Screens</div>
-          <ul className="rail-nav">
-            {visibleNav.map((item) => {
-              const disabled =
-                (item.needsProject && !slug) ||
-                (item.needsReview && !reviewReachable(active?.has_results))
-              return (
-                <li key={item.view}>
-                  <button
-                    type="button"
-                    className={view === item.view ? 'active' : ''}
-                    disabled={disabled}
-                    style={disabled ? { opacity: 0.4, cursor: 'not-allowed' } : undefined}
-                    onClick={() => navigate(item.view)}
-                  >
-                    <span className="nav-index">{item.index}</span>
-                    {item.label}
-                  </button>
-                </li>
-              )
-            })}
-          </ul>
+          {NAV_GROUPS.map((group) => {
+            const items = visibleNav.filter((item) => item.group === group)
+            if (items.length === 0) return null
+            return (
+              <div key={group}>
+                <div className="rail-label">{group}</div>
+                <ul className="rail-nav">
+                  {items.map((item) => {
+                    const disabled =
+                      (item.needsProject && !slug) ||
+                      (item.needsReview && !reviewReachable(active?.has_results))
+                    return (
+                      <li key={item.view}>
+                        <button
+                          type="button"
+                          className={view === item.view ? 'active' : ''}
+                          disabled={disabled}
+                          style={disabled ? { opacity: 0.4, cursor: 'not-allowed' } : undefined}
+                          onClick={() => navigate(item.view)}
+                        >
+                          <span className="nav-index">{item.index}</span>
+                          {item.label}
+                        </button>
+                      </li>
+                    )
+                  })}
+                </ul>
+              </div>
+            )
+          })}
         </div>
 
         <div className="rail-account">

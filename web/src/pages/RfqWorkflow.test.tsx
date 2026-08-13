@@ -5,7 +5,14 @@ import type { RfqRoster } from '../types'
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
-  return { ...actual, fetchRfqRoster: vi.fn() }
+  return {
+    ...actual,
+    fetchRfqRoster: vi.fn(),
+    // Opening an RFQ mounts RfqDetail, which fetches. Pending forever, so its
+    // loading state is the stable proof that navigation happened; what the
+    // detail view then renders is RfqDetail.test.tsx's job.
+    fetchRfq: vi.fn(() => new Promise<never>(() => {})),
+  }
 })
 
 import { fetchRfqRoster } from '../api'
@@ -81,23 +88,21 @@ describe('RfqWorkflow', () => {
     expect(screen.queryAllByRole('listitem', { current: 'step' })).toHaveLength(0)
   })
 
-  it('shows the selected RFQ stage on the strip and its history below', async () => {
+  it('opens the RFQ when its reference is clicked', async () => {
     await renderRoster(
       roster({ rfqs: [RFQ], stage_counts: { ...roster().stage_counts, Issued: 1 } }),
     )
-    fireEvent.click(screen.getByText('ADP-RFQ-2026-014'))
+    fireEvent.click(screen.getByRole('button', { name: 'ADP-RFQ-2026-014' }))
 
-    expect(screen.getByRole('listitem', { current: 'step' })).toHaveTextContent('Issued')
-    expect(screen.getByText(/stage history/i)).toBeInTheDocument()
-    expect(screen.getByText(/retender — all bids over estimate/)).toBeInTheDocument()
+    expect(screen.getByText(/Loading RFQ…/i)).toBeInTheDocument()
   })
 
-  it('keeps both passes through a stage in the history', async () => {
-    // A retender walks the same edge twice; neither entry may overwrite the
-    // other, so the list must show two rows, not one.
+  it('reaches the RFQ by keyboard, not only by pointer', async () => {
+    // The reference is a real button rather than a clickable row precisely so
+    // this works; a row with an onClick has no accessible name and no focus.
     await renderRoster(roster({ rfqs: [RFQ] }))
-    fireEvent.click(screen.getByText('ADP-RFQ-2026-014'))
-    expect(screen.getByText(/RFQ created/)).toBeInTheDocument()
-    expect(screen.getByText(/retender/)).toBeInTheDocument()
+    const link = screen.getByRole('button', { name: 'ADP-RFQ-2026-014' })
+    link.focus()
+    expect(link).toHaveFocus()
   })
 })

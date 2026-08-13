@@ -53,6 +53,10 @@ vi.mock('./api', async (importOriginal) => {
     // real data.
     fetchComplianceMatrix: vi.fn(() => new Promise<never>(() => {})),
     fetchSetup: vi.fn(() => new Promise<never>(() => {})),
+    // Signing in now lands on the RFQ workflow, so its roster fetch fires on
+    // every render here. Pending forever, like the others: these tests assert
+    // on the nav rail, not on workflow data.
+    fetchRfqRoster: vi.fn(() => new Promise<never>(() => {})),
   }
 })
 
@@ -285,5 +289,36 @@ describe('the dead "Review compliance matrix" button (I2 leftover)', () => {
     await waitFor(() => {
       expect(screen.getByText('Building compliance matrix…')).toBeInTheDocument()
     })
+  })
+})
+
+describe('signing in lands on the RFQ process, not on bid evaluation', () => {
+  it('mounts the RFQ workflow screen on first render', async () => {
+    await renderWithProject('done', true)
+
+    // fetchRfqRoster is mocked pending-forever, so the workflow screen's own
+    // loading state is the stable proof of *which* screen mounted.
+    expect(screen.getByText(/Loading RFQ workflow/i)).toBeInTheDocument()
+    expect(navButton(/RFQ workflow/)).toHaveClass('active')
+  })
+
+  it('groups the rail so ingestion reads as part of bid evaluation', async () => {
+    await renderWithProject('done', true)
+
+    expect(screen.getByText('RFQ process')).toBeInTheDocument()
+    expect(screen.getByText('Bid evaluation')).toBeInTheDocument()
+    // The ingestion and review screens belong to the second group, not the first.
+    for (const label of [/Set up & ingest/, /Extraction status/, /Compliance matrix/]) {
+      expect(navButton(label)).toBeInTheDocument()
+    }
+  })
+
+  it('still lets you leave the workflow for a bid-evaluation screen', async () => {
+    await renderWithProject('done', true)
+
+    fireEvent.click(navButton(/Compliance matrix/))
+
+    expect(screen.queryByText(/Loading RFQ workflow/i)).not.toBeInTheDocument()
+    expect(navButton(/Compliance matrix/)).toHaveClass('active')
   })
 })

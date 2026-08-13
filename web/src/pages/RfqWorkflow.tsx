@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import type { JSX } from 'react'
 import { fetchRfqRoster } from '../api'
-import type { Rfq } from '../types'
 import { useAsync } from '../useAsync'
 import { StageStrip } from '../components/StageStrip'
+import { RfqDetail } from './RfqDetail'
 import {
   Card,
   EmptyState,
@@ -13,37 +13,42 @@ import {
 } from '../components/primitives'
 
 /**
- * The RFQ workflow roster.
+ * The RFQ workflow roster, and the way into one RFQ.
  *
- * Read-only on purpose. Advancing an RFQ is a gated act that needs the person
- * doing it on the record (`by` on every `StageTransition`), and Phase 1 has no
- * identity to bind that to beyond the signed-in session — so this screen shows
- * where every RFQ stands and what each one is waiting on, and leaves the
- * transition controls to the phase that can attribute them properly.
+ * Read-only on purpose. Advancing an RFQ is a gated act that the server
+ * attributes to the session, and the artifact editors that would satisfy a
+ * gate are their own screens; what these two views owe the reader is a clear
+ * account of where every RFQ stands and what each one is waiting on.
  */
 export function RfqWorkflow(): JSX.Element {
   const { data, error, loading } = useAsync(() => fetchRfqRoster(), [])
-  const [selected, setSelected] = useState<string | null>(null)
+  const [openRfqId, setOpenRfqId] = useState<string | null>(null)
 
   if (loading) return <LoadingState label="Loading RFQ workflow…" />
   if (error) return <ErrorState message={error} />
   if (!data) return <ErrorState message="No workflow data was returned." />
 
-  const current = data.rfqs.find((r) => r.id === selected) ?? null
+  if (openRfqId) {
+    return (
+      <RfqDetail
+        rfqId={openRfqId}
+        stages={data.stages}
+        onBack={() => setOpenRfqId(null)}
+      />
+    )
+  }
 
   return (
     <>
       <PageHeader
-        eyebrow="05 · Workflow"
+        eyebrow="01 · RFQ process"
         title="RFQ workflow"
         sub="Where each RFQ stands across the eight process stages."
       />
 
-      <StageStrip
-        stages={data.stages}
-        counts={data.stage_counts}
-        current={current?.stage ?? null}
-      />
+      {/* No `current` on the roster: the strip is a tally of every RFQ here,
+          and marking one of nine stages would misread as "the" stage. */}
+      <StageStrip stages={data.stages} counts={data.stage_counts} />
 
       {data.rfqs.length === 0 ? (
         <EmptyState title="No RFQs yet">
@@ -62,12 +67,18 @@ export function RfqWorkflow(): JSX.Element {
             </thead>
             <tbody>
               {data.rfqs.map((rfq) => (
-                <tr
-                  key={rfq.id}
-                  onClick={() => setSelected(rfq.id === selected ? null : rfq.id)}
-                  aria-selected={rfq.id === selected}
-                >
-                  <td className="mono">{rfq.reference}</td>
+                <tr key={rfq.id}>
+                  <td className="mono">
+                    {/* A button, not a clickable row: a row with an onClick is
+                        unreachable by keyboard and announces nothing. */}
+                    <button
+                      type="button"
+                      className="linkish"
+                      onClick={() => setOpenRfqId(rfq.id)}
+                    >
+                      {rfq.reference}
+                    </button>
+                  </td>
                   <td>{rfq.package}</td>
                   <td>{rfq.discipline}</td>
                   <td>{rfq.stage}</td>
@@ -78,30 +89,6 @@ export function RfqWorkflow(): JSX.Element {
         </Card>
       )}
 
-      {current ? <RfqHistory rfq={current} /> : null}
     </>
-  )
-}
-
-function RfqHistory({ rfq }: { rfq: Rfq }): JSX.Element {
-  return (
-    <Card title={`${rfq.reference} — stage history`}>
-      <ol className="historylist">
-        {rfq.history.map((entry, i) => (
-          // The index is part of the key on purpose: the same edge can be
-          // walked twice (a retender returns to Issued), so `to_stage` alone
-          // is not unique within one RFQ's history.
-          <li key={`${entry.to_stage}-${i}`}>
-            <span className="mono">{entry.at.slice(0, 10)}</span>{' '}
-            <b>
-              {entry.from_stage ? `${entry.from_stage} → ` : ''}
-              {entry.to_stage}
-            </b>{' '}
-            <span className="muted">by {entry.by}</span>
-            {entry.reason ? <div className="muted">{entry.reason}</div> : null}
-          </li>
-        ))}
-      </ol>
-    </Card>
   )
 }

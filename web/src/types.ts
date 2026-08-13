@@ -271,3 +271,88 @@ export interface RfqRoster {
   stages: string[]
   stage_counts: Record<string, number>
 }
+
+export interface Attachment {
+  doc_code: string
+  title: string
+  revision: string | null
+}
+
+/** The package a vendor bids against. Freezing it is what closes the Scoping
+ *  gate, and it cannot be frozen while any attachment lacks a definite
+ *  revision — "latest" is not something a vendor can quote. */
+export interface TechnicalPackage {
+  rfq_id: string
+  revision: string
+  basis_of_design: string
+  attachments: Attachment[]
+  frozen_at: string | null
+  frozen_by: string | null
+}
+
+export interface ShortlistEntry {
+  rfq_id: string
+  vendor_name: string
+  prequal_status: string
+  scope_code_fit: boolean
+  included: boolean
+  override_by: string | null
+  override_reason: string | null
+}
+
+export interface TbeTemplate {
+  rfq_id: string
+  criteria: string[]
+  source_rfq_reference: string | null
+}
+
+export interface VdrlLine {
+  rfq_id: string
+  doc_code: string
+  title: string
+  doc_type: string
+  mandatory: boolean
+}
+
+/** A bid, with its VDRL tally computed server-side. `vdrl_received` counts
+ *  only documents actually received: an unreadable file is a gap, not a
+ *  delivery, and that rule lives on the server so no screen re-derives it. */
+export interface BidWithVdrl {
+  id: string
+  rfq_id: string
+  vendor_name: string
+  received_at: string
+  headline_price_aed: number
+  currency: string
+  vdrl_received: number
+  vdrl_required: number
+  vdrl_missing: string[]
+  selected: boolean
+}
+
+export interface BidSelection {
+  rfq_id: string
+  selected_bid_ids: string[]
+  selected_by: string
+  rationale: string
+  at: string
+}
+
+/** Whether the next forward stage is reachable, and if not, why not. A blocked
+ *  gate always carries a `reason` — the server never sends a bare `false`. */
+export interface Gate {
+  passed: boolean
+  reason: string | null
+}
+
+export interface RfqDetail {
+  rfq: Rfq
+  gate: Gate
+  technical_package: TechnicalPackage | null
+  shortlist: ShortlistEntry[]
+  shortlist_approved: boolean
+  tbe_template: TbeTemplate | null
+  vdrl: VdrlLine[]
+  bids: BidWithVdrl[]
+  bid_selection: BidSelection | null
+}

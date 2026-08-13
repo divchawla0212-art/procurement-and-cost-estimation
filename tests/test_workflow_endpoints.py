@@ -232,6 +232,61 @@ def test_freezing_a_package_with_an_indefinite_revision_returns_409(tmp_path, mo
     assert "definite revision" in r.json()["detail"]
 
 
+def test_rfq_detail_carries_the_artifacts_each_gate_reads(tmp_path, monkeypatch):
+    """The detail view has to show *why* a stage is blocked, and the reason is
+    always some artifact being absent or unfrozen. Returning the gate sentence
+    without the artifacts behind it leaves the screen unable to say more than
+    "no"."""
+    client = _client(tmp_path, monkeypatch)
+    rfq_id = create_rfq(client)
+
+    body = client.get(f"/api/workflow/rfqs/{rfq_id}").json()
+    assert body["technical_package"] is None
+    assert body["shortlist"] == []
+    assert body["shortlist_approved"] is False
+    assert body["tbe_template"] is None
+    assert body["vdrl"] == []
+    assert body["bids"] == []
+
+    client.put(f"/api/workflow/rfqs/{rfq_id}/technical-package", json={
+        "revision": "Rev. B",
+        "basis_of_design": "129 wellhead tie-ins",
+        "attachments": [{"doc_code": "HAL-PID-001", "title": "P&ID", "revision": "Rev. C"}],
+    })
+    client.post(f"/api/workflow/rfqs/{rfq_id}/technical-package/freeze", json={})
+
+    body = client.get(f"/api/workflow/rfqs/{rfq_id}").json()
+    assert body["technical_package"]["revision"] == "Rev. B"
+    assert body["technical_package"]["frozen_by"] == ADMIN_EMAIL
+    assert body["technical_package"]["attachments"][0]["doc_code"] == "HAL-PID-001"
+    assert body["gate"]["passed"] is True
+
+
+def test_rfq_detail_reports_each_bid_against_its_vdrl(tmp_path, monkeypatch):
+    """`unreadable` must stay distinct from `not_received` all the way to the
+    screen: one is a file to chase, the other a vendor to chase."""
+    client = _client(tmp_path, monkeypatch)
+    rfq_id = create_rfq(client)
+
+    from workflow import persistence
+    with persistence.locked_update(str(tmp_path)) as store:
+        store.add_vdrl_line(rfq_id, doc_code="GA-001", title="GA", doc_type="Doc")
+        store.add_vdrl_line(rfq_id, doc_code="DS-001", title="Datasheet", doc_type="Doc")
+        bid = store.register_bid(rfq_id, vendor_name="Petrofac", headline_price_aed=51_400_000)
+        store.record_vdrl_receipt(bid.id, doc_code="GA-001", state="received", revision="Rev. A")
+        store.record_vdrl_receipt(bid.id, doc_code="DS-001", state="unreadable")
+
+    body = client.get(f"/api/workflow/rfqs/{rfq_id}").json()
+    assert [line["doc_code"] for line in body["vdrl"]] == ["GA-001", "DS-001"]
+
+    assert len(body["bids"]) == 1
+    reported = body["bids"][0]
+    assert reported["vendor_name"] == "Petrofac"
+    assert reported["vdrl_received"] == 1
+    assert reported["vdrl_required"] == 2
+    assert reported["vdrl_missing"] == ["DS-001"], "an unreadable file is not a received one"
+
+
 def test_rfq_roster_counts_every_stage_including_the_empty_ones(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     create_rfq(client)

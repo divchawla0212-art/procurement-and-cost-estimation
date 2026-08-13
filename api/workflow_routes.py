@@ -174,12 +174,48 @@ def _next_forward_gate(store: WorkflowStore, rfq_id: str, stage: Stage) -> GateR
 
 @router.get("/rfqs/{rfq_id}")
 def get_rfq(rfq_id: str) -> dict:
+    """One RFQ, with every artifact its gates read.
+
+    The gate sentence alone tells a reader that a stage is blocked but not what
+    to do about it — every reason here resolves to some artifact being absent,
+    unfrozen or unapproved, so the screen needs them alongside it.
+
+    Each bid carries its own VDRL tally rather than the raw receipts: a caller
+    recomputing "received" from receipt rows would have to re-derive that
+    `unreadable` does not count, and that rule belongs in one place.
+    """
     store = _read()
     rfq = store.get_rfq(rfq_id)
     if rfq is None:
         raise HTTPException(status_code=404, detail=f"Unknown RFQ: {rfq_id}")
-    gate = _next_forward_gate(store, rfq_id, rfq.stage)
-    return {"rfq": rfq.model_dump(mode="json"), "gate": gate.model_dump()}
+
+    package = store.get_technical_package(rfq_id)
+    tbe = store.get_tbe_template(rfq_id)
+    selection = store.get_bid_shortlist(rfq_id)
+    selected = set(selection.selected_bid_ids) if selection else set()
+
+    bids = []
+    for bid in store.bids_for(rfq_id):
+        received, required = store.vdrl_summary(bid.id)
+        bids.append({
+            **bid.model_dump(mode="json"),
+            "vdrl_received": received,
+            "vdrl_required": required,
+            "vdrl_missing": store.missing_vdrl_lines(bid.id),
+            "selected": bid.id in selected,
+        })
+
+    return {
+        "rfq": rfq.model_dump(mode="json"),
+        "gate": _next_forward_gate(store, rfq_id, rfq.stage).model_dump(),
+        "technical_package": package.model_dump(mode="json") if package else None,
+        "shortlist": [e.model_dump(mode="json") for e in store.shortlist_for(rfq_id)],
+        "shortlist_approved": store.is_shortlist_approved(rfq_id),
+        "tbe_template": tbe.model_dump(mode="json") if tbe else None,
+        "vdrl": [line.model_dump(mode="json") for line in store.vdrl_for(rfq_id)],
+        "bids": bids,
+        "bid_selection": selection.model_dump(mode="json") if selection else None,
+    }
 
 
 @router.post("/rfqs/{rfq_id}/transition")

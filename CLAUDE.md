@@ -25,8 +25,8 @@ untracked fixture directories are present, never in pass/fail:
 
 | where | baseline |
 |---|---|
-| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1187 passed, 3 skipped, 0 failed** |
-| CI, and any clean checkout | **1178 passed, 12 skipped, 0 failed** |
+| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1201 passed, 3 skipped, 0 failed** |
+| CI, and any clean checkout | **1192 passed, 12 skipped, 0 failed** |
 
 Anything else is a real regression.
 
@@ -45,11 +45,11 @@ pass on a workstation that has it and skip in CI.
 
 So the CI row is the workstation row with the four corpus-coverage passes, the
 three `data/` passes and the two `pdftotext` passes turned into skips —
-`1178 = 1187 - 4 - 3 - 2`, `12 = 3 + 4 + 3 + 2`; 1190 tests either way. When
+`1192 = 1201 - 4 - 3 - 2`, `12 = 3 + 4 + 3 + 2`; 1204 tests either way. When
 the counts move, measure the workstation row and derive the CI row from it;
 editing the two rows independently is how they drift apart.
 
-**The workstation row is measured, not derived**: **1187 passed, 3 skipped**,
+**The workstation row is measured, not derived**: **1201 passed, 3 skipped**,
 taken on 2026-08-13 on the `rfq-platform-phase-1` branch, in an environment
 with `pdftotext`, `data/` and an ingested multi-vendor `projects/` all present.
 That matters, because a row this file once carried was not. While the auth
@@ -70,7 +70,7 @@ The web suite is separate and not part of either row above — both rows are
 `python -m pytest` counts. Run it with `npm test` under `web/` (vitest,
 non-watching, exits non-zero on failure); `npm run build` also type-checks the
 test files, since `web/tsconfig.app.json` includes `src`. CI runs both, in the
-`web` job of the same workflow. It stands at **45 passed** across 8 files.
+`web` job of the same workflow. It stands at **58 passed** across 9 files.
 
 Component tests that render `App` or `Setup` must mock `auth/context`'s
 `useAuth`, and must return a **stable** object from it — build the value once

@@ -980,3 +980,19 @@ p.warn { margin: 0.5rem 0 0; }
 
 .historylist { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.55rem; }
 .historylist li { border-left: 2px solid var(--border-strong); padding-left: 0.7rem; }
+
+/* Buttons that read as links: the RFQ reference in the roster, and the
+   "back to all RFQs" control on the detail view. Real buttons, because a
+   clickable table row is unreachable by keyboard. */
+.linkish, .linkback {
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  color: var(--accent-ink);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.linkback { font: inherit; letter-spacing: inherit; text-transform: none; }
+.linkish:hover, .linkback:hover { color: var(--accent); }

@@ -5,6 +5,7 @@ import type {
   ProjectDetail,
   ProjectSetup,
   ProjectSummary,
+  RfqDetail,
   RfqRoster,
   Statement,
 } from './types'
@@ -188,3 +189,7 @@ export function fetchRfqRoster(projectId?: string | null): Promise<RfqRoster> {
   return getJson<RfqRoster>(`/api/workflow/rfqs${q}`)
 }
 
+
+export function fetchRfq(rfqId: string): Promise<RfqDetail> {
+  return getJson<RfqDetail>(`/api/workflow/rfqs/${encodeURIComponent(rfqId)}`)
+}
