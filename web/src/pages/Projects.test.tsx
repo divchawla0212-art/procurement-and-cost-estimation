@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { Projects } from './Projects'
-import type { WorkflowProjectSummary } from '../types'
+import { HALIBA_ROW as HALIBA } from './workflow-fixtures'
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
@@ -14,20 +14,6 @@ vi.mock('../api', async (importOriginal) => {
 })
 
 import { createWorkflowProject, fetchWorkflowProjects } from '../api'
-
-const HALIBA: WorkflowProjectSummary = {
-  id: 'prj_1',
-  name: 'Haliba Field Development',
-  code: 'HAL',
-  client: 'Al Dhafra Petroleum',
-  location: 'Haliba field, UAE',
-  live_period_start: '2026-01-01',
-  live_period_end: '2029-12-31',
-  currency: 'AED',
-  status: 'Active',
-  item_count: 4,
-  rfq_count: 1,
-}
 
 function fillProjectForm() {
   const type = (label: string, value: string) =>
