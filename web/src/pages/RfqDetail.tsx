@@ -60,6 +60,7 @@ export function RfqDetail({
       <ShortlistCard data={data} />
       <TbeCard data={data} />
       <VdrlCard data={data} />
+      <ClarificationsCard data={data} />
       <BidsCard data={data} />
       <HistoryCard data={data} />
     </>
@@ -68,6 +69,131 @@ export function RfqDetail({
 
 function Empty({ children }: { children: string }) {
   return <p className="muted">{children}</p>
+}
+
+/**
+ * The clarification round, after it has closed.
+ *
+ * Read-only — the controls live on the wizard's Clarifications step, and this
+ * screen is what an RFQ past that stage shows. Circulation is stated on every
+ * answered query rather than left to be inferred: "was this answer given to
+ * everyone" is exactly the question a disputed award turns on, and Evaluation
+ * argues from this table.
+ */
+function ClarificationsCard({ data }: { data: RfqDetailData }) {
+  if (data.queries.length === 0 && data.addenda.length === 0) {
+    return (
+      <Card title="Clarification register">
+        <Empty>No clarifications were raised and no addenda were issued.</Empty>
+      </Card>
+    )
+  }
+
+  return (
+    <Card title="Clarification register">
+      {data.bid_due_date ? (
+        <p className="muted">
+          Bids due <b>{data.bid_due_date}</b>, as set by an addendum.
+        </p>
+      ) : null}
+
+      {data.queries.length === 0 ? (
+        <Empty>No clarifications were raised.</Empty>
+      ) : (
+        <table className="table">
+          <thead>
+            <tr>
+              <th scope="col">Query</th>
+              <th scope="col">Raised by</th>
+              <th scope="col">Question</th>
+              <th scope="col">Answer</th>
+              <th scope="col">Circulation</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.queries.map((q) => (
+              <tr key={q.id}>
+                <td className="mono">
+                  {q.number}
+                  <div className="muted">{q.state}</div>
+                </td>
+                <td>
+                  {/* The name as it was when they asked, not as the registry
+                      reads today — the same snapshot rule as the shortlist. */}
+                  {q.raised_by_name}
+                  <div className="muted">
+                    {q.category} · {q.raised_on}
+                  </div>
+                </td>
+                <td>{q.question}</td>
+                <td>
+                  {q.answer ?? <span className="muted">—</span>}
+                  {q.answered_by ? (
+                    <div className="muted">{q.answered_by}</div>
+                  ) : null}
+                  {q.withdrawn_reason ? (
+                    <div className="muted">Withdrawn: {q.withdrawn_reason}</div>
+                  ) : null}
+                </td>
+                <td>
+                  {!q.answer ? (
+                    <span className="muted">—</span>
+                  ) : q.circulated ? (
+                    'circulated'
+                  ) : (
+                    <span className="warn">
+                      not circulated: {q.restricted_reason}
+                    </span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {data.addenda.length === 0 ? null : (
+        <>
+          <h3>Addenda</h3>
+          <table className="table">
+            <thead>
+              <tr>
+                <th scope="col">Addendum</th>
+                <th scope="col">Revision</th>
+                <th scope="col">What changed</th>
+                <th scope="col">Issued</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.addenda.map((a) => (
+                <tr key={a.id}>
+                  <td className="mono">{a.number}</td>
+                  <td>
+                    {a.supersedes_revision} → {a.revision}
+                  </td>
+                  <td>
+                    {a.summary}
+                    {a.bid_due_date ? (
+                      <div className="muted">
+                        Bid due date moved to {a.bid_due_date}.
+                      </div>
+                    ) : null}
+                  </td>
+                  <td>
+                    {a.draft ? (
+                      <span className="warn">draft</span>
+                    ) : (
+                      <span className="muted">{a.issued_by}</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </Card>
+  )
 }
 
 function TechnicalPackageCard({ data }: { data: RfqDetailData }) {

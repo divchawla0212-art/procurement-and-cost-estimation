@@ -198,4 +198,87 @@ describe('RfqDetail', () => {
     await show(detail())
     expect(screen.getByText(/cannot be issued without one/)).toBeInTheDocument()
   })
+
+  it('shows the clarification register read-only, with circulation stated', async () => {
+    const base = {
+      rfq_id: 'rfq_abc',
+      raised_by_entry_id: 'sle_1',
+      raised_by_name: 'Al Munara Switchgear LLC',
+      raised_on: '2026-08-13',
+      category: 'Technical' as const,
+      answered_by: 'buyer@adp.ae',
+      answered_at: '2026-08-14T00:00:00Z',
+      withdrawn_reason: null,
+      withdrawn_by: null,
+      withdrawn_at: null,
+      state: 'Answered' as const,
+    }
+    await show(
+      detail({
+        queries: [
+          {
+            ...base,
+            id: 'clq_1',
+            number: 'TQ-001',
+            question: 'Which IO list revision governs?',
+            answer: 'Rev. A.',
+            restricted_reason: null,
+            circulated: true,
+          },
+          {
+            ...base,
+            id: 'clq_2',
+            number: 'TQ-002',
+            question: 'Confirm the frame size.',
+            answer: 'Frame 6.',
+            restricted_reason: "Reveals the bidder's own layout.",
+            circulated: false,
+          },
+        ],
+      }),
+    )
+
+    expect(screen.getByText('TQ-001')).toBeInTheDocument()
+    expect(screen.getByText('circulated')).toBeInTheDocument()
+    expect(
+      screen.getByText(/not circulated: Reveals the bidder's own layout/),
+    ).toBeInTheDocument()
+    // Read-only: none of the wizard's controls appear on this screen.
+    expect(screen.queryByRole('button', { name: /^answer TQ-001$/i })).toBeNull()
+  })
+
+  it('shows an addendum as the package’s revision trail', async () => {
+    await show(
+      detail({
+        addenda: [
+          {
+            id: 'add_1',
+            rfq_id: 'rfq_abc',
+            number: 'ADD-01',
+            supersedes_revision: 'Rev. A',
+            revision: 'Rev. B',
+            summary: 'IO list corrected.',
+            attachments: [],
+            arising_from_query_ids: [],
+            bid_due_date: '2026-10-15',
+            issued_at: '2026-08-16T00:00:00Z',
+            issued_by: 'buyer@adp.ae',
+            draft: false,
+          },
+        ],
+        bid_due_date: '2026-10-15',
+      }),
+    )
+
+    expect(screen.getByText('ADD-01')).toBeInTheDocument()
+    expect(screen.getByText(/Rev\. A → Rev\. B/)).toBeInTheDocument()
+    expect(screen.getAllByText(/2026-10-15/).length).toBeGreaterThan(0)
+  })
+
+  it('says plainly when the round produced nothing', async () => {
+    await show(detail())
+    expect(
+      screen.getByText(/No clarifications were raised and no addenda were issued/),
+    ).toBeInTheDocument()
+  })
 })
