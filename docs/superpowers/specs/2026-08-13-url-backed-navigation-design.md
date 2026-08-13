@@ -45,7 +45,7 @@ was", and nothing at all answers "go forward again".
 
 ## 2. Approach
 
-**React Router v7 in declarative mode** — `BrowserRouter`, `Routes`, `Route`.
+**React Router in declarative mode** — `BrowserRouter`, `Routes`, `Route`.
 Chosen over a hand-rolled History API hook and over an in-memory-only stack.
 
 The trade-off was put explicitly and decided: a hand-rolled hook would have kept
@@ -56,8 +56,11 @@ not require them to trust ~100 lines of bespoke routing. An in-memory stack was
 rejected outright: it leaves the browser's own Back button still exiting the
 app, which is the control a user actually reaches for.
 
-v7 ships the web APIs in the base `react-router` package; `react-router-dom` is
-a deprecated re-export and is not used.
+The installed version is **8.3.0** — this design was drafted against v7, and v8
+is what `npm install react-router` resolves to today. The declarative surface
+this work uses is unchanged between them, verified export by export before
+building on it. Since v7 the web APIs ship in the base `react-router` package;
+`react-router-dom` is a deprecated re-export and is not used.
 
 ## 3. Route table
 
