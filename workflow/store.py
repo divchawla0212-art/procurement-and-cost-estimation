@@ -148,6 +148,47 @@ class WorkflowStore:
         self._items[item_id] = updated
         return updated
 
+    def delete_item(self, item_id: str) -> None:
+        """Refused while any RFQ covers the item.
+
+        An RFQ's `item_ids` is what defines its scope, so removing a member
+        silently would change what vendors were invited to bid on after the
+        fact. The reason names the RFQs, because a refusal that does not say
+        what would unblock it leaves the reader nothing to act on.
+        """
+        if item_id not in self._items:
+            raise KeyError(f"Unknown item: {item_id}")
+        covering = sorted(r.reference for r in self._rfqs.values() if item_id in r.item_ids)
+        if covering:
+            raise ValueError(
+                f"This item cannot be deleted: it is covered by "
+                f"{', '.join(covering)}. Amend or retender first."
+            )
+        del self._items[item_id]
+
+    def delete_project(self, project_id: str) -> None:
+        """Refused while the project holds any RFQ; otherwise the project and
+        every one of its items go together, in this one call.
+
+        The cascade is not a convenience. `persistence.save` replaces the
+        document wholesale, so an item left behind here is an item pointing at
+        a project that no longer exists — and it survives the restart.
+        """
+        if project_id not in self._projects:
+            raise KeyError(f"Unknown project: {project_id}")
+        held = sorted(r.reference for r in self._rfqs.values() if r.project_id == project_id)
+        if held:
+            raise ValueError(
+                f"This project cannot be deleted: it holds "
+                f"{', '.join(held)}. Delete or retender first."
+            )
+        # Materialised before the first deletion: mutating a dict while
+        # iterating its values raises.
+        doomed = [i.id for i in self._items.values() if i.project_id == project_id]
+        for item_id in doomed:
+            del self._items[item_id]
+        del self._projects[project_id]
+
     def validate_against_live_period(self, project_id: str, when: date) -> str | None:
         """Returns None when `when` is in range, otherwise the reason it is not.
         A reason string rather than a bare False, so a caller can show the user

@@ -626,3 +626,92 @@ def test_freezing_twice_is_refused():
     store.freeze_package(rfq.id, by="lead.engineer@example.com")
     with pytest.raises(ValueError, match="already frozen"):
         store.freeze_package(rfq.id, by="someone.else@example.com")
+
+
+# -- deletion, and its two referential guards --------------------------------
+#
+# Both guards are reads that gate a write, so they live here in the store —
+# the route runs the whole method inside `persistence.locked_update`. A check
+# made in the caller and a write made here would be two critical sections, and
+# two concurrent deletes could each read "safe".
+
+
+def test_deleting_an_item_covered_by_an_rfq_is_refused_and_names_the_rfq():
+    store = make_store()
+    p = make_project(store)
+    item = make_item(store, p.id)
+    make_rfq(store, p.id, [item.id])
+
+    with pytest.raises(ValueError) as exc:
+        store.delete_item(item.id)
+
+    # The reason must name what blocks it. A bare refusal leaves the user with
+    # nothing to act on — the same rule the stage gates already follow.
+    assert "ADP-RFQ-2026-014" in str(exc.value)
+    assert store.get_item(item.id) is not None
+
+
+def test_deleting_an_item_no_rfq_covers_removes_it():
+    store = make_store()
+    p = make_project(store)
+    item = make_item(store, p.id)
+
+    store.delete_item(item.id)
+
+    assert store.get_item(item.id) is None
+    assert store.items_for_project(p.id) == []
+
+
+def test_deleting_an_unknown_item_raises():
+    with pytest.raises(KeyError):
+        make_store().delete_item("itm_missing")
+
+
+def test_deleting_a_project_removes_its_items_in_the_same_call():
+    """The cascade is the whole point: `save` replaces the document wholesale,
+    so an item left behind here is an item pointing at a project that is gone —
+    and it persists."""
+    store = make_store()
+    p = make_project(store)
+    generator = make_item(store, p.id, "Generator")
+    cable = make_item(store, p.id, "Cable")
+
+    store.delete_project(p.id)
+
+    assert store.get_project(p.id) is None
+    assert store.get_item(generator.id) is None
+    assert store.get_item(cable.id) is None
+
+
+def test_deleting_a_project_leaves_another_projects_items_alone():
+    store = make_store()
+    doomed = make_project(store)
+    kept = make_project(store)
+    doomed_item = make_item(store, doomed.id)
+    kept_item = make_item(store, kept.id)
+
+    store.delete_project(doomed.id)
+
+    assert store.get_item(doomed_item.id) is None
+    assert store.get_item(kept_item.id) is not None
+    assert store.get_project(kept.id) is not None
+
+
+def test_deleting_a_project_holding_an_rfq_is_refused_and_names_it():
+    store = make_store()
+    p = make_project(store)
+    item = make_item(store, p.id)
+    make_rfq(store, p.id, [item.id])
+
+    with pytest.raises(ValueError) as exc:
+        store.delete_project(p.id)
+
+    assert "ADP-RFQ-2026-014" in str(exc.value)
+    # Nothing half-deleted: the guard raises before anything is removed.
+    assert store.get_project(p.id) is not None
+    assert store.get_item(item.id) is not None
+
+
+def test_deleting_an_unknown_project_raises():
+    with pytest.raises(KeyError):
+        make_store().delete_project("prj_missing")
