@@ -14,8 +14,10 @@ import { ExtractionStatus } from './pages/ExtractionStatus'
 import { Setup } from './pages/Setup'
 import { Admin } from './pages/Admin'
 import { RfqWorkflow } from './pages/RfqWorkflow'
+import { Projects } from './pages/Projects'
 
 type View =
+  | 'projects'
   | 'dashboard'
   | 'setup'
   | 'overview'
@@ -55,19 +57,23 @@ const NAV: {
   needsReview: boolean
   roles?: Array<User['role']>
 }[] = [
-  // The RFQ workflow is project-agnostic in Phase 1: its projects are the
-  // workflow store's own, not the ingestion `slug`s in the switcher above, so
-  // it carries neither gate. Phase 2 unifies the two project identities.
-  { view: 'workflow', index: '01', label: 'RFQ workflow', group: 'RFQ process', needsProject: false, needsReview: false },
-  { view: 'dashboard', index: '02', label: 'Projects', group: 'Bid evaluation', needsProject: false, needsReview: false },
-  { view: 'setup', index: '03', label: 'Set up & ingest', group: 'Bid evaluation', needsProject: false, needsReview: false },
-  { view: 'extraction', index: '04', label: 'Extraction status', group: 'Bid evaluation', needsProject: true, needsReview: false },
-  { view: 'overview', index: '05', label: 'Overview', group: 'Bid evaluation', needsProject: true, needsReview: true },
-  { view: 'matrix', index: '06', label: 'Compliance matrix', group: 'Bid evaluation', needsProject: true, needsReview: true },
-  { view: 'statement', index: '07', label: 'Comparative statement', group: 'Bid evaluation', needsProject: true, needsReview: true },
+  // Both RFQ-process screens are project-agnostic in the sense these two gates
+  // mean it: their projects are the workflow store's own, not the ingestion
+  // `slug`s in the switcher above, so neither gate applies. The Bid-evaluation
+  // entry is called "Bid sets" rather than "Projects" for the same reason —
+  // two rail entries reading "Projects" over two different stores is the first
+  // confusion a reader hits. Unifying the two identities is phase 2.
+  { view: 'projects', index: '01', label: 'Projects & items', group: 'RFQ process', needsProject: false, needsReview: false },
+  { view: 'workflow', index: '02', label: 'RFQ workflow', group: 'RFQ process', needsProject: false, needsReview: false },
+  { view: 'dashboard', index: '03', label: 'Bid sets', group: 'Bid evaluation', needsProject: false, needsReview: false },
+  { view: 'setup', index: '04', label: 'Set up & ingest', group: 'Bid evaluation', needsProject: false, needsReview: false },
+  { view: 'extraction', index: '05', label: 'Extraction status', group: 'Bid evaluation', needsProject: true, needsReview: false },
+  { view: 'overview', index: '06', label: 'Overview', group: 'Bid evaluation', needsProject: true, needsReview: true },
+  { view: 'matrix', index: '07', label: 'Compliance matrix', group: 'Bid evaluation', needsProject: true, needsReview: true },
+  { view: 'statement', index: '08', label: 'Comparative statement', group: 'Bid evaluation', needsProject: true, needsReview: true },
   {
     view: 'admin',
-    index: '08',
+    index: '09',
     label: 'Users and access',
     group: 'Administration',
     needsProject: false,
@@ -90,9 +96,12 @@ export default function App() {
     () => (user ? fetchProjects() : Promise.resolve([])),
     [tick, user],
   )
-  // The RFQ process is the front door: signing in lands on the workflow, not
-  // on the project roster, which is a bid-evaluation screen one step in.
-  const [view, setView] = useState<View>('workflow')
+  // The project is the top-level container the client gives us, so signing in
+  // lands on the project roster. Phase 1 landed on the RFQ workflow on the
+  // reasoning that ingestion is not the process; that still holds — this is
+  // one step further up the same half of the app, not a move back to the
+  // other one.
+  const [view, setView] = useState<View>('projects')
   const [slug, setSlug] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   // A vendor to pre-select when the matrix is opened from the Overview, so a
@@ -331,6 +340,7 @@ export default function App() {
             {view === 'extraction' && active && (
               <ExtractionStatus slug={active.slug} projectName={active.name} />
             )}
+            {view === 'projects' && <Projects />}
             {view === 'workflow' && <RfqWorkflow />}
             {view === 'admin' && user.role === 'admin' && (
               // The role check is repeated here rather than trusted from the

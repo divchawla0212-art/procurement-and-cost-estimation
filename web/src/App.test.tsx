@@ -293,8 +293,34 @@ describe('the dead "Review compliance matrix" button (I2 leftover)', () => {
 })
 
 describe('signing in lands on the RFQ process, not on bid evaluation', () => {
-  it('mounts the RFQ workflow screen on first render', async () => {
+  it('mounts the projects screen on first render', async () => {
+    // The project is the top-level container the client gives us, so the front
+    // door is the project roster. This replaces the phase-1 assertion that the
+    // RFQ workflow mounted first: the landing screen moved one step up the
+    // same half of the app, deliberately.
     await renderWithProject('done', true)
+
+    expect(navButton(/Projects & items/)).toHaveClass('active')
+    expect(screen.queryByText(/Loading RFQ workflow/i)).not.toBeInTheDocument()
+  })
+
+  it('names the two project concepts differently in the rail', async () => {
+    // Two entries reading "Projects" over two different stores is the first
+    // confusion a reader hits, so the bid-evaluation one is "Bid sets".
+    await renderWithProject('done', true)
+
+    expect(navButton(/Projects & items/)).toBeInTheDocument()
+    expect(navButton(/Bid sets/)).toBeInTheDocument()
+    // Exactly one rail entry says "Projects" — the workflow one. The
+    // bid-evaluation entry used to say it too, which is what this guards.
+    // (Nav names carry their index prefix, so these are unanchored.)
+    expect(screen.getAllByRole('button', { name: /Projects/ })).toHaveLength(1)
+  })
+
+  it('still reaches the RFQ workflow from the rail', async () => {
+    await renderWithProject('done', true)
+
+    fireEvent.click(navButton(/RFQ workflow/))
 
     // fetchRfqRoster is mocked pending-forever, so the workflow screen's own
     // loading state is the stable proof of *which* screen mounted.
@@ -313,7 +339,7 @@ describe('signing in lands on the RFQ process, not on bid evaluation', () => {
     }
   })
 
-  it('still lets you leave the workflow for a bid-evaluation screen', async () => {
+  it('still lets you leave the RFQ process for a bid-evaluation screen', async () => {
     await renderWithProject('done', true)
 
     fireEvent.click(navButton(/Compliance matrix/))

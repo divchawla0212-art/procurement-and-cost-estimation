@@ -25,8 +25,8 @@ untracked fixture directories are present, never in pass/fail:
 
 | where | baseline |
 |---|---|
-| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1229 passed, 3 skipped, 0 failed** |
-| CI, and any clean checkout | **1220 passed, 12 skipped, 0 failed** |
+| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1269 passed, 3 skipped, 0 failed** |
+| CI, and any clean checkout | **1260 passed, 12 skipped, 0 failed** |
 
 Anything else is a real regression.
 
@@ -45,11 +45,11 @@ pass on a workstation that has it and skip in CI.
 
 So the CI row is the workstation row with the four corpus-coverage passes, the
 three `data/` passes and the two `pdftotext` passes turned into skips —
-`1220 = 1229 - 4 - 3 - 2`, `12 = 3 + 4 + 3 + 2`; 1232 tests either way. When
+`1260 = 1269 - 4 - 3 - 2`, `12 = 3 + 4 + 3 + 2`; 1272 tests either way. When
 the counts move, measure the workstation row and derive the CI row from it;
 editing the two rows independently is how they drift apart.
 
-**The workstation row is measured, not derived**: **1229 passed, 3 skipped**,
+**The workstation row is measured, not derived**: **1269 passed, 3 skipped**,
 taken on 2026-08-13 on the `rfq-platform-phase-1` branch, in an environment
 with `pdftotext`, `data/` and an ingested multi-vendor `projects/` all present.
 That matters, because a row this file once carried was not. While the auth
@@ -66,11 +66,23 @@ The jump from 1097 is the RFQ workflow: 83 tests across
 touches a fixture directory or a provider key, so every one of them lands in
 both rows.
 
+The further 40 on top of that are the project → item hierarchy, in the same
+four files: the store's updates and delete guards, the five project/item
+routes, and the eight-row mutation matrix in `test_workflow_persistence.py`.
+Same story — no fixture directory, no provider key, both rows.
+
 The web suite is separate and not part of either row above — both rows are
 `python -m pytest` counts. Run it with `npm test` under `web/` (vitest,
 non-watching, exits non-zero on failure); `npm run build` also type-checks the
 test files, since `web/tsconfig.app.json` includes `src`. CI runs both, in the
-`web` job of the same workflow. It stands at **70 passed** across 10 files.
+`web` job of the same workflow. It stands at **105 passed** across 13 files.
+
+`web/src/pages/workflow-fixtures.ts` is test data in a non-test module on
+purpose. Importing fixtures from a `.test.tsx` file re-runs that file's
+`describe` blocks inside the importing suite, and its hoisted
+`vi.mock('../api')` factory wins over the importer's — so a fetcher the first
+file did not mock arrives unmocked, as `mockResolvedValue is not a function`.
+Nothing in `src/` imports it at runtime, so it never reaches the bundle.
 
 Component tests that render `App` or `Setup` must mock `auth/context`'s
 `useAuth`, and must return a **stable** object from it — build the value once
@@ -218,6 +230,26 @@ them, so keeping them apart stops a reader assuming one set covers both.
   `test_auth_middleware.py`'s route sweep covers them; a new path parameter
   needs adding to that test's probe substitutions, which is what its assertion
   is there to force.
+- **Deleting a project takes its items with it, in the same call.** `save`
+  replaces the document wholesale, so an item pruned in memory but not in the
+  cascade is an item pointing at a project that is gone — and it survives the
+  restart. The cascade materialises its id list *before* the first deletion and
+  filters on `project_id`; dropping either half is a shipped orphan.
+- **Nothing is deleted out from under a live reference.** An item covered by any
+  RFQ, and a project holding any RFQ, both refuse with a reason naming the RFQ.
+  Both guards live in the store method — they are reads that gate a write, and
+  the route runs the whole method inside `locked_update`. This is the same rule
+  as the auth store, and the third place this repository has needed it.
+- **An update is partial, and never touches identity or parentage.** `changes`
+  carries only what the caller sent (`model_dump(exclude_unset=True)`), so an
+  absent field is left alone rather than cleared. `id` and `project_id` are
+  refused: moving an item between projects would change which project's RFQs
+  may cover it without either RFQ record changing. Updates rebuild through the
+  model rather than `model_copy(update=...)`, which skips validation outright.
+- **The live-period check is advisory.** An item whose `required_on_site` falls
+  outside the project window is stored, with the reason returned alongside it as
+  `live_period_warning`. A hard refusal would make the field unusable in exactly
+  the cases where a late delivery is the fact being recorded.
 - **A frozen technical package is immutable, and shortlist approval does not
   outlive an edit.** Both are guards on going *back* a step: a frozen package
   refuses a later write (vendors bid against that revision), and adding or

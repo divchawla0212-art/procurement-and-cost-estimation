@@ -27,8 +27,8 @@ export function Dashboard(props: DashboardProps): JSX.Element {
   return (
     <>
       <PageHeader
-        eyebrow="Portfolio"
-        title="Projects"
+        eyebrow="Bid sets"
+        title="Bid sets"
         sub="Every tender you are evaluating. Open one to review its compliance matrix and comparative statement, or start a new one."
         actions={
           <button type="button" className="btn btn-primary" onClick={onNew}>
