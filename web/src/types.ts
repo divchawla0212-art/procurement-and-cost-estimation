@@ -266,19 +266,6 @@ export interface Rfq {
   history: StageTransition[]
 }
 
-/** Whether the next forward stage is reachable, and if not, why not. A
- *  blocked gate always carries a `reason` — the server never sends a bare
- *  `false`. */
-export interface Gate {
-  passed: boolean
-  reason: string | null
-}
-
-export interface RfqDetail {
-  rfq: Rfq
-  gate: Gate
-}
-
 export interface RfqRoster {
   rfqs: Rfq[]
   stages: string[]

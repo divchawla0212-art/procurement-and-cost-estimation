@@ -5,8 +5,6 @@ import type {
   ProjectDetail,
   ProjectSetup,
   ProjectSummary,
-  Rfq,
-  RfqDetail,
   RfqRoster,
   Statement,
 } from './types'
@@ -190,25 +188,3 @@ export function fetchRfqRoster(projectId?: string | null): Promise<RfqRoster> {
   return getJson<RfqRoster>(`/api/workflow/rfqs${q}`)
 }
 
-export function fetchRfq(rfqId: string): Promise<RfqDetail> {
-  return getJson<RfqDetail>(`/api/workflow/rfqs/${encodeURIComponent(rfqId)}`)
-}
-
-/**
- * Advance (or recover) an RFQ. A closed gate answers 409 with the reason in
- * `detail`, which `unwrap` raises verbatim — the caller shows the server's
- * sentence rather than inventing its own, because the gate is the only thing
- * that knows why it said no.
- */
-export function transitionRfq(
-  rfqId: string,
-  target: string,
-  by: string,
-  reason?: string,
-): Promise<Rfq> {
-  return sendJson<Rfq>(
-    `/api/workflow/rfqs/${encodeURIComponent(rfqId)}/transition`,
-    'POST',
-    { target, by, reason: reason ?? null },
-  )
-}
