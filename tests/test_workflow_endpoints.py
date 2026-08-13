@@ -9,22 +9,14 @@ the top of `tests/test_api_setup.py`: importing it at module scope runs
 `load_dotenv()` during collection and can turn a permanently-skipped live-API
 test into a billed call.
 """
-import pytest
 from fastapi.testclient import TestClient
 
-from tests.auth_helpers import signed_in_admin
+from tests.auth_helpers import ADMIN_EMAIL, ADMIN_PASSWORD, signed_in_admin
 
 
-@pytest.fixture(autouse=True)
-def _fresh_workflow_store():
-    """The workflow store is a module-level singleton, so state would otherwise
-    leak between tests in file order."""
-    from api import workflow_routes
-
-    workflow_routes.workflow_store = workflow_routes.WorkflowStore()
-    yield
-
-
+# No store-resetting fixture is needed: the workflow lives in
+# `<ROOT>/workflow.json` and every test monkeypatches `ROOT` to its own
+# `tmp_path`, so isolation comes from the same mechanism the auth suites use.
 def _client(tmp_path, monkeypatch) -> TestClient:
     monkeypatch.setenv("PROCUREMENT_PROJECTS_ROOT", str(tmp_path))
     monkeypatch.setenv("LLM_PROVIDER", "mock")
@@ -254,14 +246,48 @@ def test_terminal_stage_reports_a_passing_gate(tmp_path, monkeypatch):
     """PO Issued has no successor, so there is nothing left to block."""
     client = _client(tmp_path, monkeypatch)
     rfq_id = create_rfq(client)
-    from api import workflow_routes
+    from workflow import persistence
     from workflow.stages import Stage
 
-    rfq = workflow_routes.workflow_store.get_rfq(rfq_id)
-    workflow_routes.workflow_store._rfqs[rfq_id] = rfq.model_copy(
-        update={"stage": Stage.PO_ISSUED}
-    )
+    # Park the RFQ at the terminal stage directly rather than walking eight
+    # gated transitions — this test is about the last one, not the road there.
+    with persistence.locked_update(str(tmp_path)) as store:
+        store._rfqs[rfq_id] = store.get_rfq(rfq_id).model_copy(
+            update={"stage": Stage.PO_ISSUED}
+        )
 
     body = client.get(f"/api/workflow/rfqs/{rfq_id}").json()
     assert body["rfq"]["stage"] == "PO Issued"
     assert body["gate"]["passed"] is True
+
+
+def test_an_rfq_survives_a_restart(tmp_path, monkeypatch):
+    """The point of the whole persistence layer: a fresh TestClient is a fresh
+    process's worth of in-memory state, and the RFQ is still there."""
+    client = _client(tmp_path, monkeypatch)
+    rfq_id = create_rfq(client)
+
+    import api.main as api_main
+    fresh = TestClient(api_main.app)
+    fresh.post("/api/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD})
+
+    body = fresh.get(f"/api/workflow/rfqs/{rfq_id}").json()
+    assert body["rfq"]["reference"] == "ADP-RFQ-2026-014"
+
+
+def test_a_refused_transition_leaves_the_document_untouched(tmp_path, monkeypatch):
+    """`locked_update` writes only on a clean exit, so a closed gate cannot
+    half-land a transition on disk."""
+    client = _client(tmp_path, monkeypatch)
+    rfq_id = create_rfq(client)
+    from workflow import persistence
+
+    before = persistence.load(str(tmp_path)).get_rfq(rfq_id)
+    r = client.post(f"/api/workflow/rfqs/{rfq_id}/transition", json={
+        "target": "Shortlisting", "by": "amal@example.com",
+    })
+    assert r.status_code == 409
+
+    after = persistence.load(str(tmp_path)).get_rfq(rfq_id)
+    assert after.stage is before.stage
+    assert len(after.history) == len(before.history)

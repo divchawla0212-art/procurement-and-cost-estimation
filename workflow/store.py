@@ -16,9 +16,16 @@ from workflow.stages import Stage, is_allowed
 
 
 class WorkflowStore:
-    """In-memory store for workflow entities. Phase 1 carries no database —
-    persistence arrives in Phase 2, and every method here is written so that
-    swapping the dicts for a repository does not change a caller."""
+    """In-memory store for workflow entities.
+
+    Durability lives in `workflow/persistence.py`, which is the one module
+    allowed to read and write the dicts below directly — it serializes the
+    whole store to `<ROOT>/workflow.json` and rebuilds it. Keeping that there
+    rather than here leaves this class a pure model with no notion of disk, so
+    replacing the file with a database is a change to that module alone. Any
+    field added here needs a matching line in both `to_document` and
+    `from_document`, or it silently fails to survive a restart.
+    """
 
     def __init__(self) -> None:
         self._projects: dict[str, Project] = {}
