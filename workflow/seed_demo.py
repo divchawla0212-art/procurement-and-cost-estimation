@@ -48,6 +48,7 @@ from workflow import persistence
 from workflow.avl_import import ADNOC, ASTRA, parse_avl
 from workflow.bidders import evaluate
 from workflow.models.bidder import Bidder
+from workflow.models.rfq import Attachment
 from workflow.stages import Stage
 from workflow.store import WorkflowStore
 
@@ -255,8 +256,6 @@ def _projects_and_items(store: WorkflowStore, as_of: date) -> None:
 
 def _freeze(store: WorkflowStore, rfq_id: str, revision: str, basis: str,
             attachments: list[tuple[str, str, str]]) -> None:
-    from workflow.models.rfq import Attachment
-
     store.set_technical_package(
         rfq_id,
         revision=revision,
@@ -390,6 +389,24 @@ def build_demo_store(as_of: date, bidders: list[Bidder] | None = None) -> Workfl
            ("DS-002", "Filled compressor datasheet", "Datasheet", True),
            ("TP-003", "Factory acceptance test procedure", "Test Procedure", True),
            ("CE-004", "Motor efficiency certificate", "Certificate", False)])
+    # One issued addendum, so the demo shows a package that moved and the trail
+    # that records how. The frozen Rev. B is superseded rather than edited —
+    # `set_technical_package` still refuses it, which is the whole point.
+    _ruu01_addendum = store.draft_addendum(
+        "rfq_ruu01", addendum_id="add_ruu01_01", revision="Rev. C",
+        summary=(
+            "Site ambient revised to 50 °C; capacity re-stated at the new "
+            "condition."
+        ),
+        attachments=[
+            Attachment(doc_code="RUU-DS-220", title="Compressor datasheet",
+                       revision="Rev. C"),
+            Attachment(doc_code="RUU-PID-031", title="Instrument air P&ID",
+                       revision="Rev. A"),
+        ],
+        bid_due_date=date(2026, 9, 15),
+    )
+    store.issue_addendum("rfq_ruu01", _ruu01_addendum.id, by=BUYER)
 
     # -- RUU-02: clarifications. The technical query round.
     store.create_rfq(
@@ -416,6 +433,49 @@ def build_demo_store(as_of: date, bidders: list[Bidder] | None = None) -> Workfl
            ("CE-002", "ATEX / IECEx certificates", "Certificate", True)])
     store.transition("rfq_ruu02", Stage.CLARIFICATIONS, by=BUYER,
                      reason="Two technical queries raised on the IO list")
+    # The two queries that reason names. Until this phase the sentence was the
+    # only evidence they existed; now the register holds them, one answered and
+    # circulated, one still open — which is what leaves the exit gate visibly
+    # closed on screen rather than only in a test.
+    _ruu02_invited = store.shortlist_for("rfq_ruu02")
+    _answered = store.raise_query(
+        "rfq_ruu02", _ruu02_invited[0].id, query_id="clq_ruu02_01",
+        question=(
+            "The IO list shows 42 transmitters and the instrument index shows "
+            "40. Which governs for pricing?"
+        ),
+        category="Technical", raised_on=date(2026, 8, 10),
+    )
+    store.answer_query(
+        "rfq_ruu02", _answered.id,
+        answer="The instrument index at Rev. A governs. Price 40 transmitters.",
+        by=BUYER,
+    )
+    store.raise_query(
+        "rfq_ruu02", _ruu02_invited[min(1, len(_ruu02_invited) - 1)].id,
+        query_id="clq_ruu02_02",
+        question=(
+            "Confirm whether the cyber-security compliance statement is "
+            "required at bid stage or at award."
+        ),
+        category="Technical", raised_on=date(2026, 8, 12),
+    )
+    # A draft addendum, so the second half of the gate's sentence is visible
+    # too. Deliberately left unissued: an issued one here would clear the gate.
+    store.draft_addendum(
+        "rfq_ruu02", addendum_id="add_ruu02_01", revision="Rev. B",
+        summary=(
+            "Instrument index corrected to 40 transmitters, matching the answer "
+            "to TQ-001."
+        ),
+        attachments=[
+            Attachment(doc_code="RUU-IDX-410", title="Instrument index",
+                       revision="Rev. B"),
+            Attachment(doc_code="RUU-IO-411", title="IO list", revision="Rev. B"),
+        ],
+        arising_from_query_ids=[_answered.id],
+        bid_due_date=date(2026, 9, 30),
+    )
 
     # -- JAT-01: bids received, not yet opened for evaluation. The gate to
     # Evaluation is closed until bids are selected, which is the next click.

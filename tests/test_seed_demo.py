@@ -16,7 +16,7 @@ from datetime import date, timedelta
 
 import pytest
 
-from workflow import persistence, seed_demo
+from workflow import clarifications, persistence, seed_demo
 from workflow.avl_import import ADNOC, ASTRA, parse_avl
 from workflow.gates import check_gate
 from workflow.stages import Stage, is_backward
@@ -308,3 +308,60 @@ def test_main_refuses_an_avl_path_that_does_not_exist(tmp_path):
     # And wrote nothing, rather than falling back to the invented cast and
     # leaving the operator thinking the import worked.
     assert persistence.load(str(tmp_path)).list_bidders() == []
+
+
+# -- the clarification round -------------------------------------------------
+#
+# `rfq_ruu02`s transition reason has always claimed "Two technical queries
+# raised on the IO list". Until this phase that sentence was the only evidence
+# they existed.
+
+
+def test_the_clarifications_rfq_actually_holds_the_queries_it_claims():
+    store = seed_demo.build_demo_store(AS_OF)
+    queries = store.queries_for("rfq_ruu02")
+    assert [q.number for q in queries] == ["TQ-001", "TQ-002"]
+    assert [clarifications.state(q) for q in queries] == ["Answered", "Open"]
+    assert clarifications.is_circulated(queries[0]) is True
+
+
+def test_the_seeded_demo_has_a_visibly_closed_clarifications_gate():
+    store = seed_demo.build_demo_store(AS_OF)
+    gate = check_gate(store, "rfq_ruu02", Stage.CLARIFICATIONS, Stage.BIDS_RECEIVED)
+    assert gate.passed is False
+    assert "TQ-002" in gate.reason
+    assert "ADD-01" in gate.reason
+
+
+def test_an_issued_addendum_leaves_a_readable_revision_trail():
+    store = seed_demo.build_demo_store(AS_OF)
+    issued = [a for a in store.addenda_for("rfq_ruu01")
+              if not clarifications.is_draft(a)]
+    assert [a.number for a in issued] == ["ADD-01"]
+    assert issued[0].supersedes_revision == "Rev. B"
+    package = store.get_technical_package("rfq_ruu01")
+    assert package.revision == issued[0].revision
+    assert package.frozen_at is not None
+
+
+def test_every_seeded_query_points_at_a_live_shortlist_entry():
+    """The invariant the removal guard owns, asserted across the whole seed."""
+    store = seed_demo.build_demo_store(AS_OF)
+    for rfq in store.list_rfqs():
+        live = {e.id for e in store.shortlist_for(rfq.id)}
+        for query in store.queries_for(rfq.id):
+            assert query.raised_by_entry_id in live, (
+                f"{query.number} on {rfq.reference} points at a removed entry"
+            )
+
+
+def test_the_seeded_clarifications_survive_a_round_trip(tmp_path):
+    store = seed_demo.build_demo_store(AS_OF)
+    persistence.save(str(tmp_path), store)
+    reloaded = persistence.load(str(tmp_path))
+    assert [q.id for q in reloaded.queries_for("rfq_ruu02")] == [
+        q.id for q in store.queries_for("rfq_ruu02")
+    ]
+    assert [a.id for a in reloaded.addenda_for("rfq_ruu01")] == [
+        a.id for a in store.addenda_for("rfq_ruu01")
+    ]
