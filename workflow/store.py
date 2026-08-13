@@ -1,7 +1,13 @@
 from datetime import date, datetime, timezone
 
+from workflow import clarifications
 from workflow.bidders import evaluate
 from workflow.models.bid import Bid, BidShortlist, ReceiptState, VdrlReceipt
+from workflow.models.clarification import (
+    Addendum,
+    ClarificationQuery,
+    QueryCategory,
+)
 from workflow.models.bidder import Bidder, PrequalStatus
 from workflow.models.project import Item, Project
 from workflow.models.rfq import (
@@ -82,6 +88,8 @@ class WorkflowStore:
         self._bids: dict[str, Bid] = {}
         self._receipts: dict[str, list[VdrlReceipt]] = {}
         self._bid_shortlists: dict[str, BidShortlist] = {}
+        self._queries: dict[str, list[ClarificationQuery]] = {}
+        self._addenda: dict[str, list[Addendum]] = {}
 
     # -- projects ---------------------------------------------------------
 
@@ -692,3 +700,142 @@ class WorkflowStore:
 
     def get_bid_shortlist(self, rfq_id: str) -> BidShortlist | None:
         return self._bid_shortlists.get(rfq_id)
+
+    # -- clarifications ---------------------------------------------------
+    #
+    # Every refusal below is a read that gates a write, so it lives here and not
+    # in the route: the route runs the whole method inside
+    # `persistence.locked_update`, which makes the check and the write one
+    # critical section. The same rule as the auth store and `delete_item`.
+
+    def _query_or_raise(self, rfq_id: str, query_id: str) -> ClarificationQuery:
+        for query in self._queries.get(rfq_id, []):
+            if query.id == query_id:
+                return query
+        raise KeyError(f"Unknown clarification query: {query_id}")
+
+    def _replace_query(
+        self, rfq_id: str, updated: ClarificationQuery
+    ) -> ClarificationQuery:
+        """Replace in place, by id. Addressing by position would rewrite the
+        wrong row the moment a list was reordered — the same rule the
+        procurement store states as "by id, never by index"."""
+        self._queries[rfq_id] = [
+            updated if q.id == updated.id else q for q in self._queries.get(rfq_id, [])
+        ]
+        return updated
+
+    def raise_query(
+        self,
+        rfq_id: str,
+        entry_id: str,
+        question: str,
+        category: QueryCategory,
+        raised_on: date,
+        query_id: str | None = None,
+    ) -> ClarificationQuery:
+        """A query is raised against this RFQ by somebody invited to it.
+
+        `raised_by_name` is snapshotted here for the same reason
+        `ShortlistEntry` snapshots `vendor_name`: the register records who asked
+        at the time they asked, and a later rename does not rewrite it.
+        """
+        if rfq_id not in self._rfqs:
+            raise KeyError(f"Unknown RFQ: {rfq_id}")
+        entry = next(
+            (e for e in self._shortlists.get(rfq_id, []) if e.id == entry_id), None
+        )
+        if entry is None:
+            # Two different failures, and they are not the same fact. An id that
+            # exists on another RFQ's shortlist is a caller mixing up RFQs; one
+            # that exists nowhere is a caller inventing a vendor.
+            if any(
+                e.id == entry_id
+                for entries in self._shortlists.values()
+                for e in entries
+            ):
+                raise ValueError(
+                    f"Shortlist entry {entry_id} does not belong to RFQ {rfq_id}."
+                )
+            raise KeyError(f"Unknown shortlist entry: {entry_id}")
+        if not entry.included:
+            raise ValueError(
+                f"{entry.vendor_name} is not included on this shortlist, so they "
+                f"cannot raise a clarification against it."
+            )
+        if not question.strip():
+            raise ValueError("A clarification needs a question.")
+
+        query = ClarificationQuery(
+            **_with_id(query_id),
+            rfq_id=rfq_id,
+            number=clarifications.next_query_number(
+                self._queries.get(rfq_id, []), category
+            ),
+            raised_by_entry_id=entry.id,
+            raised_by_name=entry.vendor_name,
+            raised_on=raised_on,
+            category=category,
+            question=question.strip(),
+        )
+        self._queries.setdefault(rfq_id, []).append(query)
+        return query
+
+    def answer_query(
+        self,
+        rfq_id: str,
+        query_id: str,
+        answer: str,
+        by: str,
+        restricted_reason: str | None = None,
+    ) -> ClarificationQuery:
+        """Answering circulates to the whole included shortlist. Withholding
+        requires an attributed reason.
+
+        That is the shape `override_reason` and `rationale` already use, and the
+        reason a `circulate` boolean was refused: a boolean makes a restricted
+        answer indistinguishable from an oversight, and an answer given to one
+        bidder and not the others is the classic tender-fairness failure.
+
+        Re-answering is allowed and overwrites — a buyer revising an answer is
+        normal practice, and the revision goes to the same audience. Answering a
+        withdrawn query is not: it would put a live answer under a dead
+        question.
+        """
+        query = self._query_or_raise(rfq_id, query_id)
+        if query.withdrawn_at is not None:
+            raise ValueError(
+                f"{query.number} was withdrawn and can no longer be answered."
+            )
+        if not answer.strip():
+            raise ValueError("An answer cannot be empty.")
+        if restricted_reason is not None and not restricted_reason.strip():
+            raise ValueError(
+                "Withholding an answer from the rest of the shortlist needs a "
+                "recorded reason. Leave it unset to circulate the answer."
+            )
+        return self._replace_query(rfq_id, query.model_copy(update={
+            "answer": answer.strip(),
+            "answered_by": by,
+            "answered_at": datetime.now(timezone.utc),
+            "restricted_reason": restricted_reason.strip() if restricted_reason else None,
+        }))
+
+    def withdraw_query(
+        self, rfq_id: str, query_id: str, reason: str, by: str
+    ) -> ClarificationQuery:
+        """Take a query out of the round. The number stays in the register — it
+        has already been quoted to a bidder in writing."""
+        query = self._query_or_raise(rfq_id, query_id)
+        if query.withdrawn_at is not None:
+            raise ValueError(f"{query.number} is already withdrawn.")
+        if not reason.strip():
+            raise ValueError("Withdrawing a clarification needs a recorded reason.")
+        return self._replace_query(rfq_id, query.model_copy(update={
+            "withdrawn_reason": reason.strip(),
+            "withdrawn_by": by,
+            "withdrawn_at": datetime.now(timezone.utc),
+        }))
+
+    def queries_for(self, rfq_id: str) -> list[ClarificationQuery]:
+        return list(self._queries.get(rfq_id, []))
