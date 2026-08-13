@@ -1,0 +1,1094 @@
+<title>The RFQ Process — how the platform runs a tender</title>
+
+<style>
+  /* ---------------------------------------------------------------
+     Tokens. Light is the bare :root. Dark is redefined twice — once
+     for the un-stamped "system" viewer, once for an explicit toggle.
+     No component rule ever declares a colour outside this block.
+     --------------------------------------------------------------- */
+  :root {
+    --paper:      #f4f6f4;
+    --surface:    #ffffff;
+    --surface-2:  #eceff0;
+    --ink:        #121a1c;
+    --ink-soft:   #33454a;
+    --muted:      #5c6a6d;
+    --line:       #d3dadb;
+    --line-soft:  #e4e9e9;
+
+    --accent:     #0b6b62;
+    --accent-ink: #075049;
+    --accent-wash:#e2efec;
+
+    --gate:       #8a5a00;
+    --gate-wash:  #f6efdf;
+    --block:      #a8331f;
+    --block-wash: #f8eae6;
+
+    --shadow: 0 1px 2px rgba(18, 26, 28, .05);
+
+    --serif: "Iowan Old Style", "Charter", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+    --sans: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+    --mono: "Cascadia Mono", "Cascadia Code", Consolas, "SF Mono", ui-monospace, "Roboto Mono", monospace;
+
+    --measure: 68ch;
+    --rail-col: 44px;
+    --rail-x: 21px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper:      #0d1214;
+      --surface:    #141c1e;
+      --surface-2:  #1b2426;
+      --ink:        #e7eeec;
+      --ink-soft:   #c2d0cd;
+      --muted:      #8fa3a3;
+      --line:       #2a3639;
+      --line-soft:  #202b2d;
+
+      --accent:     #4cbfae;
+      --accent-ink: #7fd6c7;
+      --accent-wash:#12312e;
+
+      --gate:       #d9a63f;
+      --gate-wash:  #2c2413;
+      --block:      #e58063;
+      --block-wash: #331b16;
+
+      --shadow: 0 1px 2px rgba(0, 0, 0, .4);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --paper:      #0d1214;
+    --surface:    #141c1e;
+    --surface-2:  #1b2426;
+    --ink:        #e7eeec;
+    --ink-soft:   #c2d0cd;
+    --muted:      #8fa3a3;
+    --line:       #2a3639;
+    --line-soft:  #202b2d;
+
+    --accent:     #4cbfae;
+    --accent-ink: #7fd6c7;
+    --accent-wash:#12312e;
+
+    --gate:       #d9a63f;
+    --gate-wash:  #2c2413;
+    --block:      #e58063;
+    --block-wash: #331b16;
+
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4);
+  }
+
+  /* --------------------------------------------------------------- */
+
+  html { -webkit-text-size-adjust: 100%; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16.5px;
+    line-height: 1.62;
+    margin: 0;
+    padding: 0 clamp(1rem, 5vw, 3rem) 6rem;
+  }
+
+  .sheet {
+    max-width: 78ch;
+    margin: 0 auto;
+  }
+
+  p, li { color: var(--ink-soft); }
+  p { max-width: var(--measure); }
+
+  h1, h2, h3, h4 { font-family: var(--serif); color: var(--ink); text-wrap: balance; font-weight: 600; }
+  h1 { font-size: clamp(2.1rem, 5.5vw, 3.1rem); line-height: 1.08; letter-spacing: -.015em; margin: 0; }
+  h2 { font-size: clamp(1.45rem, 3.4vw, 1.85rem); line-height: 1.2; margin: 0; }
+  h3 { font-size: 1.18rem; line-height: 1.3; margin: 0; }
+  h4 { font-size: 1rem; line-height: 1.35; margin: 0; font-family: var(--sans); font-weight: 640; }
+
+  a { color: var(--accent-ink); text-underline-offset: 2px; text-decoration-thickness: 1px; }
+  a:hover { color: var(--accent); }
+  a:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    border-radius: 2px;
+  }
+
+  code, .mono { font-family: var(--mono); font-size: .86em; }
+  code {
+    background: var(--surface-2);
+    border: 1px solid var(--line-soft);
+    border-radius: 3px;
+    padding: .06em .34em;
+    color: var(--ink);
+    overflow-wrap: anywhere;
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: .7rem;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  hr.rule { border: 0; border-top: 1px solid var(--line); margin: 0; }
+
+  /* ---- masthead ------------------------------------------------- */
+
+  header.masthead {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    padding: clamp(3rem, 9vw, 5.5rem) 0 2.25rem;
+  }
+  .masthead .lede {
+    font-family: var(--serif);
+    font-size: clamp(1.12rem, 2.5vw, 1.32rem);
+    line-height: 1.5;
+    color: var(--ink-soft);
+    max-width: 62ch;
+    margin: 0;
+  }
+  .stamp {
+    display: inline-flex;
+    align-items: center;
+    gap: .55rem;
+    align-self: flex-start;
+    border: 1px solid var(--accent);
+    color: var(--accent-ink);
+    border-radius: 2px;
+    padding: .25rem .6rem;
+    font-family: var(--mono);
+    font-size: .68rem;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+  }
+  .stamp::before {
+    content: "";
+    width: 6px; height: 6px;
+    background: var(--accent);
+    transform: rotate(45deg);
+  }
+
+  .factstrip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .factstrip div { background: var(--surface); padding: .85rem 1rem; display: flex; flex-direction: column; gap: .2rem; }
+  .factstrip dt, .factstrip .k {
+    font-family: var(--mono); font-size: .66rem; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--muted);
+  }
+  .factstrip .v { font-size: .94rem; color: var(--ink); font-weight: 560; }
+
+  /* ---- generic section ------------------------------------------ */
+
+  section.band {
+    display: flex;
+    flex-direction: column;
+    gap: 1.4rem;
+    padding: clamp(2.75rem, 7vw, 4.25rem) 0 0;
+  }
+  .sectionhead { display: flex; flex-direction: column; gap: .45rem; }
+
+  /* ---- legend / contents ---------------------------------------- */
+
+  .legend {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+    gap: 1rem;
+  }
+  .legend .item {
+    display: flex; gap: .7rem; align-items: flex-start;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    background: var(--surface);
+    padding: .85rem .95rem;
+  }
+  .legend .item p { margin: .15rem 0 0; font-size: .88rem; line-height: 1.5; }
+  .legend .item h4 { font-size: .88rem; }
+  .swatch { width: 12px; height: 12px; flex: none; margin-top: .34rem; border-radius: 2px; }
+  .swatch.pass { background: var(--accent); }
+  .swatch.gatec { background: var(--gate); transform: rotate(45deg); border-radius: 1px; }
+  .swatch.blockc { background: var(--block); border-radius: 50%; }
+  .swatch.backc { background: transparent; border-top: 2px dashed var(--muted); height: 0; margin-top: .72rem; }
+
+  ol.toc {
+    list-style: none;
+    margin: 0; padding: 0;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    background: var(--surface);
+    overflow: hidden;
+  }
+  ol.toc li + li { border-top: 1px solid var(--line-soft); }
+  ol.toc a {
+    display: grid;
+    grid-template-columns: 5.5rem minmax(0, 1fr) auto;
+    gap: 1rem;
+    align-items: baseline;
+    padding: .6rem .95rem;
+    text-decoration: none;
+    color: var(--ink);
+  }
+  ol.toc a:hover { background: var(--accent-wash); }
+  ol.toc .c { font-family: var(--mono); font-size: .76rem; color: var(--accent-ink); letter-spacing: .04em; }
+  ol.toc .n { font-weight: 560; }
+  ol.toc .g { font-family: var(--mono); font-size: .7rem; color: var(--muted); text-align: right; }
+
+  /* ---- the vertical flow ---------------------------------------- */
+
+  .flow { position: relative; display: flex; flex-direction: column; }
+  .flow::before {
+    content: "";
+    position: absolute;
+    left: var(--rail-x);
+    top: 1.1rem;
+    bottom: 1.1rem;
+    width: 2px;
+    background: var(--line);
+    z-index: 0;
+  }
+
+  .row {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    grid-template-columns: var(--rail-col) minmax(0, 1fr);
+    gap: clamp(.85rem, 2.5vw, 1.5rem);
+    align-items: start;
+  }
+
+  .marker { display: flex; justify-content: flex-start; }
+
+  .node {
+    box-sizing: border-box;
+    width: 44px; height: 44px;
+    flex: none;
+    border-radius: 50%;
+    background: var(--surface);
+    border: 2px solid var(--accent);
+    color: var(--accent-ink);
+    display: grid; place-items: center;
+    font-family: var(--mono);
+    font-size: .95rem;
+    font-weight: 600;
+  }
+  .node.terminal {
+    background: var(--accent);
+    color: var(--paper);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 4px var(--accent-wash);
+  }
+
+  .diamond {
+    box-sizing: border-box;
+    width: 26px; height: 26px;
+    margin: 9px 0 9px 9px;
+    flex: none;
+    background: var(--surface);
+    border: 2px solid var(--gate);
+    transform: rotate(45deg);
+  }
+  .diamond.open { border-style: dashed; border-color: var(--line); }
+
+  .connector { min-height: 1.4rem; }
+
+  /* stage card */
+  .stage {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    box-shadow: var(--shadow);
+    padding: 1.15rem 1.25rem 1.3rem;
+    display: flex; flex-direction: column; gap: .95rem;
+    margin-bottom: .35rem;
+    scroll-margin-top: 1.5rem;
+  }
+  .stage > header { display: flex; flex-direction: column; gap: .3rem; }
+  .stage .codes { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+  .stage .codes .c {
+    font-family: var(--mono); font-size: .68rem; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--accent-ink);
+    background: var(--accent-wash); border-radius: 2px; padding: .16rem .4rem;
+  }
+  .stage .codes .enum { font-family: var(--mono); font-size: .7rem; color: var(--muted); }
+  .stage p { margin: 0; }
+
+  .facets { display: grid; gap: 1px; background: var(--line-soft); border: 1px solid var(--line-soft); border-radius: 3px; }
+  .facets > div { background: var(--surface); padding: .6rem .75rem; display: grid; grid-template-columns: 8.5rem minmax(0,1fr); gap: .75rem; }
+  .facets .k { font-family: var(--mono); font-size: .66rem; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); padding-top: .18rem; }
+  .facets .v { font-size: .9rem; color: var(--ink-soft); }
+  .facets .v code { font-size: .8rem; }
+
+  /* gate card */
+  .gate {
+    border: 1px solid var(--gate);
+    border-radius: 3px;
+    background: var(--gate-wash);
+    padding: 1rem 1.1rem 1.15rem;
+    display: flex; flex-direction: column; gap: .7rem;
+    margin-bottom: .35rem;
+  }
+  .gate.open { border-color: var(--line); border-style: dashed; background: transparent; }
+  .gate .tab {
+    font-family: var(--mono); font-size: .66rem; letter-spacing: .13em;
+    text-transform: uppercase; color: var(--gate); font-weight: 600;
+  }
+  .gate.open .tab { color: var(--muted); }
+  .gate h4 { font-size: .97rem; }
+  .gate p { margin: 0; font-size: .92rem; }
+  .gate ol.conds { margin: 0; padding-left: 1.15rem; display: flex; flex-direction: column; gap: .55rem; }
+  .gate ol.conds li { font-size: .92rem; }
+
+  .refusal {
+    font-family: var(--mono);
+    font-size: .79rem;
+    line-height: 1.55;
+    color: var(--block);
+    background: var(--block-wash);
+    border-left: 2px solid var(--block);
+    padding: .5rem .7rem;
+    margin: .4rem 0 0;
+    border-radius: 0 3px 3px 0;
+    overflow-x: auto;
+  }
+  .refusal::before {
+    content: "409 — ";
+    opacity: .75;
+  }
+
+  /* recovery edge */
+  .recovery {
+    display: flex; align-items: flex-start; gap: .6rem;
+    border-top: 1px dashed var(--muted);
+    margin: .3rem 0 1rem;
+    padding-top: .5rem;
+  }
+  .recovery .arrow { font-family: var(--mono); color: var(--muted); font-size: .95rem; }
+  .recovery span.txt { font-size: .84rem; color: var(--muted); }
+  .recovery span.txt strong { color: var(--ink-soft); font-weight: 600; }
+
+  /* ---- rule cards ------------------------------------------------ */
+
+  .rules { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: 1rem; }
+  .rule {
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    background: var(--surface);
+    padding: 1rem 1.1rem 1.15rem;
+    display: flex; flex-direction: column; gap: .5rem;
+  }
+  .rule .n { font-family: var(--mono); font-size: .68rem; color: var(--muted); letter-spacing: .1em; }
+  .rule p { margin: 0; font-size: .9rem; line-height: 1.55; }
+
+  /* ---- caveat list ---------------------------------------------- */
+
+  ul.caveats { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px;
+               background: var(--line); border: 1px solid var(--line); border-radius: 3px; overflow: hidden; }
+  ul.caveats li { background: var(--surface); padding: .9rem 1.05rem; display: flex; flex-direction: column; gap: .3rem; }
+  ul.caveats .t { font-weight: 600; color: var(--ink); font-size: .95rem; }
+  ul.caveats .d { font-size: .9rem; color: var(--ink-soft); line-height: 1.55; }
+
+  /* ---- tables ---------------------------------------------------- */
+
+  .scroller { overflow-x: auto; border: 1px solid var(--line); border-radius: 3px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: .87rem; }
+  th, td { text-align: left; padding: .55rem .8rem; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+  thead th {
+    font-family: var(--mono); font-size: .66rem; letter-spacing: .11em; text-transform: uppercase;
+    color: var(--muted); font-weight: 600; background: var(--surface-2); white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.m { font-family: var(--mono); font-size: .78rem; color: var(--ink); white-space: nowrap; }
+  td .verb {
+    font-family: var(--mono); font-size: .68rem; letter-spacing: .06em;
+    color: var(--accent-ink); background: var(--accent-wash);
+    border-radius: 2px; padding: .1rem .32rem; margin-right: .4rem;
+  }
+
+  /* ---- entity map ------------------------------------------------ */
+
+  .entities { display: flex; flex-direction: column; gap: .5rem; }
+  .ent {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    background: var(--surface);
+    padding: .75rem .95rem;
+  }
+  .ent .h { display: flex; flex-wrap: wrap; align-items: baseline; gap: .55rem; }
+  .ent .h .name { font-family: var(--mono); font-size: .85rem; color: var(--ink); font-weight: 600; }
+  .ent .h .card { font-size: .74rem; color: var(--muted); font-family: var(--mono); }
+  .ent .d { font-size: .88rem; color: var(--ink-soft); margin-top: .25rem; }
+  .ent.indent-1 { margin-left: clamp(.75rem, 3vw, 2rem); }
+  .ent.indent-2 { margin-left: clamp(1.5rem, 6vw, 4rem); }
+  .ent.indent-3 { margin-left: clamp(2.25rem, 9vw, 6rem); }
+
+  footer.colophon {
+    padding: clamp(3rem, 8vw, 5rem) 0 0;
+    display: flex; flex-direction: column; gap: .5rem;
+  }
+  footer.colophon p { font-size: .86rem; color: var(--muted); }
+
+  @media (max-width: 33rem) {
+    .facets > div { grid-template-columns: minmax(0, 1fr); gap: .2rem; }
+    ol.toc a { grid-template-columns: 4.6rem minmax(0, 1fr); }
+    ol.toc .g { grid-column: 1 / -1; text-align: left; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+  }
+</style>
+
+<div class="sheet">
+
+  <header class="masthead">
+    <span class="stamp">Process specification &middot; Rev. 1</span>
+    <h1>How the platform runs an RFQ</h1>
+    <p class="lede">
+      Eight stages from scoping a package to issuing a purchase order, four of them
+      guarded by a gate that refuses in writing. This is the document behind that
+      behaviour: what each stage does, what it records, what will stop it, and the
+      rules that hold across all of them.
+    </p>
+    <div class="factstrip">
+      <div><span class="k">Audience</span><span class="v">Engineering &amp; integration</span></div>
+      <div><span class="k">Subsystem</span><span class="v">RFQ workflow</span></div>
+      <div><span class="k">Stages</span><span class="v">8 steps, 9 states</span></div>
+      <div><span class="k">Gates</span><span class="v">4 blocking</span></div>
+    </div>
+  </header>
+
+  <section class="band">
+    <div class="sectionhead">
+      <span class="eyebrow">Orientation</span>
+      <h2>What this system is, in one paragraph</h2>
+    </div>
+    <p>
+      A request for quotation is a document trail before it is a transaction. Someone
+      scopes a technical package, decides which vendors may see it, sends it out,
+      answers their questions in writing, opens what comes back, evaluates it,
+      negotiates, and issues a PO. Every one of those steps produces a record that a
+      later audit will read, and the expensive failures are almost never arithmetic —
+      they are a vendor invited without a valid prequalification, an answer that went
+      to one bidder and not the rest, a package amended after issue with no numbered
+      addendum to prove it.
+    </p>
+    <p>
+      So the platform models the <em>process</em>, not just the paperwork. An RFQ occupies
+      exactly one stage at a time. Movement between stages is a deny-by-default
+      transition table, and four of the forward edges run an exit gate first. A gate
+      that refuses says why, in a full sentence, and the API returns that sentence as a
+      <code>409</code>. Nothing advances quietly.
+    </p>
+  </section>
+
+  <section class="band">
+    <div class="sectionhead">
+      <span class="eyebrow">Reading the diagram</span>
+      <h2>Four marks, four meanings</h2>
+    </div>
+    <div class="legend">
+      <div class="item">
+        <span class="swatch pass"></span>
+        <div>
+          <h4>Stage node</h4>
+          <p>One of the eight process steps. An RFQ is in exactly one at any moment, and its whole history of arrivals is kept.</p>
+        </div>
+      </div>
+      <div class="item">
+        <span class="swatch gatec"></span>
+        <div>
+          <h4>Gate</h4>
+          <p>An exit criterion evaluated on the forward edge. Solid means it can refuse; a dashed outline marks an edge that is open by design.</p>
+        </div>
+      </div>
+      <div class="item">
+        <span class="swatch blockc"></span>
+        <div>
+          <h4>Refusal</h4>
+          <p>The literal sentence the system returns. Reproduced verbatim throughout — this copy is part of the contract, not illustration.</p>
+        </div>
+      </div>
+      <div class="item">
+        <span class="swatch backc"></span>
+        <div>
+          <h4>Recovery edge</h4>
+          <p>A sanctioned move backwards: retender, renegotiate. Never gated — a forward gate must not trap a stuck RFQ.</p>
+        </div>
+      </div>
+    </div>
+
+    <ol class="toc">
+      <li><a href="#s1"><span class="c">RFQ-01</span><span class="n">Scoping</span><span class="g">gate → Shortlisting</span></a></li>
+      <li><a href="#s2"><span class="c">RFQ-02</span><span class="n">Shortlisting</span><span class="g">gate → Issued</span></a></li>
+      <li><a href="#s3"><span class="c">RFQ-03</span><span class="n">Issued</span><span class="g">open edge</span></a></li>
+      <li><a href="#s4"><span class="c">RFQ-04</span><span class="n">Clarifications</span><span class="g">gate → Bids Received</span></a></li>
+      <li><a href="#s5"><span class="c">RFQ-04A</span><span class="n">Bids Received</span><span class="g">gate → Evaluation</span></a></li>
+      <li><a href="#s6"><span class="c">RFQ-05</span><span class="n">Evaluation</span><span class="g">open edge &middot; retender</span></a></li>
+      <li><a href="#s7"><span class="c">RFQ-06</span><span class="n">Negotiation → Awarded</span><span class="g">open edge &middot; renegotiate</span></a></li>
+      <li><a href="#s8"><span class="c">RFQ-07</span><span class="n">PO Issued</span><span class="g">terminal</span></a></li>
+    </ol>
+  </section>
+
+  <!-- ============================ THE FLOW ============================ -->
+
+  <section class="band">
+    <div class="sectionhead">
+      <span class="eyebrow">The process, end to end</span>
+      <h2>Eight stages, top to bottom</h2>
+    </div>
+
+    <div class="flow">
+
+      <!-- ---------------- 1 ---------------- -->
+      <div class="row">
+        <div class="marker"><div class="node">1</div></div>
+        <article class="stage" id="s1">
+          <header>
+            <div class="codes"><span class="c">RFQ-01</span><span class="enum">Stage.SCOPING</span></div>
+            <h3>Scoping</h3>
+          </header>
+          <p>
+            An RFQ is raised against a project and the specific items it covers, then a
+            technical package is assembled against it — a basis of design plus the
+            attachments vendors will bid from, each with its document code and revision.
+            The stage ends when that package is <strong>frozen</strong>: an explicit,
+            attributed act that fixes the revision every bidder will be quoting against.
+          </p>
+          <div class="facets">
+            <div><span class="k">Creates</span><span class="v"><code>RfqRecord</code> — reference, project, item ids, package, discipline, value estimate. <code>TechnicalPackage</code> — revision, basis of design, attachments.</span></div>
+            <div><span class="k">Endpoints</span><span class="v"><code>POST /rfqs</code>, <code>PUT /rfqs/{id}/technical-package</code>, <code>POST /rfqs/{id}/technical-package/freeze</code></span></div>
+            <div><span class="k">Caveats</span><span class="v">An item whose <code>required_on_site</code> falls outside the project's live period is <em>stored anyway</em>, with a warning returned beside it. A hard refusal would make the field unusable in exactly the case worth recording — a late delivery. Freezing is one-way: after it, <code>set_technical_package</code> refuses, and the only route to a change is an addendum at RFQ-04.</span></div>
+          </div>
+        </article>
+      </div>
+
+      <div class="row">
+        <div class="marker"><div class="diamond"></div></div>
+        <div class="gate">
+          <span class="tab">Gate — Scoping → Shortlisting</span>
+          <h4>A package exists, and it is frozen.</h4>
+          <ol class="conds">
+            <li>
+              A technical package has been attached to this RFQ.
+              <pre class="refusal">No technical package has been attached to this RFQ; one must be attached and frozen before shortlisting can begin.</pre>
+            </li>
+            <li>
+              That package has been frozen.
+              <pre class="refusal">The technical package must be frozen before shortlisting can begin.</pre>
+            </li>
+          </ol>
+          <p>
+            Note that the first message names <em>both</em> halves of the criterion. A user
+            told only "no package" attaches one, retries, and is refused again for
+            something nobody mentioned. Every refusal in this system states the whole exit
+            criterion rather than the nearer half of it.
+          </p>
+        </div>
+      </div>
+
+      <!-- ---------------- 2 ---------------- -->
+      <div class="row">
+        <div class="marker"><div class="node">2</div></div>
+        <article class="stage" id="s2">
+          <header>
+            <div class="codes"><span class="c">RFQ-02</span><span class="enum">Stage.SHORTLISTING</span></div>
+            <h3>Shortlisting</h3>
+          </header>
+          <p>
+            Candidates come from an organisation-wide bidder registry, and the platform
+            scores each one against <em>this</em> RFQ at read time: a list of
+            <strong>blockers</strong> — somebody's explicit refusal — and a list of
+            <strong>cautions</strong>, facts worth seeing that decide nothing. Inviting a
+            blocked bidder is permitted but requires a written reason, so it becomes a
+            positive attributed act rather than a silent edit. The stage also fixes the
+            technical bid evaluation criteria and the vendor document register (VDRL) that
+            bids will be checked against later.
+          </p>
+          <div class="facets">
+            <div><span class="k">Blockers</span><span class="v">On hold; prequalification suspended, under review, or declined; prequalification lapsed (derived from <code>prequal_expires_on</code> against the date you ask on).</span></div>
+            <div><span class="k">Cautions</span><span class="v">Expiry within 30 days; not on the client's Approved Vendor List; not registered for this discipline.</span></div>
+            <div><span class="k">Creates</span><span class="v"><code>ShortlistEntry</code> (per invited vendor), <code>TbeTemplate</code>, <code>VdrlLine</code>, plus a procurement approval of the set.</span></div>
+            <div><span class="k">Endpoints</span><span class="v"><code>GET /rfqs/{id}/candidates</code>, <code>POST /rfqs/{id}/shortlist</code>, <code>POST /rfqs/{id}/shortlist/approve</code>, <code>PUT /rfqs/{id}/tbe-template</code>, <code>POST /rfqs/{id}/vdrl</code></span></div>
+            <div><span class="k">Caveats</span><span class="v">A registry-linked entry's vendor name, prequal status and scope fit are derived from the registry and <em>any contradicting values in the request are ignored</em> — otherwise a caller could link a suspended bidder and label the entry qualified. Adding or removing any vendor revokes the shortlist approval, because an approval is of a specific set. Scope matching is whole-string and case-folded, never substring: "Electric" must not answer for "Electrical Testing", a different trade whose bid would be thrown out at evaluation.</span></div>
+          </div>
+        </article>
+      </div>
+
+      <div class="row">
+        <div class="marker"><div class="diamond"></div></div>
+        <div class="gate">
+          <span class="tab">Gate — Shortlisting → Issued</span>
+          <h4>Someone to send it to, signed off, with criteria to judge by.</h4>
+          <ol class="conds">
+            <li>
+              At least one vendor is included.
+              <pre class="refusal">The shortlist contains no included vendors.</pre>
+            </li>
+            <li>
+              Procurement has approved the shortlist as it currently stands.
+              <pre class="refusal">The shortlist must be approved by procurement before issuance.</pre>
+            </li>
+            <li>
+              A TBE template is attached.
+              <pre class="refusal">A TBE template must be attached before the RFQ can be issued.</pre>
+            </li>
+          </ol>
+        </div>
+      </div>
+
+      <!-- ---------------- 3 ---------------- -->
+      <div class="row">
+        <div class="marker"><div class="node">3</div></div>
+        <article class="stage" id="s3">
+          <header>
+            <div class="codes"><span class="c">RFQ-03</span><span class="enum">Stage.ISSUED</span></div>
+            <h3>Issued</h3>
+          </header>
+          <p>
+            The frozen package goes out to the included shortlist, with the VDRL and the
+            original bid due date. This is the moment the record stops being internal:
+            from here, what the vendors hold is a fact about the outside world, and every
+            subsequent change to it has to be numbered, dated and circulated.
+          </p>
+          <div class="facets">
+            <div><span class="k">Fixes</span><span class="v">The package revision bidders quote against; the original due date; who was invited.</span></div>
+            <div><span class="k">Caveats</span><span class="v">There is no gate on the edge into Clarifications — the round opens as soon as the RFQ is out, because a bidder can ask a question the same afternoon.</span></div>
+          </div>
+        </article>
+      </div>
+
+      <div class="row">
+        <div class="marker"><div class="diamond open"></div></div>
+        <div class="gate open">
+          <span class="tab">Open edge — Issued → Clarifications</span>
+          <p>Permitted by the transition table, with no exit criterion to evaluate. The stage advances on request.</p>
+        </div>
+      </div>
+
+      <!-- ---------------- 4 ---------------- -->
+      <div class="row">
+        <div class="marker"><div class="node">4</div></div>
+        <article class="stage" id="s4">
+          <header>
+            <div class="codes"><span class="c">RFQ-04</span><span class="enum">Stage.CLARIFICATIONS</span></div>
+            <h3>Clarifications</h3>
+          </header>
+          <p>
+            Two registers run in parallel. <strong>Queries</strong> are questions from
+            named invited bidders, numbered <code>TQ-001</code> or <code>CQ-001</code> by
+            category, answered with attribution and a timestamp. By default an answer is
+            circulated to the whole included shortlist; withholding it requires a written
+            restriction reason, so unequal treatment is always a recorded decision rather
+            than an oversight. <strong>Addenda</strong> are numbered amendments to the
+            issued package — the one sanctioned door through the freeze — drafted, edited
+            freely, then issued, at which point they supersede the package at a new
+            revision and become immutable.
+          </p>
+          <div class="facets">
+            <div><span class="k">Query states</span><span class="v">Open, Answered, Withdrawn — <em>computed</em> from three timestamps, never stored. Withdrawal is checked before an answer, so a query answered and then withdrawn is out of the round.</span></div>
+            <div><span class="k">Numbering</span><span class="v">Highest + 1, never count + 1. A withdrawn query keeps its number, so a count-based sequence would hand a second bidder a number already quoted to a first.</span></div>
+            <div><span class="k">Endpoints</span><span class="v"><code>POST /rfqs/{id}/queries</code>, <code>.../answer</code>, <code>.../withdraw</code>, <code>POST /rfqs/{id}/addenda</code>, <code>PATCH</code>, <code>.../issue</code>, <code>DELETE</code></span></div>
+            <div><span class="k">Caveats</span><span class="v">An issued addendum can be neither edited nor deleted — bidders hold it. Issuing runs four checks: the package is frozen; the addendum still supersedes the package's <em>current</em> revision; it moves the revision; and every attachment carries a definite revision. The operative bid due date is derived from the latest <em>issued</em> addendum that names one — a date nobody has been told about is not a date.</span></div>
+          </div>
+        </article>
+      </div>
+
+      <div class="row">
+        <div class="marker"><div class="diamond"></div></div>
+        <div class="gate">
+          <span class="tab">Gate — Clarifications → Bids Received</span>
+          <h4>Nothing outstanding before the envelopes are opened.</h4>
+          <ol class="conds">
+            <li>No query is still open — every one is answered or withdrawn.</li>
+            <li>No addendum is still in draft — every one is issued or deleted.</li>
+          </ol>
+          <pre class="refusal">Bids cannot be opened while there are queries still open (TQ-002, CQ-001) and addenda still in draft (ADD-02). Answer or withdraw each query, and issue or delete each draft addendum.</pre>
+          <p>
+            Both failures are recoverable in principle and unrecoverable in practice. Once
+            the bids are open, a bidder who never got their answer cannot be given one, and
+            a package change that was drafted and never issued cannot be issued. The
+            message lists whichever halves are actually true, with the specific numbers.
+          </p>
+        </div>
+      </div>
+
+      <!-- ---------------- 5 ---------------- -->
+      <div class="row">
+        <div class="marker"><div class="node">5</div></div>
+        <article class="stage" id="s5">
+          <header>
+            <div class="codes"><span class="c">RFQ-04A</span><span class="enum">Stage.BIDS_RECEIVED</span></div>
+            <h3>Bids Received</h3>
+          </header>
+          <p>
+            Bids are registered with their arrival time, headline price and currency, and
+            each one is checked off against the VDRL: every mandatory document is marked
+            <code>received</code>, <code>not_received</code> or <code>unreadable</code>.
+            A named person then selects which bids go forward, with a rationale. Selection
+            narrows what is evaluated; the bids not selected stay in the register.
+          </p>
+          <div class="facets">
+            <div><span class="k">Returnables</span><span class="v"><code>unreadable</code> is deliberately distinct from <code>not_received</code> — a corrupt file is a delivery failure to chase, not a refusal to submit. Only <code>received</code> counts toward the completeness figure, so the count never flatters a bid.</span></div>
+            <div><span class="k">Creates</span><span class="v"><code>Bid</code>, <code>VdrlReceipt</code>, <code>BidShortlist</code> — the last carrying who selected, why, and when.</span></div>
+            <div><span class="k">Caveats</span><span class="v">Optional VDRL lines are not counted as gaps. A selection with an empty rationale, an empty bid list, or a bid belonging to another RFQ is refused outright.</span></div>
+          </div>
+        </article>
+      </div>
+
+      <div class="row">
+        <div class="marker"><div class="diamond"></div></div>
+        <div class="gate">
+          <span class="tab">Gate — Bids Received → Evaluation</span>
+          <h4>Somebody has decided what is being evaluated.</h4>
+          <pre class="refusal">Bids must be selected for evaluation before evaluation can begin.</pre>
+        </div>
+      </div>
+
+      <!-- ---------------- 6 ---------------- -->
+      <div class="row">
+        <div class="marker"><div class="node">6</div></div>
+        <article class="stage" id="s6">
+          <header>
+            <div class="codes"><span class="c">RFQ-05</span><span class="enum">Stage.EVALUATION</span></div>
+            <h3>Evaluation</h3>
+          </header>
+          <p>
+            The selected bids are compared technically against the TBE criteria fixed at
+            RFQ-02, and commercially against the item estimates. This is where the wider
+            platform's document pipeline does its work — vendor submissions are classified,
+            revision lineage resolved, and parameters extracted per document class.
+          </p>
+          <div class="facets">
+            <div><span class="k">Hard rule</span><span class="v">Arithmetic stays in code. Extraction captures numbers and units verbatim; no model is ever asked whether a vendor complies. The model reads, code decides.</span></div>
+            <div><span class="k">Exits</span><span class="v">Forward to Negotiation, or backward to Issued — a <strong>retender</strong>.</span></div>
+          </div>
+        </article>
+      </div>
+
+      <div class="row">
+        <div class="marker"><div class="diamond open"></div></div>
+        <div class="gate open">
+          <span class="tab">Open edge — Evaluation → Negotiation</span>
+          <p>No exit criterion. A recommendation is a judgement, and the system does not pretend to hold the evidence that would let it check one.</p>
+          <div class="recovery">
+            <span class="arrow">&#8593;&#8593;</span>
+            <span class="txt"><strong>Retender</strong> — Evaluation may return to Issued when no bid is acceptable. Ungated, and it appends to the history rather than rewriting the first pass.</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- ---------------- 7 ---------------- -->
+      <div class="row">
+        <div class="marker"><div class="node">7</div></div>
+        <article class="stage" id="s7">
+          <header>
+            <div class="codes"><span class="c">RFQ-06</span><span class="enum">Stage.NEGOTIATION → Stage.AWARDED</span></div>
+            <h3>Negotiation, then Award</h3>
+          </header>
+          <p>
+            One process step, two states. Terms are agreed at <code>Negotiation</code> and
+            the approval chain completes at <code>Awarded</code> — which is why the enum
+            has nine members for eight stages. Splitting them means an RFQ sitting in
+            approval is distinguishable from one still being negotiated, without a second
+            status field to keep in step.
+          </p>
+          <div class="facets">
+            <div><span class="k">Exits</span><span class="v">Negotiation → Awarded, or Negotiation → Evaluation, a <strong>renegotiation</strong>. Awarded → PO Issued.</span></div>
+          </div>
+        </article>
+      </div>
+
+      <div class="row">
+        <div class="marker"><div class="diamond open"></div></div>
+        <div class="gate open">
+          <span class="tab">Open edge — Negotiation → Awarded → PO Issued</span>
+          <p>Neither edge carries an exit criterion in this revision. Named per-stage approvals are a deferred requirement — see the limits section below.</p>
+          <div class="recovery">
+            <span class="arrow">&#8593;</span>
+            <span class="txt"><strong>Renegotiate</strong> — Negotiation may return to Evaluation. Like retender, it is a documented recovery and no forward gate may block it.</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- ---------------- 8 ---------------- -->
+      <div class="row">
+        <div class="marker"><div class="node terminal">8</div></div>
+        <article class="stage" id="s8">
+          <header>
+            <div class="codes"><span class="c">RFQ-07</span><span class="enum">Stage.PO_ISSUED</span></div>
+            <h3>PO Issued</h3>
+          </header>
+          <p>
+            Terminal. The transition table gives this stage an entry with an empty set of
+            successors rather than omitting it, so asking "may this RFQ move to X?" answers
+            <em>no</em> instead of raising. That is a small thing that matters at an API
+            boundary: an unknown edge and an impossible one should not fail differently.
+          </p>
+        </article>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============================ RULES ============================ -->
+
+  <section class="band">
+    <div class="sectionhead">
+      <span class="eyebrow">Cross-cutting</span>
+      <h2>Eight rules that hold at every stage</h2>
+    </div>
+    <p>
+      These are not stage behaviour; they are properties of the whole subsystem. Most of
+      them exist because their absence has cost somebody something, here or elsewhere in
+      this codebase.
+    </p>
+    <div class="rules">
+      <div class="rule">
+        <span class="n">01</span>
+        <h4>The check lives inside the lock</h4>
+        <p>
+          Every write, <em>and every decision that authorises one</em>, happens inside a
+          single locked read-modify-write. A check made in the route and a write made in
+          the store are two critical sections: two concurrent transitions would each read
+          "gate open" and both proceed. Every guard this codebase has shipped wrong was a
+          read outside the lock, never a write.
+        </p>
+      </div>
+      <div class="rule">
+        <span class="n">02</span>
+        <h4>Transitions are deny-by-default</h4>
+        <p>
+          An edge absent from the table is refused. Every stage has an entry, including
+          the terminal one. Backward edges exist only where they are documented recoveries,
+          and forward gates never apply to them.
+        </p>
+      </div>
+      <div class="rule">
+        <span class="n">03</span>
+        <h4>A refusal is never a bare false</h4>
+        <p>
+          Gates return a result carrying a reason, the store raises with it, and the route
+          surfaces it as a <code>409</code> with the sentence intact. The reason names the
+          whole exit criterion — the failure mode being designed against is a user who
+          fixes the half they were told about and is refused again.
+        </p>
+      </div>
+      <div class="rule">
+        <span class="n">04</span>
+        <h4>Derived, never stored</h4>
+        <p>
+          Prequalification expiry, query state, the client-approval gap and the operative
+          bid due date are all computed at read time from fields that already say them. A
+          stored copy is wrong the moment its source is edited, and keeping it honest would
+          need a sweep job nobody has written.
+        </p>
+      </div>
+      <div class="rule">
+        <span class="n">05</span>
+        <h4>Nothing is deleted under a live reference</h4>
+        <p>
+          An item covered by an RFQ, a project holding one, a bidder on a shortlist, a
+          shortlist entry that raised a query — each refuses deletion and names what is
+          holding it. Persistence replaces the document wholesale, so a dangling reference
+          does not merely misbehave in memory; it survives the restart.
+        </p>
+      </div>
+      <div class="rule">
+        <span class="n">06</span>
+        <h4>Missing data is never coerced</h4>
+        <p>
+          An unknown value is absent, not zero, not an empty string, and never a passing
+          default. A shortlist entry with no vendor named and an assumed "qualified" status
+          is precisely the record these rules exist to prevent.
+        </p>
+      </div>
+      <div class="rule">
+        <span class="n">07</span>
+        <h4>A snapshot is not a mirror</h4>
+        <p>
+          A shortlist entry records what the registry said at the moment somebody decided
+          to invite that vendor. A later rename or suspension does not rewrite it. What was
+          known at the time of the decision is the fact an audit needs — it is a different
+          fact from what is true today, and both are kept.
+        </p>
+      </div>
+      <div class="rule">
+        <span class="n">08</span>
+        <h4>History is append-only</h4>
+        <p>
+          A backward transition appends an entry; it never rewrites or removes an earlier
+          one. A second pass through a stage is a second entry, which is why the target
+          stage alone is not a unique key within one RFQ's history.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ DATA ============================ -->
+
+  <section class="band">
+    <div class="sectionhead">
+      <span class="eyebrow">Shape of the data</span>
+      <h2>What holds what</h2>
+    </div>
+    <p>
+      Indentation is containment. Everything binds by <code>id</code> — names are
+      user-editable text and list positions are not a contract, so no reference anywhere
+      is made by name or by index.
+    </p>
+    <div class="entities">
+      <div class="ent">
+        <div class="h"><span class="name">Project</span><span class="card">1</span></div>
+        <div class="d">Name, code, client, location, a live period, currency, status. The top-level container; deleting one cascades to its items in the same write, and is refused outright while any RFQ exists under it.</div>
+      </div>
+      <div class="ent indent-1">
+        <div class="h"><span class="name">Item</span><span class="card">0..n per project</span></div>
+        <div class="d">Type, description, quantity, unit, discipline, estimated value, required-on-site date, long-lead flag. An update never touches <code>id</code> or <code>project_id</code>: moving an item between projects would change which project's RFQs may cover it without either RFQ record changing.</div>
+      </div>
+      <div class="ent indent-1">
+        <div class="h"><span class="name">RfqRecord</span><span class="card">0..n per project</span></div>
+        <div class="d">Reference, the item ids it covers, package name, discipline, value estimate, current stage, and the full append-only stage history.</div>
+      </div>
+      <div class="ent indent-2">
+        <div class="h"><span class="name">TechnicalPackage</span><span class="card">0..1 per RFQ</span></div>
+        <div class="d">Revision, basis of design, attachments, and — once frozen — when and by whom. Replaced wholesale each time an addendum is issued.</div>
+      </div>
+      <div class="ent indent-2">
+        <div class="h"><span class="name">ShortlistEntry</span><span class="card">0..n per RFQ</span></div>
+        <div class="d">The invitation. Optionally links a registry <code>Bidder</code>; carries the snapshot of name, prequal status and scope fit, plus an override reason where one was required.</div>
+      </div>
+      <div class="ent indent-2">
+        <div class="h"><span class="name">TbeTemplate &middot; VdrlLine</span><span class="card">1 &middot; 0..n per RFQ</span></div>
+        <div class="d">What bids will be judged on, and what documents they must return. Both fixed before issue.</div>
+      </div>
+      <div class="ent indent-2">
+        <div class="h"><span class="name">ClarificationQuery &middot; Addendum</span><span class="card">0..n per RFQ</span></div>
+        <div class="d">The clarification register and the package's revision trail. A query addresses the shortlist entry that raised it, not the registry bidder — only someone invited to this RFQ can ask about it.</div>
+      </div>
+      <div class="ent indent-2">
+        <div class="h"><span class="name">Bid &middot; VdrlReceipt &middot; BidShortlist</span><span class="card">0..n &middot; 0..n &middot; 0..1</span></div>
+        <div class="d">What came back, what was in it, and what goes forward.</div>
+      </div>
+      <div class="ent">
+        <div class="h"><span class="name">Bidder</span><span class="card">organisation-wide</span></div>
+        <div class="d">Held once for the whole organisation rather than retyped per RFQ, because prequalification is a company-level fact with a validity period. Deliberately outside the project tree.</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="sectionhead">
+      <span class="eyebrow">Integration notes</span>
+      <h2>What you should know before you call it</h2>
+    </div>
+    <ul class="caveats">
+      <li>
+        <span class="t">Persistence is one document, replaced wholesale</span>
+        <span class="d">The workflow lives in a single JSON document behind one lock and one atomic write, in the same pattern as the accounts store. The store itself knows nothing about disk — serialization is isolated in one module, so replacing the file with a database is a change to that module alone. The consequence for you: any field added to the store needs a matching line in <em>both</em> directions of that module, or it silently fails to survive a restart.</span>
+      </li>
+      <li>
+        <span class="t">Every workflow path requires a session</span>
+        <span class="d">No workflow route is on the public allowlist, which stays pinned at three paths and is enforced by a test that sweeps every registered route. Roles are <code>admin</code> and <code>reviewer</code>, set once at creation; no route changes a role. Restarting the API signs everyone out by design — the server-side session rows are cleared at startup, so a still-held cookie is inert.</span>
+      </li>
+      <li>
+        <span class="t">Errors map predictably</span>
+        <span class="d"><code>404</code> for an unknown id, <code>409</code> for a refused transition or a guarded deletion — carrying the sentence verbatim, which is intended for display — and <code>422</code> for a malformed body. If you are building UI against this, render the <code>409</code> text rather than substituting your own; it is written to be read by the person who has to act on it.</span>
+      </li>
+      <li>
+        <span class="t">Nothing imported from a real vendor list is embellished</span>
+        <span class="d">Where the registry is seeded from a client's Approved Vendor List export, every field the sheet does not carry is left empty — no expiry, no hold, no turnover, no rating, and no country, since the only country in such an export is the manufacturer's. These are real, named companies, and a synthesised suspension is indistinguishable on screen from a recorded one.</span>
+      </li>
+      <li>
+        <span class="t">The client-approval gap is a caution, never a blocker</span>
+        <span class="d">A vendor absent from the client's AVL is flagged wherever they appear, but eligibility is unchanged and no path it opens demands an override. The sentence is built in exactly one place, so the roster, the registry card and the RFQ view cannot drift apart in what they say.</span>
+      </li>
+    </ul>
+  </section>
+
+  <section class="band">
+    <div class="sectionhead">
+      <span class="eyebrow">Deliberate limits</span>
+      <h2>What this revision does not do</h2>
+    </div>
+    <p>
+      Stated plainly, because a gap you know about is a scoping decision and a gap you
+      discover is a defect.
+    </p>
+    <ul class="caveats">
+      <li>
+        <span class="t">No bid window timers</span>
+        <span class="d">The due date is recorded and derived correctly, but nothing closes a window automatically or refuses a late bid. Registration is a human act with a recorded arrival time.</span>
+      </li>
+      <li>
+        <span class="t">No named approval gates per stage</span>
+        <span class="d">Four of the eight forward edges are gated. The Evaluation → Negotiation → Awarded → PO Issued edges are open, so award authority is a process convention today, not something the system enforces.</span>
+      </li>
+      <li>
+        <span class="t">No item-type catalogue</span>
+        <span class="d">Item types are free text against a shared vocabulary by convention. A catalogue was deferred until persistence existed; it now can be built.</span>
+      </li>
+      <li>
+        <span class="t">Returnables checking is VDRL-only</span>
+        <span class="d">Presence and readability of the mandatory document set is checked. Content-level compliance of those documents is the evaluation pipeline's job, and is not part of the gate.</span>
+      </li>
+      <li>
+        <span class="t">No document storage or SSO in this layer</span>
+        <span class="d">Attachments are recorded by document code, title and revision — the register, not the file. Object storage and federated identity are open infrastructure questions rather than pending code, and the answer changes the shape of the work more than any other input.</span>
+      </li>
+    </ul>
+  </section>
+
+  <section class="band">
+    <div class="sectionhead">
+      <span class="eyebrow">Appendix</span>
+      <h2>API surface</h2>
+    </div>
+    <p>All paths are relative to <code>/api/workflow</code>. Every one requires an authenticated session.</p>
+    <div class="scroller">
+      <table>
+        <thead>
+          <tr><th>Group</th><th>Route</th><th>What it does</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Reference</td><td class="m"><span class="verb">GET</span>/stages</td><td>The stage list and the transition table, so a client need not hard-code either.</td></tr>
+          <tr><td rowspan="2">Projects</td><td class="m"><span class="verb">GET</span>/projects &middot; <span class="verb">POST</span>/projects</td><td>Roster and creation.</td></tr>
+          <tr><td class="m"><span class="verb">GET PATCH DELETE</span>/projects/{id}</td><td>Read, partial update, guarded delete with item cascade.</td></tr>
+          <tr><td>Items</td><td class="m"><span class="verb">GET POST</span>/projects/{id}/items<br><span class="verb">PATCH DELETE</span>/projects/{id}/items/{item_id}</td><td>Item lifecycle. Updates refuse changes to <code>id</code> and <code>project_id</code>.</td></tr>
+          <tr><td>Bidders</td><td class="m"><span class="verb">GET POST</span>/bidders<br><span class="verb">GET PATCH DELETE</span>/bidders/{id}</td><td>The organisation-wide registry. Deletion is refused while any shortlist references the bidder.</td></tr>
+          <tr><td rowspan="2">RFQs</td><td class="m"><span class="verb">GET POST</span>/rfqs &middot; <span class="verb">GET</span>/rfqs/{id}</td><td>Roster, creation, and the full assembled view — package, shortlist, TBE, VDRL, queries, addenda, bids.</td></tr>
+          <tr><td class="m"><span class="verb">POST</span>/rfqs/{id}/transition</td><td>Runs the gate and moves the stage, or returns its reason as a <code>409</code>.</td></tr>
+          <tr><td>Package</td><td class="m"><span class="verb">PUT</span>/rfqs/{id}/technical-package<br><span class="verb">POST</span>/rfqs/{id}/technical-package/freeze</td><td>Attach or replace, then freeze. The <code>PUT</code> refuses once frozen.</td></tr>
+          <tr><td>Shortlist</td><td class="m"><span class="verb">GET</span>/rfqs/{id}/candidates<br><span class="verb">POST DELETE</span>/rfqs/{id}/shortlist[/{entry_id}]<br><span class="verb">POST</span>/rfqs/{id}/shortlist/approve</td><td>Suitability-scored candidates, invitation, removal, and procurement sign-off. Any change to the set revokes approval.</td></tr>
+          <tr><td>Criteria</td><td class="m"><span class="verb">PUT</span>/rfqs/{id}/tbe-template<br><span class="verb">POST DELETE</span>/rfqs/{id}/vdrl[/{line_id}]</td><td>Evaluation criteria and the vendor document register.</td></tr>
+          <tr><td>Queries</td><td class="m"><span class="verb">POST</span>/rfqs/{id}/queries<br><span class="verb">POST</span>/rfqs/{id}/queries/{qid}/answer<br><span class="verb">POST</span>/rfqs/{id}/queries/{qid}/withdraw</td><td>Raise, answer (optionally restricted, with a reason), withdraw. Numbers are assigned by the store.</td></tr>
+          <tr><td>Addenda</td><td class="m"><span class="verb">POST PATCH DELETE</span>/rfqs/{id}/addenda[/{aid}]<br><span class="verb">POST</span>/rfqs/{id}/addenda/{aid}/issue</td><td>Draft, edit, delete while draft; issue to supersede the package at a new revision. Issued addenda are immutable.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <hr class="rule" style="margin-top: 3rem;">
+  <footer class="colophon">
+    <p>
+      Every refusal quoted in this document is the literal text the system returns, taken
+      from the gate and store implementations rather than paraphrased. Where behaviour
+      here and behaviour in code disagree, the code is right and this document is a bug.
+    </p>
+  </footer>
+
+</div>
