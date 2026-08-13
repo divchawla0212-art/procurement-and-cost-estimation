@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from workflow import persistence
+from workflow import clarifications, persistence
 from workflow.models.rfq import Attachment
 from workflow.stages import Stage
 from workflow.store import WorkflowStore
@@ -850,3 +850,211 @@ def test_two_invitations_of_one_bidder_both_survive(tmp_path):
     with pytest.raises(ValueError):
         with persistence.locked_update(root) as store:
             store.delete_bidder(bidder_id)
+
+
+# -- the clarification round rows of the mutation matrix -----------------------
+#
+# Same shape as the rows above: mutate between two runs, then read run 2 *from
+# disk*, never from the store object that made the change.
+#
+# | mutation between run 1 and run 2        | invariant at risk                  |
+# |-----------------------------------------|------------------------------------|
+# | a query is raised, its bidder removed   | every raised_by_entry_id resolves  |
+# | a query is withdrawn, a new one raised  | numbers are never reused           |
+# | a restricted answer is re-answered      | circulation is one field, not two  |
+# | an addendum is drafted, then issued     | the package equals the latest one   |
+# | a stale second draft is issued          | the check runs inside the lock     |
+# | a draft addendum is deleted             | the document equals the store      |
+# | a transition with an open query         | no RFQ passes the gate with one    |
+# | raise -> answer -> withdraw -> issue    | the document equals the store      |
+
+
+def test_a_bidder_who_asked_survives_a_refused_removal_intact(tmp_path):
+    """Row 1. The guard is a read that gates a write, so it happens inside the
+    lock - and locked_update writes only on a clean exit, so the raise leaves
+    the document exactly as it was."""
+    root = str(tmp_path)
+    rfq_id, entry_id, query_id = rfq_with_a_query(root)
+    before = Path(persistence.workflow_path(root)).read_bytes()
+
+    with pytest.raises(ValueError, match="TQ-001"):
+        with persistence.locked_update(root) as store:
+            store.remove_shortlist_entry(rfq_id, entry_id)
+
+    assert Path(persistence.workflow_path(root)).read_bytes() == before
+    reloaded = persistence.load(root)
+    assert [e.id for e in reloaded.shortlist_for(rfq_id)] == [entry_id]
+    live = {e.id for e in reloaded.shortlist_for(rfq_id)}
+    assert all(q.raised_by_entry_id in live for q in reloaded.queries_for(rfq_id))
+    assert [q.id for q in reloaded.queries_for(rfq_id)] == [query_id]
+
+
+def test_a_number_already_on_disk_is_never_handed_out_again(tmp_path):
+    """Row 2. Numbering reads what is on disk, and it has to read the *highest*
+    rather than the count.
+
+    The gap is the whole point. While the sequence is dense the two rules agree,
+    so withdrawing TQ-001 and raising another proves nothing — both give
+    TQ-002. `workflow.json` is documented as human-readable and gets
+    hand-inspected, so a register loaded with TQ-001 and TQ-003 is reachable,
+    and counting would answer TQ-003: a number a bidder already holds in
+    writing.
+    """
+    root = str(tmp_path)
+    rfq_id, entry_id, query_id = rfq_with_a_query(root)
+
+    with persistence.locked_update(root) as store:
+        store.withdraw_query(rfq_id, query_id, reason="Duplicate.", by="b@example.com")
+
+    # The gap, introduced the way a real one would arrive: in the document.
+    path = Path(persistence.workflow_path(root))
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    doc["queries"][0]["number"] = "TQ-003"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+
+    with persistence.locked_update(root) as store:
+        raised = store.raise_query(rfq_id, entry_id, question="Second question.",
+                                   category="Technical", raised_on=date(2026, 8, 14))
+
+    numbers = [q.number for q in persistence.load(root).queries_for(rfq_id)]
+    assert raised.number == "TQ-004"
+    assert sorted(numbers) == ["TQ-003", "TQ-004"]
+    assert len(numbers) == len(set(numbers))
+
+
+def test_lifting_a_restriction_stores_null_not_an_empty_string(tmp_path):
+    """Row 3. Circulation is one field with two readings, and "" is neither -
+    it would round-trip as restricted with no reason, which is the record the
+    whole rule exists to prevent."""
+    root = str(tmp_path)
+    rfq_id, _entry_id, query_id = rfq_with_a_query(root)
+
+    with persistence.locked_update(root) as store:
+        store.answer_query(rfq_id, query_id, answer="Provisionally yes.",
+                           by="buyer@example.com",
+                           restricted_reason="Commercially sensitive.")
+    with persistence.locked_update(root) as store:
+        store.answer_query(rfq_id, query_id, answer="Confirmed.", by="lead@example.com")
+
+    doc = json.loads(Path(persistence.workflow_path(root)).read_text(encoding="utf-8"))
+    [record] = doc["queries"]
+    assert record["restricted_reason"] is None
+    assert clarifications.is_circulated(persistence.load(root).queries_for(rfq_id)[0])
+
+
+def test_issuing_an_addendum_moves_the_stored_package_too(tmp_path):
+    """Row 4. Two collections change in one call. An issue that stamped the
+    addendum but not the package would leave the reloaded store claiming a
+    revision no bidder holds."""
+    root = str(tmp_path)
+    rfq_id, _entry_id, _query_id = rfq_with_a_query(root)
+
+    with persistence.locked_update(root) as store:
+        draft = store.draft_addendum(
+            rfq_id, revision="Rev. B", summary="Corrected.",
+            attachments=[Attachment(doc_code="GEN-DS-01", title="Datasheet",
+                                    revision="Rev. B")],
+        )
+    with persistence.locked_update(root) as store:
+        store.issue_addendum(rfq_id, draft.id, by="buyer@example.com")
+
+    reloaded = persistence.load(root)
+    [issued] = reloaded.addenda_for(rfq_id)
+    assert issued.issued_at is not None
+    assert reloaded.get_technical_package(rfq_id).revision == issued.revision
+    assert issued.supersedes_revision == "Rev. A"
+
+
+def test_a_refused_stale_issue_leaves_the_document_untouched(tmp_path):
+    """Row 5. The check that would be lost by moving it into the route: two
+    drafts cut against Rev. A, both reading "current is Rev. A" outside a lock,
+    would both write and the second would undo the first."""
+    root = str(tmp_path)
+    rfq_id, _entry_id, _query_id = rfq_with_a_query(root)
+    with persistence.locked_update(root) as store:
+        first = store.draft_addendum(rfq_id, revision="Rev. B", summary="s",
+                                     attachments=[])
+        second = store.draft_addendum(rfq_id, revision="Rev. B2", summary="s",
+                                      attachments=[])
+        store.issue_addendum(rfq_id, first.id, by="buyer@example.com")
+
+    before = Path(persistence.workflow_path(root)).read_bytes()
+    with pytest.raises(ValueError, match="Rev. B"):
+        with persistence.locked_update(root) as store:
+            store.issue_addendum(rfq_id, second.id, by="buyer@example.com")
+
+    assert Path(persistence.workflow_path(root)).read_bytes() == before
+    reloaded = persistence.load(root)
+    assert reloaded.get_technical_package(rfq_id).revision == "Rev. B"
+    # Both survive: the refusal is not a delete, and the stale draft is still
+    # there to be redrafted against the current revision.
+    assert {a.id for a in reloaded.addenda_for(rfq_id)} == {first.id, second.id}
+
+
+def test_a_deleted_draft_addendum_does_not_survive_on_disk(tmp_path):
+    """Row 6. save replaces the document wholesale, so a draft pruned in memory
+    cannot reappear - and the issued one beside it must not go with it."""
+    root = str(tmp_path)
+    rfq_id, _entry_id, _query_id = rfq_with_a_query(root)
+    with persistence.locked_update(root) as store:
+        keep = store.draft_addendum(rfq_id, revision="Rev. B", summary="keep",
+                                    attachments=[])
+        store.issue_addendum(rfq_id, keep.id, by="buyer@example.com")
+        doomed = store.draft_addendum(rfq_id, revision="Rev. C", summary="doomed",
+                                      attachments=[])
+
+    with persistence.locked_update(root) as store:
+        store.delete_addendum(rfq_id, doomed.id)
+
+    reloaded = persistence.load(root)
+    assert [a.id for a in reloaded.addenda_for(rfq_id)] == [keep.id]
+    on_disk = json.loads(Path(persistence.workflow_path(root)).read_text(encoding="utf-8"))
+    assert [a["id"] for a in on_disk["addenda"]] == [keep.id]
+
+
+def test_an_rfq_cannot_reach_bids_received_over_an_open_query(tmp_path):
+    """Row 7. The gate reads stored state, so a store rebuilt from disk has to
+    refuse exactly what the live one did."""
+    root = str(tmp_path)
+    rfq_id, entry_id, query_id = rfq_with_a_query(root)
+    with persistence.locked_update(root) as store:
+        store.approve_shortlist(rfq_id, by="procurement@example.com")
+        store.set_tbe_template(rfq_id, criteria=["Throughput"])
+        store.transition(rfq_id, Stage.SHORTLISTING, by="buyer@example.com")
+        store.transition(rfq_id, Stage.ISSUED, by="buyer@example.com")
+        store.transition(rfq_id, Stage.CLARIFICATIONS, by="buyer@example.com")
+        # Re-open the one query the fixture answered.
+        store.raise_query(rfq_id, entry_id, question="A second, open question.",
+                          category="Commercial", raised_on=date(2026, 8, 14))
+
+    with pytest.raises(ValueError, match="CQ-001"):
+        with persistence.locked_update(root) as store:
+            store.transition(rfq_id, Stage.BIDS_RECEIVED, by="buyer@example.com")
+
+    assert persistence.load(root).get_rfq(rfq_id).stage is Stage.CLARIFICATIONS
+    assert query_id  # the answered one is untouched by any of this
+
+
+def test_the_document_equals_the_store_after_the_whole_round(tmp_path):
+    """Row 8. The end-to-end shape: whatever sequence ran, what is on disk is
+    what the store holds - no more, no fewer."""
+    root = str(tmp_path)
+    rfq_id, entry_id, query_id = rfq_with_a_query(root)
+
+    with persistence.locked_update(root) as store:
+        second = store.raise_query(rfq_id, entry_id, question="Second.",
+                                   category="Commercial", raised_on=date(2026, 8, 14))
+        store.withdraw_query(rfq_id, second.id, reason="Duplicate.", by="b@example.com")
+        draft = store.draft_addendum(
+            rfq_id, revision="Rev. B", summary="Corrected.",
+            attachments=[Attachment(doc_code="GEN-DS-01", title="Datasheet",
+                                    revision="Rev. B")],
+            arising_from_query_ids=[query_id], bid_due_date=date(2026, 11, 1),
+        )
+        store.issue_addendum(rfq_id, draft.id, by="buyer@example.com")
+
+    on_disk = json.loads(Path(persistence.workflow_path(root)).read_text(encoding="utf-8"))
+    assert persistence.to_document(persistence.load(root)) == on_disk
+    assert [q["number"] for q in on_disk["queries"]] == ["TQ-001", "CQ-001"]
+    assert [a["number"] for a in on_disk["addenda"]] == ["ADD-01"]
+    assert persistence.load(root).current_bid_due_date(rfq_id) == date(2026, 11, 1)

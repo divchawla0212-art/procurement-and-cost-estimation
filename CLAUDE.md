@@ -25,8 +25,8 @@ untracked fixture directories are present, never in pass/fail:
 
 | where | baseline |
 |---|---|
-| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1397 passed, 3 skipped, 0 failed** |
-| CI, and any clean checkout | **1379 passed, 21 skipped, 0 failed** |
+| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1497 passed, 3 skipped, 0 failed** |
+| CI, and any clean checkout | **1479 passed, 21 skipped, 0 failed** |
 
 Anything else is a real regression.
 
@@ -55,12 +55,12 @@ parser itself is covered in CI — only the tests that assert against the *real*
 
 So the CI row is the workstation row with the four corpus-coverage passes, the
 three `data/` passes, the two `pdftotext` passes and the nine AVL passes turned
-into skips — `1379 = 1397 - 4 - 3 - 2 - 9`, `21 = 3 + 4 + 3 + 2 + 9`; 1400
+into skips — `1479 = 1497 - 4 - 3 - 2 - 9`, `21 = 3 + 4 + 3 + 2 + 9`; 1500
 tests either way. When the counts move, measure the workstation row and derive
 the CI row from it; editing the two rows independently is how they drift
 apart.
 
-**The workstation row is measured, not derived**: **1397 passed, 3 skipped**,
+**The workstation row is measured, not derived**: **1497 passed, 3 skipped**,
 taken on 2026-08-13 on the `rfq-platform-phase-1` branch, in an environment
 with `pdftotext`, `data/` (including the ADNOC export) and an ingested
 multi-vendor `projects/` all present. The nine-skip figure that the fourth gate
@@ -91,11 +91,25 @@ The 128 after *that* are the bidder registry: `test_bidder_suitability.py`,
 more rows on the mutation matrix. All but nine of them land in both rows; the
 nine are the AVL gate above.
 
+The **79** after that are the clarification round: 42 in
+`test_clarifications.py`, 12 in `test_clarification_endpoints.py`, 7 gate cases
+in `test_workflow_stages.py`, 13 in `test_workflow_persistence.py` (five
+round-trip, eight new mutation-matrix rows) and 5 in `test_seed_demo.py`. The
+five seeded ones are deliberately **not** behind `needs_real_avl` — they assert
+against whichever registry the seed built, so the AVL gate stays at nine, which
+was re-measured by moving `data/bidders_details/` aside rather than assumed.
+
 The web suite is separate and not part of either row above — both rows are
 `python -m pytest` counts. Run it with `npm test` under `web/` (vitest,
 non-watching, exits non-zero on failure); `npm run build` also type-checks the
 test files, since `web/tsconfig.app.json` includes `src`. CI runs both, in the
-`web` job of the same workflow. It stands at **141 passed** across 14 files.
+`web` job of the same workflow. It stands at **222 passed** across 19 files.
+
+The RFQ wizard's steps live one-per-file under `web/src/pages/wizard/`;
+`RfqWizard.tsx` is only the shell — stepper, banners, stage history, gate card.
+They were extracted when the Clarifications step acquired a real editor and the
+single file would have passed 1 100 lines. `AttachmentTable` is shared, because
+the addendum draft form replaces the package's attachment list wholesale.
 
 `web/src/pages/workflow-fixtures.ts` is test data in a non-test module on
 purpose. Importing fixtures from a `.test.tsx` file re-runs that file's
@@ -294,6 +308,36 @@ them, so keeping them apart stops a reader assuming one set covers both.
   removing a vendor revokes approval, so an RFQ cannot issue with a vendor
   procurement never signed off. Removal addresses `ShortlistEntry` and
   `VdrlLine` by their `id`, never by position.
+- **A clarification's state is computed, not stored, and circulation is the
+  default.** There is no `status` field on `ClarificationQuery`: Open, Answered
+  and Withdrawn are derived in `workflow/clarifications.py` from three
+  timestamps, and **withdrawal is checked before an answer** — a query answered
+  and then withdrawn is out of the round, and reading those fields the other
+  way round would leave the gate counting a dead question as satisfied. A
+  blank `restricted_reason` is refused, so withholding an answer from the rest
+  of the shortlist is always a recorded, attributed act; there is deliberately
+  no `circulate` boolean, which would make a restricted answer
+  indistinguishable from an oversight. Numbers are `max + 1`, never `count + 1`
+  — the two agree while the sequence is dense, so only a *gapped* register
+  tells them apart, and that is the case the tests use.
+- **An addendum is the one sanctioned door through the frozen-package rule.**
+  `set_technical_package` still refuses a frozen package; `issue_addendum`
+  supersedes it at a new revision after four reads that all sit inside the
+  store method. The second — `supersedes_revision` must still equal the
+  package's current revision — is the one that would actually be lost by moving
+  any of them into the route: two drafts cut against Rev. A, each reading
+  "current is Rev. A" outside the lock, would both write and the second would
+  silently roll the package back. A draft is editable and deletable; an issued
+  addendum is neither, because bidders hold it. The bid due date is derived
+  from the latest issued addendum rather than stored on `RfqRecord` — the
+  original due date belongs to Issued, which that phase did not touch, so a
+  field here would be half-owned.
+- **A bidder who raised any query cannot be removed from the shortlist**, and
+  the refusal names the numbers. Fourth instance of "nothing is deleted out
+  from under a live reference", after `delete_item`, `delete_project` and
+  `delete_bidder`. Answered and withdrawn queries hold it too, not only open
+  ones: a bidder who declines to bid stays on the shortlist as a non-bidder,
+  which is the true fact.
 - **The bidder registry is organisation-wide, and eligibility is computed, not
   stored.** There is no `Expired` member of `PrequalStatus`: expiry is derived
   from `prequal_expires_on` against an `as_of` the caller passes in, so no

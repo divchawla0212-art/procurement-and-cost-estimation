@@ -72,15 +72,32 @@ def test_silence_means_circulated_and_a_reason_means_restricted():
     ) is False
 
 
-def test_the_next_number_is_one_past_the_highest_not_one_past_the_count():
-    """A withdrawn query keeps its number. Counting would hand TQ-002 to a
-    second bidder after the first TQ-002 was already quoted in writing."""
+def test_a_withdrawn_query_keeps_its_number_and_the_next_one_follows_it():
     existing = [
         a_query(number="TQ-001"),
         a_query(number="TQ-002", withdrawn_reason="r", withdrawn_by="b",
                 withdrawn_at=datetime(2026, 8, 15, tzinfo=timezone.utc)),
     ]
     assert clarifications.next_query_number(existing, "Technical") == "TQ-003"
+
+
+def test_a_gap_in_the_sequence_does_not_reissue_a_number_already_handed_out():
+    """The case that separates `max + 1` from `count + 1`, and the only one
+    that does: while the sequence is dense the two agree, so a test over
+    TQ-001 and TQ-002 would pass under either and prove nothing.
+
+    A gap is reachable. `workflow.json` is documented as human-readable and
+    gets hand-inspected, `from_document` loads whatever numbers it finds, and
+    `_highest` deliberately tolerates rows it cannot parse. Counting here would
+    return TQ-003 — a number a bidder is already holding in writing.
+    """
+    existing = [a_query(number="TQ-001"), a_query(number="TQ-003")]
+    assert clarifications.next_query_number(existing, "Technical") == "TQ-004"
+
+
+def test_a_gap_in_the_addendum_sequence_is_treated_the_same_way():
+    existing = [an_addendum(number="ADD-01"), an_addendum(number="ADD-04")]
+    assert clarifications.next_addendum_number(existing) == "ADD-05"
 
 
 def test_the_two_category_sequences_are_independent():
