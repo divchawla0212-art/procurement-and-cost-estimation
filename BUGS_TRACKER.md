@@ -85,6 +85,7 @@ _None open._
 
 | ID | Severity | Area | Summary | Closed | Fixed in | Spec / Plan |
 |---|---|---|---|---|---|---|
+| BUG-016 | S2 | web | A rail click on the section you are already in did nothing, so a user inside an item or an RFQ had no way back to its roster | 2026-08-13 | `1b84b9e` | none — see the Fix block |
 | BUG-014 | S4 | web | The project roster put eight columns of detail on one row per project, which stops being readable at about four projects | 2026-08-13 | `3e3eaf8` | none — see the Fix block |
 | BUG-003 | S4 | web | Empty states still tell the user to run ingestion "in the Streamlit portal", which no longer exists | 2026-08-05 | `d3cfa61` | [spec](docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md) / [plan](docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md) |
 | BUG-001 | S3 | web | Compliance matrix and comparative statement are reachable before ingestion has completed | 2026-08-05 | `88f0403` (harness: `042e8fa`) | [spec](docs/superpowers/specs/2026-08-05-tracked-bugs-001-004-design.md) / [plan](docs/superpowers/plans/2026-08-05-tracked-bugs-001-004.md) |
@@ -2361,3 +2362,123 @@ Fields presented, in order:
   the stage gates turn on the technical package, the shortlist and the TBE
   template. So removing them does not weaken a gate. Confirmed by reading
   `gates.py` in full, not by grep alone.
+
+---
+
+## BUG-016 — A rail click on the section you are already in does nothing, so a drill-down has no way out
+
+- **Severity:** S2
+- **Category:** Front end
+- **Area:** `web/src/App.tsx`, `web/src/pages/ItemDetail.tsx`, `web/src/pages/ProjectDetail.tsx`, `web/src/components/primitives.tsx`
+- **Status:** Closed
+- **Reported:** 2026-08-13
+- **Reporter:** Rahul Jana (client-reported)
+
+### What happens
+
+Reported as "`01 Projects & items` and `02 RFQ workflow` are not working — once I
+am inside an item I am not able to come back to the main project page".
+
+Two separate defects, and the first is the one that made both pages feel broken.
+
+**1. The rail entry for the current section was a no-op.** `Projects` and
+`RfqWorkflow` each own their drill-down state — `openProjectId` / `openItemId`
+and `openRfqId` respectively — and `App`'s `navigate` only ever called
+`setView(next)`. Clicking `01 Projects & items` while three levels deep inside
+an item therefore set `view` to `'projects'` when it was already `'projects'`:
+React saw no change, the component never re-rendered, its drill-down state
+survived, and the button read as dead. The same applied to `02` from inside an
+RFQ. Both rail entries did nothing, from the one place a user would most want
+them to do something.
+
+**2. The back control did not read as one.** `ItemDetail` and `ProjectDetail`
+did each render a `Back to project` / `Back to projects` button — the initial
+report of "no way back" was, strictly, about a control that existed. It sat in
+the `PageHeader` action row immediately left of `Edit item`, styled identically,
+so it presented as a third action *on the item* rather than a way *out* of it.
+
+### What should happen
+
+Clicking a rail entry returns that section to its top level, whether or not the
+view is already the current one.
+
+Separately, a drill-down should show where it sits and let every level above it
+be reached in one click — from an item that means both the project and the
+roster, so moving to a sibling item is two clicks rather than a rebuild of the
+route.
+
+### Reproduce
+
+1. Open `01 Projects & items`, open a project, open an item.
+2. Click `01 Projects & items` in the rail.
+
+**Reproduces:** always
+
+```
+Before the fix, measured in the running app:
+
+  click project    -> h1 "Haliba Field Development"
+  click item       -> h1 "Compressor"
+  click rail 01    -> h1 "Compressor"      <- unchanged; the click did nothing
+
+Same shape for 02: inside ADP-RFQ-2026-011, clicking "02 RFQ workflow" left
+the RFQ detail mounted.
+```
+
+### Environment
+
+- Branch / commit: `rfq-platform-phase-1` @ `f1d8401`
+- Python / Node: 3.12.3 / v24.15.0
+- Provider: n/a — pure client-side navigation
+- Data: any project with at least one item; any RFQ
+
+### Notes
+
+- **2026-08-13** — S2, not S3: for a user who did not find the header button
+  there was no way back to the roster at all short of a page reload, and the
+  control they *did* reach for was inert. That is a feature broken with no
+  workaround, on the app's front door.
+- **2026-08-13** — **A first hypothesis was wrong and is recorded because it
+  cost time.** The initial guess was that the drill-down kept the previous
+  screen's scroll position, leaving the header — and its back button — above
+  the fold. Measured in the running app: `Back to project` sat at `top: 97`
+  with `window.scrollY` of `0` and no scrolling container at all. The button was
+  on screen the whole time. The defect was the rail, not the scroll.
+- **2026-08-13** — The rail-reset half is implemented as a `navEpoch` counter
+  used as the React `key` of the two stateful sections, so they remount and
+  their drill-down state goes with them. Remounting also refetches, which is
+  wanted here: returning to a roster should show what is there now, not what was
+  there when you drilled in. `navigate` is called only by rail buttons — the
+  other `setView` callers (`open`, `openMatrix`, `startNew`, `selectProject`)
+  bypass it — so this cannot disturb a drill-down the app itself routed into.
+
+### Fix
+
+- **Spec:** none — a navigation defect with the required behaviour given
+  directly in the report.
+- **Plan:** none — the surrounding work is
+  [`2026-08-13-project-item-hierarchy.md`](docs/superpowers/plans/2026-08-13-project-item-hierarchy.md).
+- **Design change:** `navEpoch` in `App.tsx` (above), plus a new `Breadcrumb`
+  primitive rendered above the page header on `ProjectDetail` and `ItemDetail`.
+  The trail is `<nav aria-label="Breadcrumb">` with the last crumb as plain text
+  carrying `aria-current="page"` — it is where you already are, so it must not
+  be a control. The existing header buttons are kept and prefixed `←`, since a
+  named back button and a trail answer different questions.
+- **Commit / PR:** `1b84b9e`
+- **Test:** `web/src/App.test.tsx` — `clicking 01 while inside an item returns
+  to the project roster`, which drills roster → project → item, clicks the rail
+  entry, and asserts the roster is back and the item heading is gone. It fails
+  without the `key`. `web/src/pages/ItemDetail.test.tsx` — six tests for the
+  trail: both ancestors present, each navigating to its own level, the current
+  item *not* a button, the explicit back button still working, and the
+  stale-item branch still offering a way out.
+  `navButton` in `App.test.tsx` is now scoped to the rail
+  (`role="complementary"`), because the breadcrumb legitimately introduces a
+  second `Projects & items` button and an unscoped query matched both.
+- **Verified:** yes. Web **119 passed** across 13 files, `npm run build` clean.
+  Checked in the running app: rail `01` from inside an item returns to a
+  4-card roster; the trail reads
+  `Projects & items > Haliba Field Development > Compressor` with the first two
+  as links and the third `aria-current="page"`; clicking the project crumb and
+  then a different item switched Compressor → Switchgear. Rail `02` from inside
+  `ADP-RFQ-2026-011` returns to the 7-row RFQ roster.
