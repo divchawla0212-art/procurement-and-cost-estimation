@@ -108,9 +108,11 @@ CI runs that same command on every pull request into `main`, via
 3.12, no provider secrets. Keep it that way: a test that needs a key belongs
 behind a skip guard, not behind a repository secret.
 
-The app runs via the `procurement-api` and `enterprise-web` entries in
-`.claude/launch.json` — use the preview tooling, not bare `uvicorn` / `npm run
-dev`.
+The app runs via [`run.ps1`](run.ps1) at the repo root — one command for both
+servers, with preflight checks and a clean Ctrl+C. Use it rather than bare
+`uvicorn` / `npm run dev`. `.claude/launch.json` still defines `procurement-api`
+and `enterprise-web` for the preview tooling; note that both hardcode their
+ports, so a preview server and `run.ps1` cannot be up at once.
 
 ## Store invariants — violating these corrupts award decisions
 

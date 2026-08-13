@@ -170,8 +170,23 @@ browser; they only ever come from this `.env`.
 
 ## 7. Run the app (API + React)
 
-Setup, ingestion and review all happen here. It is two processes, so you need
-**two terminals**, both in the repo root.
+Setup, ingestion and review all happen here. One command from the repo root
+starts both processes:
+
+```powershell
+.\run.ps1
+```
+
+It checks the virtualenv, the web dependencies and `.env` before starting,
+refuses with a readable message when port 8000 or 5173 is already taken, waits
+for `/api/health` before opening a browser, and stops both servers on Ctrl+C.
+`Get-Help .\run.ps1 -Full` lists the switches (`-NoBrowser`, `-NoReload`,
+`-WebPort`). If PowerShell blocks it with an execution-policy error, see
+[Optional: activating the venv](#optional-activating-the-venv) for the one-time
+`Set-ExecutionPolicy` fix.
+
+Prefer to see the two processes separately? They are two terminals, both in the
+repo root.
 
 **Terminal 1 — the API:**
 
@@ -196,6 +211,7 @@ proxies `/api` straight to `127.0.0.1:8000`, so both must be running.
 
 | Task | Command |
 |---|---|
+| Run the app (both servers) | `.\run.ps1` |
 | Run tests | `.venv\Scripts\python.exe -m pytest` |
 | API | `.venv\Scripts\python.exe -m uvicorn api.main:app --reload --port 8000` |
 | Web UI | `npm --prefix web run dev` |
