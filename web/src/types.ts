@@ -358,3 +358,75 @@ export interface RfqDetail {
   bids: BidWithVdrl[]
   bid_selection: BidSelection | null
 }
+
+/* ------------------------------------------- workflow projects and items */
+//
+// The `Workflow` prefix is not decoration. `ProjectSummary` and `ProjectDetail`
+// above belong to the *ingestion* project — a different entity, in a different
+// store, reached by `slug` rather than by id. Two types called `ProjectDetail`
+// in one file is precisely how the two identities get confused in code.
+
+export interface WorkflowProject {
+  id: string
+  name: string
+  code: string
+  client: string
+  location: string
+  live_period_start: string
+  live_period_end: string
+  currency: string
+  status: 'Active' | 'On Hold' | 'Closed'
+}
+
+/** What a create form supplies. `id` is server-generated; `status` defaults to
+ *  Active and no route ever changes it after creation. */
+export type WorkflowProjectInput = Omit<WorkflowProject, 'id' | 'status'> &
+  Partial<Pick<WorkflowProject, 'status'>>
+
+/** A roster row. The counts are computed server-side, so no screen re-derives
+ *  them from a list it only partly holds. */
+export interface WorkflowProjectSummary extends WorkflowProject {
+  item_count: number
+  rfq_count: number
+}
+
+export interface WorkflowItem {
+  id: string
+  project_id: string
+  item_type: string
+  description: string
+  qty: number
+  uom: string
+  discipline: string
+  estimated_value_aed: number
+  required_on_site: string | null
+  is_long_lead: boolean
+}
+
+export type WorkflowItemInput = Omit<WorkflowItem, 'id' | 'project_id'>
+
+/** What create and patch return: the item, plus an advisory caution when its
+ *  delivery date falls outside the project's live period. Advisory — the item
+ *  is stored either way, because needing something after a live period closes
+ *  is unusual rather than impossible. */
+export interface WorkflowItemSaved extends WorkflowItem {
+  live_period_warning: string | null
+}
+
+/** One project with everything the detail screen renders. One response rather
+ *  than three, so the three lists cannot come from three generations of the
+ *  document. */
+export interface WorkflowProjectDetail {
+  project: WorkflowProject
+  items: WorkflowItem[]
+  rfqs: Rfq[]
+}
+
+export interface RfqInput {
+  project_id: string
+  item_ids: string[]
+  reference: string
+  package: string
+  discipline: string
+  value_estimate_aed: number
+}

@@ -14,6 +14,13 @@ import type {
   TechnicalPackage,
   VdrlLine,
   Statement,
+  RfqInput,
+  WorkflowItemInput,
+  WorkflowItemSaved,
+  WorkflowProject,
+  WorkflowProjectDetail,
+  WorkflowProjectInput,
+  WorkflowProjectSummary,
 } from './types'
 
 /** The server's `detail` if it sent one, else the status line. */
@@ -47,7 +54,7 @@ function getJson<T>(path: string): Promise<T> {
 
 function sendJson<T>(
   path: string,
-  method: 'POST' | 'PUT',
+  method: 'POST' | 'PUT' | 'PATCH',
   body: unknown,
 ): Promise<T> {
   return fetch(path, {
@@ -186,6 +193,90 @@ export function runIngestion(
     'POST',
     body,
   )
+}
+
+/* ------------------------------------------- workflow projects and items */
+//
+// The hierarchy the RFQ process hangs off: a project, its equipment items, and
+// the RFQs raised against them. A different store from the ingestion projects
+// above, reached by id rather than by slug — hence the `Workflow` prefix on
+// every name here.
+
+export function fetchWorkflowProjects(): Promise<WorkflowProjectSummary[]> {
+  return getJson<{ projects: WorkflowProjectSummary[] }>(
+    '/api/workflow/projects',
+  ).then((body) => body.projects)
+}
+
+export function fetchWorkflowProject(
+  projectId: string,
+): Promise<WorkflowProjectDetail> {
+  return getJson(`/api/workflow/projects/${encodeURIComponent(projectId)}`)
+}
+
+export function createWorkflowProject(
+  body: WorkflowProjectInput,
+): Promise<WorkflowProject> {
+  return sendJson('/api/workflow/projects', 'POST', body)
+}
+
+/** Partial by contract: send only what changed. The server reads the body with
+ *  `exclude_unset`, so a field absent here is left alone — spreading a whole
+ *  object in would turn every edit into a full overwrite. */
+export function updateWorkflowProject(
+  projectId: string,
+  changes: Partial<WorkflowProjectInput>,
+): Promise<WorkflowProject> {
+  return sendJson(
+    `/api/workflow/projects/${encodeURIComponent(projectId)}`,
+    'PATCH',
+    changes,
+  )
+}
+
+export function deleteWorkflowProject(projectId: string): Promise<void> {
+  return fetch(`/api/workflow/projects/${encodeURIComponent(projectId)}`, {
+    method: 'DELETE',
+  }).then(expectNoContent)
+}
+
+export function createWorkflowItem(
+  projectId: string,
+  body: WorkflowItemInput,
+): Promise<WorkflowItemSaved> {
+  return sendJson(
+    `/api/workflow/projects/${encodeURIComponent(projectId)}/items`,
+    'POST',
+    body,
+  )
+}
+
+export function updateWorkflowItem(
+  projectId: string,
+  itemId: string,
+  changes: Partial<WorkflowItemInput>,
+): Promise<WorkflowItemSaved> {
+  return sendJson(
+    `/api/workflow/projects/${encodeURIComponent(projectId)}/items/${encodeURIComponent(itemId)}`,
+    'PATCH',
+    changes,
+  )
+}
+
+/** A 409 here carries the server's own sentence naming the RFQ that blocks the
+ *  delete, and `unwrap` raises it verbatim for the screen to show. */
+export function deleteWorkflowItem(
+  projectId: string,
+  itemId: string,
+): Promise<void> {
+  return fetch(
+    `/api/workflow/projects/${encodeURIComponent(projectId)}/items/${encodeURIComponent(itemId)}`,
+    { method: 'DELETE' },
+  ).then(expectNoContent)
+}
+
+export function createRfq(body: RfqInput): Promise<Rfq> {
+  return sendJson('/api/workflow/rfqs', 'POST', body)
 }
 
 /* ------------------------------------------------------------------ workflow */

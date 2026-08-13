@@ -7,7 +7,13 @@
 // suites would stay green. This mocks `fetch` directly and asserts on the
 // request `api.ts` actually sends.
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { runIngestion } from './api'
+import {
+  deleteWorkflowItem,
+  fetchWorkflowProjects,
+  runIngestion,
+  updateWorkflowItem,
+  updateWorkflowProject,
+} from './api'
 import type { ProjectSetup } from './types'
 
 const setup: ProjectSetup = {
@@ -89,5 +95,107 @@ describe('runIngestion request body', () => {
     expect(JSON.parse(init.body as string)).toEqual({ force: true })
 
     vi.unstubAllGlobals()
+  })
+})
+
+
+// The workflow project and item fetchers. Same reasoning as the block above:
+// the screens mock `../api` wholesale, so nothing else asserts that these send
+// the request they claim to — a misnamed field or a lost method would leave
+// every other suite green.
+describe('workflow project and item requests', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  function mockJson(body: unknown, status = 200) {
+    return vi.fn(async () => ({
+      ok: status < 400,
+      status,
+      statusText: 'x',
+      json: async () => body,
+    })) as unknown as typeof fetch
+  }
+
+  function callOf(fetchMock: typeof fetch, index = 0) {
+    return (fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls[index]
+  }
+
+  it('unwraps the roster envelope into a plain array', async () => {
+    const fetchMock = mockJson({ projects: [{ id: 'prj_1' }] })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(fetchWorkflowProjects()).resolves.toEqual([{ id: 'prj_1' }])
+    expect(callOf(fetchMock)[0]).toBe('/api/workflow/projects')
+  })
+
+  it('patches a project with only the fields it was given', async () => {
+    const fetchMock = mockJson({ id: 'prj_1' })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await updateWorkflowProject('prj_1', { status: 'On Hold' })
+
+    const [url, init] = callOf(fetchMock)
+    expect(url).toBe('/api/workflow/projects/prj_1')
+    expect(init.method).toBe('PATCH')
+    // Only the changed field: the server reads the body with `exclude_unset`,
+    // so anything sent here is something the user asked to change.
+    expect(JSON.parse(init.body as string)).toEqual({ status: 'On Hold' })
+  })
+
+  it('patches an item under its own project path', async () => {
+    const fetchMock = mockJson({ id: 'itm_1', live_period_warning: null })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await updateWorkflowItem('prj_1', 'itm_1', { qty: 3 })
+
+    const [url, init] = callOf(fetchMock)
+    expect(url).toBe('/api/workflow/projects/prj_1/items/itm_1')
+    expect(init.method).toBe('PATCH')
+    expect(JSON.parse(init.body as string)).toEqual({ qty: 3 })
+  })
+
+  it('deletes an item and expects no body back', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 204,
+      json: async () => {
+        throw new Error('204 has no body — parsing one would throw')
+      },
+    })) as unknown as typeof fetch
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(deleteWorkflowItem('prj_1', 'itm_1')).resolves.toBeUndefined()
+    expect(callOf(fetchMock)[0]).toBe('/api/workflow/projects/prj_1/items/itm_1')
+    expect(callOf(fetchMock)[1].method).toBe('DELETE')
+  })
+
+  it("raises the server's own sentence when a delete is refused", async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockJson(
+        {
+          detail:
+            'This item cannot be deleted: it is covered by ADP-RFQ-2026-014. Amend or retender first.',
+        },
+        409,
+      ),
+    )
+
+    // Verbatim, because it names the RFQ that blocks the delete — the only
+    // actionable thing on the screen at that moment.
+    await expect(deleteWorkflowItem('prj_1', 'itm_1')).rejects.toThrow(
+      /covered by ADP-RFQ-2026-014/,
+    )
+  })
+
+  it('percent-encodes ids rather than pasting them into the path', async () => {
+    const fetchMock = mockJson({ id: 'prj_1' })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await updateWorkflowProject('prj a/b', { name: 'X' })
+
+    expect(callOf(fetchMock)[0]).toBe('/api/workflow/projects/prj%20a%2Fb')
   })
 })
