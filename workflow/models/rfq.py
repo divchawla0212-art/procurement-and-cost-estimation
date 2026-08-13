@@ -48,11 +48,24 @@ class TechnicalPackage(BaseModel):
     frozen_by: str | None = None
 
 
+def new_shortlist_entry_id() -> str:
+    return f"sle_{uuid4().hex[:8]}"
+
+
+def new_vdrl_line_id() -> str:
+    return f"vdl_{uuid4().hex[:8]}"
+
+
 class ShortlistEntry(BaseModel):
     """`override_by` and `override_reason` exist so that including a vendor
     against the prequal signal is a positive, attributed act rather than a
-    silent edit."""
+    silent edit.
 
+    `id` exists so removal can address a member by identity. List order is not
+    a contract — the same rule the procurement store states as "by id, never
+    by index" — and a vendor name is user-supplied text, not a key."""
+
+    id: str = Field(default_factory=new_shortlist_entry_id)
     rfq_id: str
     vendor_name: str
     prequal_status: str
@@ -69,6 +82,7 @@ class TbeTemplate(BaseModel):
 
 
 class VdrlLine(BaseModel):
+    id: str = Field(default_factory=new_vdrl_line_id)
     rfq_id: str
     doc_code: str
     title: str

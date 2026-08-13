@@ -291,6 +291,7 @@ export interface TechnicalPackage {
 }
 
 export interface ShortlistEntry {
+  id: string
   rfq_id: string
   vendor_name: string
   prequal_status: string
@@ -307,6 +308,7 @@ export interface TbeTemplate {
 }
 
 export interface VdrlLine {
+  id: string
   rfq_id: string
   doc_code: string
   title: string

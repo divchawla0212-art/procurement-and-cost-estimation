@@ -5,8 +5,14 @@ import type {
   ProjectDetail,
   ProjectSetup,
   ProjectSummary,
+  Attachment,
+  Rfq,
   RfqDetail,
   RfqRoster,
+  ShortlistEntry,
+  TbeTemplate,
+  TechnicalPackage,
+  VdrlLine,
   Statement,
 } from './types'
 
@@ -192,4 +198,101 @@ export function fetchRfqRoster(projectId?: string | null): Promise<RfqRoster> {
 
 export function fetchRfq(rfqId: string): Promise<RfqDetail> {
   return getJson<RfqDetail>(`/api/workflow/rfqs/${encodeURIComponent(rfqId)}`)
+}
+
+/* The wizard's writes. Each maps to one control in one step; the server owns
+   every rule, so these deliberately carry no validation of their own. */
+
+export function setTechnicalPackage(
+  rfqId: string,
+  body: { revision: string; basis_of_design: string; attachments: Attachment[] },
+): Promise<TechnicalPackage> {
+  return sendJson<TechnicalPackage>(
+    `/api/workflow/rfqs/${encodeURIComponent(rfqId)}/technical-package`,
+    'PUT',
+    body,
+  )
+}
+
+export function freezeTechnicalPackage(rfqId: string): Promise<TechnicalPackage> {
+  return sendJson<TechnicalPackage>(
+    `/api/workflow/rfqs/${encodeURIComponent(rfqId)}/technical-package/freeze`,
+    'POST',
+    {},
+  )
+}
+
+export function addShortlistEntry(
+  rfqId: string,
+  body: {
+    vendor_name: string
+    prequal_status: string
+    scope_code_fit: boolean
+    included: boolean
+    override_reason?: string | null
+  },
+): Promise<ShortlistEntry> {
+  return sendJson<ShortlistEntry>(
+    `/api/workflow/rfqs/${encodeURIComponent(rfqId)}/shortlist`,
+    'POST',
+    body,
+  )
+}
+
+export function removeShortlistEntry(rfqId: string, entryId: string): Promise<void> {
+  return fetch(
+    `/api/workflow/rfqs/${encodeURIComponent(rfqId)}/shortlist/${encodeURIComponent(entryId)}`,
+    { method: 'DELETE' },
+  ).then(expectNoContent)
+}
+
+export function approveShortlist(rfqId: string): Promise<{ approved_by: string }> {
+  return sendJson<{ approved_by: string }>(
+    `/api/workflow/rfqs/${encodeURIComponent(rfqId)}/shortlist/approve`,
+    'POST',
+    {},
+  )
+}
+
+export function setTbeTemplate(
+  rfqId: string,
+  body: { criteria: string[]; source_rfq_reference?: string | null },
+): Promise<TbeTemplate> {
+  return sendJson<TbeTemplate>(
+    `/api/workflow/rfqs/${encodeURIComponent(rfqId)}/tbe-template`,
+    'PUT',
+    body,
+  )
+}
+
+export function addVdrlLine(
+  rfqId: string,
+  body: { doc_code: string; title: string; doc_type: string; mandatory: boolean },
+): Promise<VdrlLine> {
+  return sendJson<VdrlLine>(
+    `/api/workflow/rfqs/${encodeURIComponent(rfqId)}/vdrl`,
+    'POST',
+    body,
+  )
+}
+
+export function removeVdrlLine(rfqId: string, lineId: string): Promise<void> {
+  return fetch(
+    `/api/workflow/rfqs/${encodeURIComponent(rfqId)}/vdrl/${encodeURIComponent(lineId)}`,
+    { method: 'DELETE' },
+  ).then(expectNoContent)
+}
+
+/** Tick a step off: advance the RFQ. A closed gate answers 409 and `unwrap`
+ *  raises the gate's own sentence, which the wizard shows verbatim. */
+export function transitionRfq(
+  rfqId: string,
+  target: string,
+  reason?: string,
+): Promise<Rfq> {
+  return sendJson<Rfq>(
+    `/api/workflow/rfqs/${encodeURIComponent(rfqId)}/transition`,
+    'POST',
+    { target, reason: reason ?? null },
+  )
 }

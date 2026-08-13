@@ -207,3 +207,32 @@ def test_the_document_is_human_readable_json(tmp_path):
             "shortlist_approvals", "tbe", "vdrl", "bids", "receipts",
             "bid_shortlists"} <= set(doc)
     assert doc["rfqs"][0]["reference"] == "ADP-RFQ-2026-014"
+
+
+def test_artifact_ids_survive_a_round_trip(tmp_path):
+    """Removal addresses shortlist entries and VDRL lines by id. If the id were
+    regenerated on load, every "remove this one" would target a different row
+    after a restart — the silent-failure mode a new field on the store has."""
+    store, rfq_id = populated_store()
+    before_shortlist = [e.id for e in store.shortlist_for(rfq_id)]
+    before_vdrl = [line.id for line in store.vdrl_for(rfq_id)]
+    assert before_shortlist and before_vdrl
+
+    persistence.save(str(tmp_path), store)
+    loaded = persistence.load(str(tmp_path))
+
+    assert [e.id for e in loaded.shortlist_for(rfq_id)] == before_shortlist
+    assert [line.id for line in loaded.vdrl_for(rfq_id)] == before_vdrl
+
+
+def test_removing_an_artifact_does_not_survive_on_disk(tmp_path):
+    """`save` replaces the document wholesale, so a removed entry cannot come
+    back after a restart."""
+    store, rfq_id = populated_store()
+    entry = store.shortlist_for(rfq_id)[0]
+    persistence.save(str(tmp_path), store)
+
+    store.remove_shortlist_entry(rfq_id, entry.id)
+    persistence.save(str(tmp_path), store)
+
+    assert persistence.load(str(tmp_path)).shortlist_for(rfq_id) == []

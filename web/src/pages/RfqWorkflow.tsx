@@ -4,6 +4,7 @@ import { fetchRfqRoster } from '../api'
 import { useAsync } from '../useAsync'
 import { StageStrip } from '../components/StageStrip'
 import { RfqDetail } from './RfqDetail'
+import { RfqWizard } from './RfqWizard'
 import {
   Card,
   EmptyState,
@@ -20,6 +21,8 @@ import {
  * gate are their own screens; what these two views owe the reader is a clear
  * account of where every RFQ stands and what each one is waiting on.
  */
+const WIZARD_RANGE = ['Scoping', 'Shortlisting', 'Issued', 'Clarifications']
+
 export function RfqWorkflow(): JSX.Element {
   const { data, error, loading } = useAsync(() => fetchRfqRoster(), [])
   const [openRfqId, setOpenRfqId] = useState<string | null>(null)
@@ -29,8 +32,14 @@ export function RfqWorkflow(): JSX.Element {
   if (!data) return <ErrorState message="No workflow data was returned." />
 
   if (openRfqId) {
+    // The wizard covers the stages that have editors behind them. An RFQ
+    // already past Clarifications gets the read-only view instead — showing it
+    // four steps it can no longer act on would be worse than showing none.
+    const open = data.rfqs.find((r) => r.id === openRfqId)
+    const inWizard = open ? WIZARD_RANGE.includes(open.stage) : true
+    const Screen = inWizard ? RfqWizard : RfqDetail
     return (
-      <RfqDetail
+      <Screen
         rfqId={openRfqId}
         stages={data.stages}
         onBack={() => setOpenRfqId(null)}

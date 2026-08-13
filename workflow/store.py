@@ -213,6 +213,14 @@ class WorkflowStore:
     ) -> TechnicalPackage:
         if rfq_id not in self._rfqs:
             raise KeyError(f"Unknown RFQ: {rfq_id}")
+        existing = self._packages.get(rfq_id)
+        if existing is not None and existing.frozen_at is not None:
+            # Freezing is the Scoping exit criterion precisely because vendors
+            # bid against a fixed revision. Replacing it afterwards moves the
+            # goalposts under bids already invited against the old one.
+            raise ValueError(
+                "The technical package is frozen and can no longer be edited."
+            )
         package = TechnicalPackage(
             rfq_id=rfq_id,
             revision=revision,
@@ -231,6 +239,10 @@ class WorkflowStore:
         package = self._packages.get(rfq_id)
         if package is None:
             raise KeyError(f"No technical package for RFQ: {rfq_id}")
+        if package.frozen_at is not None:
+            raise ValueError(
+                f"The technical package is already frozen, by {package.frozen_by}."
+            )
         missing = [a.doc_code for a in package.attachments if not a.revision]
         if missing:
             raise ValueError(
@@ -264,7 +276,22 @@ class WorkflowStore:
             override_reason=override_reason,
         )
         self._shortlists.setdefault(rfq_id, []).append(entry)
+        self._revoke_shortlist_approval(rfq_id)
         return entry
+
+    def remove_shortlist_entry(self, rfq_id: str, entry_id: str) -> None:
+        entries = self._shortlists.get(rfq_id, [])
+        remaining = [e for e in entries if e.id != entry_id]
+        if len(remaining) == len(entries):
+            raise KeyError(f"Unknown shortlist entry: {entry_id}")
+        self._shortlists[rfq_id] = remaining
+        self._revoke_shortlist_approval(rfq_id)
+
+    def _revoke_shortlist_approval(self, rfq_id: str) -> None:
+        """Approval is of a specific set of vendors, so it cannot outlive an
+        edit to that set. Otherwise a vendor could be swapped in after
+        procurement signed off and the RFQ would still issue as approved."""
+        self._shortlist_approvals.pop(rfq_id, None)
 
     def shortlist_for(self, rfq_id: str) -> list[ShortlistEntry]:
         return list(self._shortlists.get(rfq_id, []))
@@ -306,6 +333,13 @@ class WorkflowStore:
         )
         self._vdrl.setdefault(rfq_id, []).append(line)
         return line
+
+    def remove_vdrl_line(self, rfq_id: str, line_id: str) -> None:
+        lines = self._vdrl.get(rfq_id, [])
+        remaining = [line for line in lines if line.id != line_id]
+        if len(remaining) == len(lines):
+            raise KeyError(f"Unknown VDRL line: {line_id}")
+        self._vdrl[rfq_id] = remaining
 
     def vdrl_for(self, rfq_id: str) -> list[VdrlLine]:
         return list(self._vdrl.get(rfq_id, []))

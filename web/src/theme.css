@@ -996,3 +996,52 @@ p.warn { margin: 0.5rem 0 0; }
 }
 .linkback { font: inherit; letter-spacing: inherit; text-transform: none; }
 .linkish:hover, .linkback:hover { color: var(--accent); }
+
+/* ------------------------------------------------------------ rfq wizard */
+
+.wizsteps {
+  display: flex;
+  gap: 0.4rem;
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+  overflow-x: auto;
+}
+.wizstep {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 10rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 0.5rem 0.7rem;
+  cursor: pointer;
+  text-align: left;
+}
+.wizstep.is-done { background: var(--pass-soft); border-color: #bfe3d1; }
+.wizstep.is-current { border-color: var(--accent); }
+.wizstep.is-open { box-shadow: 0 0 0 2px var(--accent-soft); }
+.wizstep-mark {
+  display: grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  flex: none;
+  border-radius: 50%;
+  background: var(--surface-2);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+.wizstep.is-done .wizstep-mark { background: var(--pass); color: #fff; }
+.wizstep.is-current .wizstep-mark { background: var(--accent); color: #fff; }
+.wizstep-name { font-size: 0.85rem; font-weight: 600; }
+
+.wizactions { display: flex; gap: 0.5rem; margin-top: 0.9rem; flex-wrap: wrap; }
+.field-label {
+  display: block;
+  margin: 0.8rem 0 0.3rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--muted);
+}

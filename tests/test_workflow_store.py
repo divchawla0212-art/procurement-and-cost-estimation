@@ -449,3 +449,117 @@ def test_evaluation_gate_blocks_until_bids_are_selected():
     result = check_gate(store, rfq.id, Stage.BIDS_RECEIVED, Stage.EVALUATION)
     assert result.passed is False
     assert "select" in result.reason.lower()
+
+
+# -- editing artifacts: the wizard needs add *and* remove ---------------------
+
+def test_shortlist_entries_carry_a_stable_id():
+    """Removal addresses a member by id, never by position: two vendors can be
+    added, one removed, and the list order is not a contract."""
+    store = make_store()
+    rfq = seed_rfq(store)
+    a = store.add_shortlist_entry(rfq.id, vendor_name="Galfar", prequal_status="Qualified",
+                                  scope_code_fit=True, included=True)
+    b = store.add_shortlist_entry(rfq.id, vendor_name="OQC", prequal_status="Under review",
+                                  scope_code_fit=False, included=False)
+    assert a.id.startswith("sle_")
+    assert a.id != b.id
+
+
+def test_removing_a_shortlist_entry_leaves_the_others():
+    store = make_store()
+    rfq = seed_rfq(store)
+    a = store.add_shortlist_entry(rfq.id, vendor_name="Galfar", prequal_status="Qualified",
+                                  scope_code_fit=True, included=True)
+    b = store.add_shortlist_entry(rfq.id, vendor_name="OQC", prequal_status="Qualified",
+                                  scope_code_fit=True, included=True)
+
+    store.remove_shortlist_entry(rfq.id, a.id)
+
+    assert [e.id for e in store.shortlist_for(rfq.id)] == [b.id]
+
+
+def test_removing_an_unknown_shortlist_entry_raises():
+    store = make_store()
+    rfq = seed_rfq(store)
+    with pytest.raises(KeyError):
+        store.remove_shortlist_entry(rfq.id, "sle_missing")
+
+
+def test_changing_the_shortlist_revokes_its_approval():
+    """Approval is of a specific list of vendors. Letting it survive an edit
+    would mean a vendor could be swapped in *after* procurement signed off, and
+    the RFQ would still issue as approved."""
+    store = make_store()
+    rfq = seed_rfq(store)
+    entry = store.add_shortlist_entry(rfq.id, vendor_name="Galfar", prequal_status="Qualified",
+                                      scope_code_fit=True, included=True)
+    store.approve_shortlist(rfq.id, by="procurement@example.com")
+    assert store.is_shortlist_approved(rfq.id) is True
+
+    store.add_shortlist_entry(rfq.id, vendor_name="Petrofac", prequal_status="Qualified",
+                              scope_code_fit=True, included=True)
+    assert store.is_shortlist_approved(rfq.id) is False, "adding a vendor must re-open approval"
+
+    store.approve_shortlist(rfq.id, by="procurement@example.com")
+    store.remove_shortlist_entry(rfq.id, entry.id)
+    assert store.is_shortlist_approved(rfq.id) is False, "removing a vendor must re-open approval"
+
+
+def test_vdrl_lines_carry_a_stable_id_and_can_be_removed():
+    store = make_store()
+    rfq = seed_rfq(store)
+    a = store.add_vdrl_line(rfq.id, doc_code="GA-001", title="GA", doc_type="Doc")
+    b = store.add_vdrl_line(rfq.id, doc_code="DS-001", title="Datasheet", doc_type="Doc")
+    assert a.id.startswith("vdl_")
+
+    store.remove_vdrl_line(rfq.id, a.id)
+
+    assert [line.id for line in store.vdrl_for(rfq.id)] == [b.id]
+
+
+def test_removing_an_unknown_vdrl_line_raises():
+    store = make_store()
+    rfq = seed_rfq(store)
+    with pytest.raises(KeyError):
+        store.remove_vdrl_line(rfq.id, "vdl_missing")
+
+
+def test_a_frozen_technical_package_cannot_be_replaced():
+    """Freezing is the whole point of the Scoping gate: vendors bid against a
+    fixed revision. A later edit would move the goalposts under bids already
+    invited against it."""
+    store = make_store()
+    rfq = seed_rfq(store)
+    store.set_technical_package(
+        rfq.id, revision="Rev. B", basis_of_design="basis",
+        attachments=[Attachment(doc_code="HAL-PID-001", title="P&ID", revision="Rev. C")],
+    )
+    store.freeze_package(rfq.id, by="lead.engineer@example.com")
+
+    with pytest.raises(ValueError, match="frozen"):
+        store.set_technical_package(
+            rfq.id, revision="Rev. C", basis_of_design="changed", attachments=[],
+        )
+
+    assert store.get_technical_package(rfq.id).revision == "Rev. B"
+
+
+def test_an_unfrozen_package_can_still_be_edited():
+    store = make_store()
+    rfq = seed_rfq(store)
+    store.set_technical_package(rfq.id, revision="Rev. A", basis_of_design="first",
+                                attachments=[])
+    store.set_technical_package(rfq.id, revision="Rev. B", basis_of_design="second",
+                                attachments=[])
+    assert store.get_technical_package(rfq.id).revision == "Rev. B"
+
+
+def test_freezing_twice_is_refused():
+    store = make_store()
+    rfq = seed_rfq(store)
+    store.set_technical_package(rfq.id, revision="Rev. B", basis_of_design="basis",
+                                attachments=[])
+    store.freeze_package(rfq.id, by="lead.engineer@example.com")
+    with pytest.raises(ValueError, match="already frozen"):
+        store.freeze_package(rfq.id, by="someone.else@example.com")

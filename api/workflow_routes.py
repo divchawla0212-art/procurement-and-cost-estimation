@@ -100,6 +100,29 @@ class FreezeIn(BaseModel):
     is an attributed act, and the attribution comes from the session."""
 
 
+class ShortlistEntryIn(BaseModel):
+    vendor_name: str
+    prequal_status: str
+    scope_code_fit: bool
+    included: bool
+    # An override is a positive act, so it carries its own reason. `override_by`
+    # is not an input for the same reason `by` never is — it comes from the
+    # session, or a user could sign someone else's name to the exception.
+    override_reason: str | None = None
+
+
+class TbeTemplateIn(BaseModel):
+    criteria: list[str]
+    source_rfq_reference: str | None = None
+
+
+class VdrlLineIn(BaseModel):
+    doc_code: str
+    title: str
+    doc_type: str
+    mandatory: bool = True
+
+
 @router.get("/stages")
 def get_stages() -> dict:
     return {"stages": [s.value for s in STAGE_ORDER]}
@@ -251,6 +274,10 @@ def set_technical_package(rfq_id: str, body: TechnicalPackageIn) -> dict:
             )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        # A frozen package refusing an edit: the RFQ exists and the request is
+        # well-formed, the workflow simply says no.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return package.model_dump(mode="json")
 
 
@@ -266,3 +293,92 @@ def freeze_technical_package(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return package.model_dump(mode="json")
+
+
+# -- artifact editing --------------------------------------------------------
+#
+# Each of these is what one step of the wizard writes. They are all gated the
+# same way as everything else in this module: inside `locked_update`, so a
+# decision the store makes (a frozen package, an unknown id) and the write it
+# authorises are one critical section.
+
+
+@router.post("/rfqs/{rfq_id}/shortlist", status_code=201)
+def add_shortlist_entry(
+    rfq_id: str, body: ShortlistEntryIn, user: User = Depends(current_user)
+) -> dict:
+    try:
+        with persistence.locked_update(_root()) as store:
+            entry = store.add_shortlist_entry(
+                rfq_id,
+                vendor_name=body.vendor_name,
+                prequal_status=body.prequal_status,
+                scope_code_fit=body.scope_code_fit,
+                included=body.included,
+                # Attributed only when there is something to attribute.
+                override_by=user.email if body.override_reason else None,
+                override_reason=body.override_reason,
+            )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return entry.model_dump(mode="json")
+
+
+@router.delete("/rfqs/{rfq_id}/shortlist/{entry_id}", status_code=204)
+def remove_shortlist_entry(rfq_id: str, entry_id: str) -> None:
+    try:
+        with persistence.locked_update(_root()) as store:
+            store.remove_shortlist_entry(rfq_id, entry_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/rfqs/{rfq_id}/shortlist/approve")
+def approve_shortlist(rfq_id: str, user: User = Depends(current_user)) -> dict:
+    try:
+        with persistence.locked_update(_root()) as store:
+            store.approve_shortlist(rfq_id, by=user.email)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"approved_by": user.email}
+
+
+@router.put("/rfqs/{rfq_id}/tbe-template")
+def set_tbe_template(rfq_id: str, body: TbeTemplateIn) -> dict:
+    try:
+        with persistence.locked_update(_root()) as store:
+            template = store.set_tbe_template(
+                rfq_id,
+                criteria=body.criteria,
+                source_rfq_reference=body.source_rfq_reference,
+            )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return template.model_dump(mode="json")
+
+
+@router.post("/rfqs/{rfq_id}/vdrl", status_code=201)
+def add_vdrl_line(rfq_id: str, body: VdrlLineIn) -> dict:
+    try:
+        with persistence.locked_update(_root()) as store:
+            line = store.add_vdrl_line(
+                rfq_id,
+                doc_code=body.doc_code,
+                title=body.title,
+                doc_type=body.doc_type,
+                mandatory=body.mandatory,
+            )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return line.model_dump(mode="json")
+
+
+@router.delete("/rfqs/{rfq_id}/vdrl/{line_id}", status_code=204)
+def remove_vdrl_line(rfq_id: str, line_id: str) -> None:
+    try:
+        with persistence.locked_update(_root()) as store:
+            store.remove_vdrl_line(rfq_id, line_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
