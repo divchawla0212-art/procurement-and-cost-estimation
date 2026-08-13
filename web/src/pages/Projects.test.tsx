@@ -1,7 +1,16 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { Projects } from './Projects'
 import { HALIBA_ROW as HALIBA } from './workflow-fixtures'
+
+const BAB = {
+  ...HALIBA,
+  id: 'prj_2',
+  name: 'Bab Compression',
+  code: 'BAB',
+  item_count: 0,
+  rfq_count: 0,
+}
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
@@ -31,16 +40,123 @@ describe('Projects', () => {
     vi.clearAllMocks()
   })
 
-  it('lists projects with their item and RFQ counts', async () => {
+  it('gives each project its own card, titled with the project name', async () => {
+    vi.mocked(fetchWorkflowProjects).mockResolvedValue([HALIBA, BAB])
+
+    render(<Projects />)
+
+    await screen.findByText('Haliba Field Development')
+    // One card per project, and the name is the card's heading — not a cell in
+    // a shared row, which is what made four projects unreadable.
+    const headings = screen.getAllByRole('heading', { level: 3 })
+    expect(headings.map((h) => h.textContent)).toEqual([
+      'Haliba Field Development',
+      'Bab Compression',
+    ])
+  })
+
+  it('keeps the counts and status visible on the collapsed card', async () => {
     vi.mocked(fetchWorkflowProjects).mockResolvedValue([HALIBA])
 
     render(<Projects />)
 
-    const name = await screen.findByText('Haliba Field Development')
-    const row = name.closest('tr')!
-    expect(row).toHaveTextContent('HAL')
-    expect(row).toHaveTextContent('4')
-    expect(row).toHaveTextContent('1')
+    const card = (await screen.findByText('Haliba Field Development')).closest(
+      'article',
+    )!
+    expect(card).toHaveTextContent('HAL')
+    expect(card).toHaveTextContent('4 items')
+    expect(card).toHaveTextContent('1 RFQ')
+    expect(card).toHaveTextContent('Active')
+  })
+
+  it('singularises the counts so a card never reads "1 items"', async () => {
+    vi.mocked(fetchWorkflowProjects).mockResolvedValue([
+      { ...HALIBA, item_count: 1, rfq_count: 1 },
+    ])
+
+    render(<Projects />)
+
+    const card = (await screen.findByText('Haliba Field Development')).closest(
+      'article',
+    )!
+    expect(card).toHaveTextContent('1 item')
+    expect(card).not.toHaveTextContent('1 items')
+    expect(card).not.toHaveTextContent('1 RFQs')
+  })
+
+  it('folds the rest of the detail behind a closed disclosure', async () => {
+    vi.mocked(fetchWorkflowProjects).mockResolvedValue([HALIBA])
+
+    render(<Projects />)
+    const card = (await screen.findByText('Haliba Field Development')).closest(
+      'article',
+    )!
+    const details = card.querySelector('details')!
+
+    // Closed by default — that is the whole point. The fields are in the DOM
+    // (so they are findable and printable) but not on screen.
+    expect(details.open).toBe(false)
+    expect(within(card).getByText('Project code')).toBeInTheDocument()
+  })
+
+  it('shows every detail field once the disclosure is opened', async () => {
+    vi.mocked(fetchWorkflowProjects).mockResolvedValue([HALIBA])
+
+    render(<Projects />)
+    const card = (await screen.findByText('Haliba Field Development')).closest(
+      'article',
+    )!
+    fireEvent.click(within(card).getByText('Details'))
+
+    const labels = [...card.querySelectorAll('dt')].map((d) => d.textContent)
+    expect(labels).toEqual([
+      'Project code',
+      'Client',
+      'Location',
+      'Live period',
+      'Currency',
+      'Status',
+      'Items',
+      'RFQs raised',
+    ])
+    expect(within(card).getByText('Al Dhafra Petroleum')).toBeInTheDocument()
+    expect(within(card).getByText('Haliba field, UAE')).toBeInTheDocument()
+    expect(
+      within(card).getByText('2026-01-01 → 2029-12-31'),
+    ).toBeInTheDocument()
+  })
+
+  it('opens one card without opening the others', async () => {
+    vi.mocked(fetchWorkflowProjects).mockResolvedValue([HALIBA, BAB])
+
+    render(<Projects />)
+    const first = (await screen.findByText('Haliba Field Development')).closest(
+      'article',
+    )!
+    const second = screen.getByText('Bab Compression').closest('article')!
+    fireEvent.click(within(first).getByText('Details'))
+
+    expect(first.querySelector('details')!.open).toBe(true)
+    expect(second.querySelector('details')!.open).toBe(false)
+  })
+
+  it('carries the status as a class as well as a word', async () => {
+    // Colour is never the only signal, but the class is what lets On Hold read
+    // differently from Active at a glance.
+    vi.mocked(fetchWorkflowProjects).mockResolvedValue([
+      { ...HALIBA, status: 'On Hold' },
+    ])
+
+    render(<Projects />)
+    const card = (await screen.findByText('Haliba Field Development')).closest(
+      'article',
+    )!
+
+    expect(card.querySelector('.pcard-status--on-hold')).toBeTruthy()
+    expect(card.querySelector('.pcard-status')!.textContent).toBe('On Hold')
+    // Twice on purpose: the pill is the at-a-glance signal on the collapsed
+    // card, and the Status row is part of the full record inside the details.
+    expect(within(card).getAllByText('On Hold')).toHaveLength(2)
   })
 
   it('tells the user what an empty roster means', async () => {

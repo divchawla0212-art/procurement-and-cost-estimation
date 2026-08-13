@@ -1045,3 +1045,175 @@ p.warn { margin: 0.5rem 0 0; }
   font-weight: 600;
   color: var(--muted);
 }
+
+
+/* ------------------------------------------------- project cards (roster) */
+/*
+ * One card per project rather than one table row. Eight columns of detail on a
+ * single line stops being readable at about four projects: the reader scans
+ * horizontally to find a field and vertically to find the project, and neither
+ * axis is labelled where they are looking. The card names the project once and
+ * folds the detail behind a disclosure.
+ */
+
+.project-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 1rem;
+}
+
+.pcard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1.05rem 1.15rem 1.15rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-1);
+  transition: box-shadow 120ms ease, border-color 120ms ease;
+}
+
+.pcard:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-2);
+}
+
+.pcard-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.pcard-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  line-height: 1.3;
+  /* The title wraps rather than truncating: a project name is how the reader
+     identifies the card, so an ellipsis in the middle of one costs more than
+     the extra line it saves. */
+  overflow-wrap: anywhere;
+}
+
+.pcard-title .linkish {
+  font: inherit;
+  text-align: left;
+}
+
+.pcard-code {
+  flex: 0 0 auto;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.pcard-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.55rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.pcard-count b {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Status carries a colour *and* its own word — the label is never the only
+   signal, which is the same rule the verdict palette follows. */
+.pcard-status {
+  padding: 0.12rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.pcard-status--active {
+  background: var(--pass-soft);
+  border-color: #bfe3d1;
+  color: #145a43;
+}
+
+.pcard-status--on-hold {
+  background: var(--deviation-soft);
+  border-color: #f0d6a8;
+  color: #7a470a;
+}
+
+.pcard-status--closed {
+  background: var(--unanswered-soft);
+  border-color: var(--border-strong);
+  color: var(--muted);
+}
+
+.pcard-details {
+  border-top: 1px solid var(--border);
+  padding-top: 0.7rem;
+}
+
+.pcard-details > summary {
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--accent-ink);
+  list-style: none;
+}
+
+.pcard-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* The caret is drawn here rather than left to the browser's default marker, so
+   it is the same glyph in every engine and can sit on the correct side. */
+.pcard-details > summary::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: 0.4rem;
+  transition: transform 120ms ease;
+}
+
+.pcard-details[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.pcard-details > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.pcard-kv {
+  display: grid;
+  grid-template-columns: minmax(6.5rem, auto) 1fr;
+  gap: 0.35rem 0.9rem;
+  margin: 0.7rem 0 0;
+  font-size: 0.84rem;
+}
+
+.pcard-kv dt {
+  color: var(--muted);
+}
+
+.pcard-kv dd {
+  margin: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.pcard-open {
+  align-self: flex-start;
+  margin-top: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pcard,
+  .pcard-details > summary::before {
+    transition: none;
+  }
+}
