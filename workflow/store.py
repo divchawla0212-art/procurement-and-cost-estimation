@@ -38,6 +38,19 @@ class IncompleteShortlistEntry(ValueError):
     """
 
 
+def _with_id(supplied: str | None) -> dict:
+    """Let a caller pin an id, or leave the model's factory to mint one.
+
+    The one caller that pins them is `workflow.seed_demo`: a demo that is
+    rehearsed and reseeded needs the same RFQ to keep the same identity across
+    builds, and removal addresses a shortlist entry by id, so an unstable one
+    would make "remove this row" hit a different row each time. A supplied id
+    is validated exactly like a generated one and is immutable afterwards, so
+    this widens who may choose an id, not what an id is.
+    """
+    return {"id": supplied} if supplied is not None else {}
+
+
 def _reject_immutable(changes: dict, immutable: frozenset[str]) -> None:
     blocked = immutable & set(changes)
     if blocked:
@@ -81,8 +94,10 @@ class WorkflowStore:
         live_period_start: date,
         live_period_end: date,
         currency: str = "AED",
+        project_id: str | None = None,
     ) -> Project:
         project = Project(
+            **_with_id(project_id),
             name=name,
             code=code,
             client=client,
@@ -129,10 +144,12 @@ class WorkflowStore:
         estimated_value_aed: int,
         required_on_site: date | None = None,
         is_long_lead: bool = False,
+        item_id: str | None = None,
     ) -> Item:
         if project_id not in self._projects:
             raise KeyError(f"Unknown project: {project_id}")
         item = Item(
+            **_with_id(item_id),
             project_id=project_id,
             item_type=item_type,
             description=description,
@@ -239,8 +256,10 @@ class WorkflowStore:
         performance_rating: float | None = None,
         past_awards: int = 0,
         notes: str | None = None,
+        bidder_id: str | None = None,
     ) -> Bidder:
         bidder = Bidder(
+            **_with_id(bidder_id),
             name=name,
             country=country,
             currency=currency,
@@ -325,6 +344,7 @@ class WorkflowStore:
         package: str,
         discipline: str,
         value_estimate_aed: int,
+        rfq_id: str | None = None,
     ) -> RfqRecord:
         if project_id not in self._projects:
             raise KeyError(f"Unknown project: {project_id}")
@@ -336,6 +356,7 @@ class WorkflowStore:
                 raise ValueError(f"Item {item_id} does not belong to project {project_id}")
 
         rfq = RfqRecord(
+            **_with_id(rfq_id),
             reference=reference,
             project_id=project_id,
             item_ids=list(item_ids),
@@ -454,6 +475,7 @@ class WorkflowStore:
         override_reason: str | None = None,
         vendor_id: str | None = None,
         as_of: date | None = None,
+        entry_id: str | None = None,
     ) -> ShortlistEntry:
         """Invite a vendor, either from the registry (`vendor_id`) or by name.
 
@@ -503,6 +525,7 @@ class WorkflowStore:
             )
 
         entry = ShortlistEntry(
+            **_with_id(entry_id),
             rfq_id=rfq_id,
             vendor_id=vendor_id,
             vendor_name=vendor_name,
