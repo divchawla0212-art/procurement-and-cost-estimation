@@ -233,6 +233,56 @@ export function Card({
   )
 }
 
+/* --------------------------------------------------------------- Breadcrumb */
+
+/**
+ * The trail back out of a drill-down.
+ *
+ * A single "Back to project" button sitting in the header's action row was the
+ * whole of this before, and it read as a third action next to Edit and Delete
+ * rather than as a way out — reported as "I am not able to come back". A trail
+ * says two things a button cannot: where you are in the hierarchy, and that
+ * every level above you is reachable in one click. From an item that means the
+ * project *and* the roster, so switching to a different item is two clicks
+ * rather than a rebuild of the route.
+ *
+ * `<nav>` + `aria-label` because this is landmark navigation, and the last
+ * crumb is plain text with `aria-current="page"` — it is where you already are,
+ * so it must not be a control.
+ */
+export function Breadcrumb({
+  trail,
+}: {
+  /** Ancestors first, current page last. Only the last may omit `onClick`. */
+  trail: Array<{ label: string; onClick?: () => void }>
+}) {
+  return (
+    <nav className="crumbs" aria-label="Breadcrumb">
+      <ol>
+        {trail.map((crumb, i) => {
+          const last = i === trail.length - 1
+          return (
+            <li key={`${crumb.label}-${i}`}>
+              {crumb.onClick && !last ? (
+                <button type="button" className="crumb-link" onClick={crumb.onClick}>
+                  {crumb.label}
+                </button>
+              ) : (
+                <span aria-current={last ? 'page' : undefined}>{crumb.label}</span>
+              )}
+              {!last && (
+                <span className="crumb-sep" aria-hidden>
+                  /
+                </span>
+              )}
+            </li>
+          )
+        })}
+      </ol>
+    </nav>
+  )
+}
+
 /* --------------------------------------------------------------- PageHeader */
 
 export function PageHeader({

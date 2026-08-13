@@ -12,6 +12,7 @@ import { useAsync } from '../useAsync'
 import { ItemForm, ProjectForm, RaiseRfqForm } from './forms'
 import type { WorkflowProject, WorkflowProjectInput } from '../types'
 import {
+  Breadcrumb,
   Card,
   EmptyState,
   ErrorState,
@@ -125,6 +126,12 @@ export function ProjectDetail({
 
   return (
     <>
+      <Breadcrumb
+        trail={[
+          { label: 'Projects & items', onClick: onBack },
+          { label: project.name },
+        ]}
+      />
       <PageHeader
         eyebrow="01 · RFQ process"
         title={project.name}
@@ -132,7 +139,7 @@ export function ProjectDetail({
         actions={
           <div style={{ display: 'flex', gap: '0.5rem' }}>
             <button type="button" className="btn" onClick={onBack}>
-              Back to projects
+              ← Back to projects
             </button>
             {!editing && (
               <button

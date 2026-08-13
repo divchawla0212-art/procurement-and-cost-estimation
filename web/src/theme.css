@@ -1217,3 +1217,63 @@ p.warn { margin: 0.5rem 0 0; }
     transition: none;
   }
 }
+
+/* ------------------------------------------------------------- breadcrumbs */
+/*
+ * The trail out of a drill-down. Sits above the page header rather than in its
+ * action row: a way *out* and a set of actions *on* the current thing are
+ * different jobs, and putting the first among the second is what made "Back to
+ * project" read as a third action button nobody found.
+ */
+
+.crumbs {
+  margin: 0 0 0.75rem;
+}
+
+.crumbs ol {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.82rem;
+}
+
+.crumbs li {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+/* The current page — not a control, so it does not look like one. */
+.crumbs [aria-current='page'] {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.crumb-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--accent-ink);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.crumb-link:hover {
+  color: var(--accent);
+}
+
+.crumb-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.crumb-sep {
+  color: var(--muted-2);
+}

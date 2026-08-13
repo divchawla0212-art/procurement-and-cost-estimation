@@ -107,6 +107,10 @@ export default function App() {
   // A vendor to pre-select when the matrix is opened from the Overview, so a
   // click on a vendor there lands on that vendor's rows rather than "all".
   const [matrixVendor, setMatrixVendor] = useState<string | null>(null)
+  // Incremented by every rail click. Used as the `key` of the two sections that
+  // hold their own drill-down state, so clicking the section you are already in
+  // returns you to its top level. See `navigate`.
+  const [navEpoch, setNavEpoch] = useState(0)
 
   useEffect(() => {
     if (projects && projects.length && slug === null) {
@@ -165,6 +169,22 @@ export default function App() {
     // drill-down carries a vendor filter into it.
     if (next === 'matrix') setMatrixVendor(null)
     setView(next)
+    // Bump on every rail click, which is what makes a click on the section you
+    // are *already* in mean something.
+    //
+    // `Projects` and `RfqWorkflow` each own their drill-down state
+    // (`openProjectId` / `openItemId`, `openRfqId`). Without this, clicking
+    // "01 Projects & items" while three levels deep inside an item ran
+    // `setView('projects')` against a view that was already `'projects'` — a
+    // no-op — so the component never re-rendered, kept its drill-down state,
+    // and the rail button read as dead. That is what "these two pages are not
+    // working" was: not a missing back control, a nav entry that did nothing.
+    //
+    // Used as a React `key` below, so the section remounts and its drill-down
+    // state goes with it. Remounting also refetches, which is correct here:
+    // returning to a roster should show what is there now, not what was there
+    // when you drilled in.
+    setNavEpoch((n) => n + 1)
   }
 
   function startNew() {
@@ -340,8 +360,8 @@ export default function App() {
             {view === 'extraction' && active && (
               <ExtractionStatus slug={active.slug} projectName={active.name} />
             )}
-            {view === 'projects' && <Projects />}
-            {view === 'workflow' && <RfqWorkflow />}
+            {view === 'projects' && <Projects key={navEpoch} />}
+            {view === 'workflow' && <RfqWorkflow key={navEpoch} />}
             {view === 'admin' && user.role === 'admin' && (
               // The role check is repeated here rather than trusted from the
               // nav filter: `view` is component state, so a stale 'admin' left

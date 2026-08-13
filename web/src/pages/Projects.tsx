@@ -132,6 +132,12 @@ export function Projects(): JSX.Element {
         projectId={openProjectId}
         itemId={openItemId}
         onBack={() => setOpenItemId(null)}
+        onHome={() => {
+          // Straight out to the roster, clearing both levels at once.
+          setOpenItemId(null)
+          setOpenProjectId(null)
+          reload()
+        }}
       />
     )
   }

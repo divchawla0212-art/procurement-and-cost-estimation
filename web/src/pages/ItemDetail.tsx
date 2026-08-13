@@ -5,6 +5,7 @@ import { useAsync } from '../useAsync'
 import { ItemForm } from './forms'
 import type { WorkflowItem, WorkflowItemInput } from '../types'
 import {
+  Breadcrumb,
   Card,
   EmptyState,
   ErrorState,
@@ -48,10 +49,14 @@ export function ItemDetail({
   projectId,
   itemId,
   onBack,
+  onHome,
 }: {
   projectId: string
   itemId: string
+  /** Up one level, to the project that owns this item. */
   onBack: () => void
+  /** Up two levels, to the project roster. */
+  onHome: () => void
 }): JSX.Element {
   const [tick, setTick] = useState(0)
   const [editing, setEditing] = useState(false)
@@ -71,12 +76,19 @@ export function ItemDetail({
     // or if the user came back to a page that had been open a while.
     return (
       <>
+        <Breadcrumb
+          trail={[
+            { label: 'Projects & items', onClick: onHome },
+            { label: data.project.name, onClick: onBack },
+            { label: 'Item not found' },
+          ]}
+        />
         <PageHeader
           eyebrow="01 · RFQ process"
           title="Item not found"
           actions={
             <button type="button" className="btn" onClick={onBack}>
-              Back to project
+              ← Back to project
             </button>
           }
         />
@@ -93,6 +105,15 @@ export function ItemDetail({
 
   return (
     <>
+      {/* Both ancestors are reachable, so switching to a sibling item is
+          "project, then the item" rather than a trip back through the roster. */}
+      <Breadcrumb
+        trail={[
+          { label: 'Projects & items', onClick: onHome },
+          { label: data.project.name, onClick: onBack },
+          { label: item.item_type },
+        ]}
+      />
       <PageHeader
         eyebrow="01 · RFQ process"
         title={item.item_type}
@@ -100,7 +121,7 @@ export function ItemDetail({
         actions={
           <div style={{ display: 'flex', gap: '0.5rem' }}>
             <button type="button" className="btn" onClick={onBack}>
-              Back to project
+              ← Back to project
             </button>
             {!editing && (
               <button

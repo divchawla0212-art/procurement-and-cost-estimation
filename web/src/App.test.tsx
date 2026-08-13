@@ -7,7 +7,7 @@
 // blanks previously-good stored data") — so these tests drive `has_results`
 // explicitly rather than inferring it from `status`.
 import { describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import App from './App'
 import type { ProjectSetup, ProjectSummary } from './types'
 
@@ -57,10 +57,21 @@ vi.mock('./api', async (importOriginal) => {
     // every render here. Pending forever, like the others: these tests assert
     // on the nav rail, not on workflow data.
     fetchRfqRoster: vi.fn(() => new Promise<never>(() => {})),
+    // Unlike the others these two must resolve with real shapes: the BUG-016
+    // test drills roster -> project -> item before touching the rail.
+    fetchWorkflowProjects: vi.fn(() => new Promise<never>(() => {})),
+    fetchWorkflowProject: vi.fn(() => new Promise<never>(() => {})),
   }
 })
 
-import { fetchComplianceMatrix, fetchProjects, fetchSetup } from './api'
+import {
+  fetchComplianceMatrix,
+  fetchProjects,
+  fetchSetup,
+  fetchWorkflowProject,
+  fetchWorkflowProjects,
+} from './api'
+import { GENERATOR, HALIBA_ROW, detail } from './pages/workflow-fixtures'
 
 const baseProject: ProjectSummary = {
   slug: 'acme-1',
@@ -88,7 +99,9 @@ async function renderWithProject(status: string, hasResults: boolean) {
 }
 
 function navButton(name: RegExp) {
-  return screen.getByRole('button', { name })
+  // Scoped to the rail. The breadcrumb inside a drill-down carries a
+  // "Projects & items" button too, and an unscoped query matches both.
+  return within(screen.getByRole('complementary')).getByRole('button', { name })
 }
 
 describe('review screens gate on has_results, not status (BUG-001, I2)', () => {
@@ -346,5 +359,32 @@ describe('signing in lands on the RFQ process, not on bid evaluation', () => {
 
     expect(screen.queryByText(/Loading RFQ workflow/i)).not.toBeInTheDocument()
     expect(navButton(/Compliance matrix/)).toHaveClass('active')
+  })
+})
+
+describe('a rail click returns a section to its top level (BUG-016)', () => {
+  // The drill-down state of `Projects` and `RfqWorkflow` lives inside those
+  // components. Clicking the rail entry for the section you are already in ran
+  // `setView` against the value it already held — a no-op — so the component
+  // kept its state and the button read as dead. `navEpoch` is what makes that
+  // click mean "back to the top of this section".
+  it('clicking 01 while inside an item returns to the project roster', async () => {
+    vi.mocked(fetchWorkflowProjects).mockResolvedValue([HALIBA_ROW])
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(detail())
+
+    render(<App />)
+
+    // Drill in: roster -> project -> item.
+    fireEvent.click(await screen.findByRole('button', { name: HALIBA_ROW.name }))
+    fireEvent.click(await screen.findByRole('button', { name: GENERATOR.item_type }))
+    expect(await screen.findByRole('heading', { name: GENERATOR.item_type })).toBeInTheDocument()
+
+    fireEvent.click(navButton(/Projects & items/))
+
+    // Back at the roster, not still on the item.
+    expect(await screen.findByText(/Every project, the equipment items/i)).toBeInTheDocument()
+    expect(
+      screen.queryByRole('heading', { name: GENERATOR.item_type }),
+    ).not.toBeInTheDocument()
   })
 })
