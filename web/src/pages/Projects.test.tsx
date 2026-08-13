@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { MemoryRouter, useLocation } from 'react-router'
 import { Projects } from './Projects'
 import { HALIBA_ROW as HALIBA } from './workflow-fixtures'
 
@@ -24,6 +25,23 @@ vi.mock('../api', async (importOriginal) => {
 
 import { createWorkflowProject, fetchWorkflowProjects } from '../api'
 
+/** The roster navigates rather than swapping in a detail subtree, so it needs a
+ *  router around it and a way to read where a click sent us. */
+function LocationProbe() {
+  return <div data-testid="location">{useLocation().pathname}</div>
+}
+
+function renderProjects() {
+  return render(
+    <MemoryRouter initialEntries={['/projects']}>
+      <LocationProbe />
+      <Projects />
+    </MemoryRouter>,
+  )
+}
+
+const at = () => screen.getByTestId('location').textContent
+
 function fillProjectForm() {
   const type = (label: string, value: string) =>
     fireEvent.change(screen.getByLabelText(label), { target: { value } })
@@ -43,7 +61,7 @@ describe('Projects', () => {
   it('gives each project its own card, titled with the project name', async () => {
     vi.mocked(fetchWorkflowProjects).mockResolvedValue([HALIBA, BAB])
 
-    render(<Projects />)
+    renderProjects()
 
     await screen.findByText('Haliba Field Development')
     // One card per project, and the name is the card's heading — not a cell in
@@ -58,7 +76,7 @@ describe('Projects', () => {
   it('keeps the counts and status visible on the collapsed card', async () => {
     vi.mocked(fetchWorkflowProjects).mockResolvedValue([HALIBA])
 
-    render(<Projects />)
+    renderProjects()
 
     const card = (await screen.findByText('Haliba Field Development')).closest(
       'article',
@@ -74,7 +92,7 @@ describe('Projects', () => {
       { ...HALIBA, item_count: 1, rfq_count: 1 },
     ])
 
-    render(<Projects />)
+    renderProjects()
 
     const card = (await screen.findByText('Haliba Field Development')).closest(
       'article',
@@ -87,7 +105,7 @@ describe('Projects', () => {
   it('folds the rest of the detail behind a closed disclosure', async () => {
     vi.mocked(fetchWorkflowProjects).mockResolvedValue([HALIBA])
 
-    render(<Projects />)
+    renderProjects()
     const card = (await screen.findByText('Haliba Field Development')).closest(
       'article',
     )!
@@ -102,7 +120,7 @@ describe('Projects', () => {
   it('shows every detail field once the disclosure is opened', async () => {
     vi.mocked(fetchWorkflowProjects).mockResolvedValue([HALIBA])
 
-    render(<Projects />)
+    renderProjects()
     const card = (await screen.findByText('Haliba Field Development')).closest(
       'article',
     )!
@@ -129,7 +147,7 @@ describe('Projects', () => {
   it('opens one card without opening the others', async () => {
     vi.mocked(fetchWorkflowProjects).mockResolvedValue([HALIBA, BAB])
 
-    render(<Projects />)
+    renderProjects()
     const first = (await screen.findByText('Haliba Field Development')).closest(
       'article',
     )!
@@ -147,7 +165,7 @@ describe('Projects', () => {
       { ...HALIBA, status: 'On Hold' },
     ])
 
-    render(<Projects />)
+    renderProjects()
     const card = (await screen.findByText('Haliba Field Development')).closest(
       'article',
     )!
@@ -161,7 +179,7 @@ describe('Projects', () => {
 
   it('tells the user what an empty roster means', async () => {
     vi.mocked(fetchWorkflowProjects).mockResolvedValue([])
-    render(<Projects />)
+    renderProjects()
     expect(await screen.findByText(/No projects yet/i)).toBeInTheDocument()
   })
 
@@ -171,7 +189,7 @@ describe('Projects', () => {
       .mockResolvedValue([HALIBA])
     vi.mocked(createWorkflowProject).mockResolvedValue(HALIBA)
 
-    render(<Projects />)
+    renderProjects()
     await screen.findByText(/No projects yet/i)
 
     fireEvent.click(screen.getByRole('button', { name: /new project/i }))
@@ -197,7 +215,7 @@ describe('Projects', () => {
       new Error('Project code HAL is already in use.'),
     )
 
-    render(<Projects />)
+    renderProjects()
     fireEvent.click(await screen.findByRole('button', { name: /new project/i }))
     fillProjectForm()
     fireEvent.click(screen.getByRole('button', { name: /create project/i }))
@@ -207,20 +225,36 @@ describe('Projects', () => {
     expect(await screen.findByText(/already in use/i)).toBeInTheDocument()
   })
 
-  it('opens a project when its name is clicked', async () => {
+  // The roster no longer swaps a detail subtree in beneath itself — it
+  // navigates, so the project it opened has an address that survives a refresh
+  // and can be handed to somebody else.
+  it('navigates to a project when its name is clicked', async () => {
     vi.mocked(fetchWorkflowProjects).mockResolvedValue([HALIBA])
-    const { fetchWorkflowProject } = await import('../api')
-    vi.mocked(fetchWorkflowProject).mockResolvedValue({
-      project: HALIBA,
-      items: [],
-      rfqs: [],
-    })
 
-    render(<Projects />)
+    renderProjects()
     fireEvent.click(await screen.findByText('Haliba Field Development'))
 
-    expect(
-      await screen.findByRole('button', { name: /back to projects/i }),
-    ).toBeInTheDocument()
+    await waitFor(() => expect(at()).toBe(`/projects/${HALIBA.id}`))
+  })
+
+  it('navigates from the Open project button too', async () => {
+    vi.mocked(fetchWorkflowProjects).mockResolvedValue([HALIBA])
+
+    renderProjects()
+    fireEvent.click(await screen.findByRole('button', { name: /open project/i }))
+
+    await waitFor(() => expect(at()).toBe(`/projects/${HALIBA.id}`))
+  })
+
+  // Assertable by grep as well as by test: no field in this component selects a
+  // screen. A surviving drill-down would be a screen with no address, silently
+  // outside the history.
+  it('holds no drill-down state of its own', async () => {
+    vi.mocked(fetchWorkflowProjects).mockResolvedValue([HALIBA])
+    renderProjects()
+    fireEvent.click(await screen.findByText('Haliba Field Development'))
+
+    // Still the roster underneath — the click changed the URL, not this tree.
+    expect(screen.getByText('Haliba Field Development')).toBeInTheDocument()
   })
 })

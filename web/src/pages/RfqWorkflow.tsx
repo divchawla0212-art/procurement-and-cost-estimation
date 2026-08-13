@@ -1,10 +1,8 @@
-import { useState } from 'react'
 import type { JSX } from 'react'
+import { useNavigate } from 'react-router'
 import { fetchRfqRoster } from '../api'
 import { useAsync } from '../useAsync'
 import { StageStrip } from '../components/StageStrip'
-import { RfqDetail } from './RfqDetail'
-import { RfqWizard } from './RfqWizard'
 import {
   Card,
   EmptyState,
@@ -20,32 +18,19 @@ import {
  * attributes to the session, and the artifact editors that would satisfy a
  * gate are their own screens; what these two views owe the reader is a clear
  * account of where every RFQ stands and what each one is waiting on.
+ *
+ * The roster and nothing more: opening an RFQ is a navigation to `/rfqs/:rfqId`,
+ * and *which* of the two detail screens that address resolves to — the wizard
+ * for a stage with editors behind it, the read-only view for one past them — is
+ * the route table's decision now. All this screen owes is the address.
  */
-const WIZARD_RANGE = ['Scoping', 'Shortlisting', 'Issued', 'Clarifications']
-
 export function RfqWorkflow(): JSX.Element {
   const { data, error, loading } = useAsync(() => fetchRfqRoster(), [])
-  const [openRfqId, setOpenRfqId] = useState<string | null>(null)
+  const navigate = useNavigate()
 
   if (loading) return <LoadingState label="Loading RFQ workflow…" />
   if (error) return <ErrorState message={error} />
   if (!data) return <ErrorState message="No workflow data was returned." />
-
-  if (openRfqId) {
-    // The wizard covers the stages that have editors behind them. An RFQ
-    // already past Clarifications gets the read-only view instead — showing it
-    // four steps it can no longer act on would be worse than showing none.
-    const open = data.rfqs.find((r) => r.id === openRfqId)
-    const inWizard = open ? WIZARD_RANGE.includes(open.stage) : true
-    const Screen = inWizard ? RfqWizard : RfqDetail
-    return (
-      <Screen
-        rfqId={openRfqId}
-        stages={data.stages}
-        onBack={() => setOpenRfqId(null)}
-      />
-    )
-  }
 
   return (
     <>
@@ -83,7 +68,7 @@ export function RfqWorkflow(): JSX.Element {
                     <button
                       type="button"
                       className="linkish"
-                      onClick={() => setOpenRfqId(rfq.id)}
+                      onClick={() => navigate(`/rfqs/${rfq.id}`)}
                     >
                       {rfq.reference}
                     </button>

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter, useLocation } from 'react-router'
 import { RfqWorkflow } from './RfqWorkflow'
 import type { RfqRoster } from '../types'
 
@@ -8,10 +9,6 @@ vi.mock('../api', async (importOriginal) => {
   return {
     ...actual,
     fetchRfqRoster: vi.fn(),
-    // Opening an RFQ mounts RfqDetail, which fetches. Pending forever, so its
-    // loading state is the stable proof that navigation happened; what the
-    // detail view then renders is RfqDetail.test.tsx's job.
-    fetchRfq: vi.fn(() => new Promise<never>(() => {})),
   }
 })
 
@@ -65,9 +62,22 @@ const RFQ = {
   ],
 }
 
+/** The roster navigates rather than mounting a detail view in place, so it
+ *  needs a router around it and a way to read where a click sent us. */
+function LocationProbe() {
+  return <div data-testid="location">{useLocation().pathname}</div>
+}
+
+const at = () => screen.getByTestId('location').textContent
+
 async function renderRoster(data: RfqRoster) {
   vi.mocked(fetchRfqRoster).mockResolvedValue(data)
-  render(<RfqWorkflow />)
+  render(
+    <MemoryRouter initialEntries={['/rfqs']}>
+      <LocationProbe />
+      <RfqWorkflow />
+    </MemoryRouter>,
+  )
   await waitFor(() => {
     expect(screen.queryByText(/Loading RFQ workflow/i)).not.toBeInTheDocument()
   })
@@ -88,13 +98,15 @@ describe('RfqWorkflow', () => {
     expect(screen.queryAllByRole('listitem', { current: 'step' })).toHaveLength(0)
   })
 
-  it('opens the RFQ when its reference is clicked', async () => {
+  // Which of the two detail screens an RFQ opens in is now the route's
+  // decision, not this component's — all the roster owes is the address.
+  it('navigates to the RFQ when its reference is clicked', async () => {
     await renderRoster(
       roster({ rfqs: [RFQ], stage_counts: { ...roster().stage_counts, Issued: 1 } }),
     )
     fireEvent.click(screen.getByRole('button', { name: 'ADP-RFQ-2026-014' }))
 
-    expect(screen.getByText(/Loading RFQ…/i)).toBeInTheDocument()
+    await waitFor(() => expect(at()).toBe(`/rfqs/${RFQ.id}`))
   })
 
   it('reaches the RFQ by keyboard, not only by pointer', async () => {

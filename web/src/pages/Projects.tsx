@@ -1,10 +1,9 @@
 import { useState } from 'react'
 import type { JSX } from 'react'
+import { useNavigate } from 'react-router'
 import { createWorkflowProject, fetchWorkflowProjects } from '../api'
 import { useAsync } from '../useAsync'
 import { ProjectForm } from './forms'
-import { ProjectDetail } from './ProjectDetail'
-import { ItemDetail } from './ItemDetail'
 import type { WorkflowProjectSummary } from '../types'
 import {
   Card,
@@ -19,9 +18,13 @@ import {
  *
  * A project is the top-level container the client gives us — Haliba, say. Its
  * equipment are items, and an RFQ is raised against one or more of them. This
- * screen owns the drill-down state and hands off to one of two detail screens,
- * the way `RfqWorkflow` owns `openRfqId` and hands off to the wizard. `App`
- * therefore learns one new view and nothing about items.
+ * screen is the roster and nothing more: opening a project is a navigation to
+ * `/projects/:projectId`, and the detail screens are mounted by the route table
+ * rather than swapped in beneath this one.
+ *
+ * It deliberately holds no field that selects a screen. It used to own
+ * `openProjectId` and `openItemId`, which made two screens that no URL could
+ * reach — invisible to Back, to a refresh and to anyone you sent the link to.
  *
  * Note these are the *workflow* store's projects, not the ingestion projects in
  * the rail's switcher. The two are deliberately separate for now.
@@ -117,44 +120,11 @@ function statusModifier(status: WorkflowProjectSummary['status']): string {
 
 export function Projects(): JSX.Element {
   const [tick, setTick] = useState(0)
-  const [openProjectId, setOpenProjectId] = useState<string | null>(null)
-  const [openItemId, setOpenItemId] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
+  const navigate = useNavigate()
   const { data, error, loading } = useAsync(() => fetchWorkflowProjects(), [tick])
 
   const reload = () => setTick((t) => t + 1)
-
-  // The drill-down returns before the roster renders, exactly as RfqWorkflow
-  // returns its wizard before its table.
-  if (openProjectId && openItemId) {
-    return (
-      <ItemDetail
-        projectId={openProjectId}
-        itemId={openItemId}
-        onBack={() => setOpenItemId(null)}
-        onHome={() => {
-          // Straight out to the roster, clearing both levels at once.
-          setOpenItemId(null)
-          setOpenProjectId(null)
-          reload()
-        }}
-      />
-    )
-  }
-  if (openProjectId) {
-    return (
-      <ProjectDetail
-        projectId={openProjectId}
-        onOpenItem={setOpenItemId}
-        onBack={() => {
-          setOpenProjectId(null)
-          // Counts on the roster have to account for anything added or deleted
-          // while the user was inside.
-          reload()
-        }}
-      />
-    )
-  }
 
   if (loading) return <LoadingState label="Loading projects…" />
   if (error) return <ErrorState message={error} />
@@ -211,7 +181,7 @@ export function Projects(): JSX.Element {
             <ProjectCard
               key={p.id}
               project={p}
-              onOpen={() => setOpenProjectId(p.id)}
+              onOpen={() => navigate(`/projects/${p.id}`)}
             />
           ))}
         </div>
