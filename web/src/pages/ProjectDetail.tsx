@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { JSX } from 'react'
 import {
+  createRfq,
   createWorkflowItem,
   deleteWorkflowItem,
   deleteWorkflowProject,
@@ -8,7 +9,7 @@ import {
   updateWorkflowProject,
 } from '../api'
 import { useAsync } from '../useAsync'
-import { ItemForm, ProjectForm } from './forms'
+import { ItemForm, ProjectForm, RaiseRfqForm } from './forms'
 import type { WorkflowProject, WorkflowProjectInput } from '../types'
 import {
   Card,
@@ -75,6 +76,10 @@ export function ProjectDetail({
   // a re-fetch can reorder the list under a stale index.
   const [rowError, setRowError] = useState<Record<string, string>>({})
   const [warning, setWarning] = useState<string | null>(null)
+  // Item ids, not row indices — the set has to survive a re-fetch that
+  // reorders the table.
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [raising, setRaising] = useState(false)
 
   const { data, error, loading } = useAsync(
     () => fetchWorkflowProject(projectId),
@@ -206,21 +211,51 @@ export function ProjectDetail({
       <Card
         title="Items"
         actions={
-          !adding && (
-            <button
-              type="button"
-              className="btn btn-sm"
-              onClick={() => setAdding(true)}
-            >
-              Add item
-            </button>
-          )
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            {!raising && (
+              <button
+                type="button"
+                className="btn btn-sm"
+                // An RFQ covering no item is meaningless, and the server
+                // refuses it anyway — so the control says so before the click.
+                disabled={selected.size === 0}
+                onClick={() => setRaising(true)}
+              >
+                Raise RFQ
+              </button>
+            )}
+            {!adding && (
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => setAdding(true)}
+              >
+                Add item
+              </button>
+            )}
+          </div>
         }
       >
         {warning && (
           <div className="banner banner--warn" role="alert">
             {warning}
           </div>
+        )}
+
+        {raising && (
+          <RaiseRfqForm
+            projectId={projectId}
+            itemIds={[...selected]}
+            onCancel={() => setRaising(false)}
+            onSubmit={async (body) => {
+              await createRfq(body)
+              setRaising(false)
+              setSelected(new Set())
+              // The user stays on the project — the new RFQ appears in the
+              // table below, and they click into the wizard from there.
+              reload()
+            }}
+          />
         )}
 
         {adding && (
@@ -248,6 +283,9 @@ export function ProjectDetail({
             <table className="table">
               <thead>
                 <tr>
+                  <th scope="col">
+                    <span className="sr-only">Select</span>
+                  </th>
                   <th scope="col">Type</th>
                   <th scope="col">Description</th>
                   <th scope="col">Qty</th>
@@ -264,6 +302,21 @@ export function ProjectDetail({
               <tbody>
                 {items.map((item) => (
                   <tr key={item.id}>
+                    <td>
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${item.item_type}`}
+                        checked={selected.has(item.id)}
+                        onChange={(e) =>
+                          setSelected((prev) => {
+                            const next = new Set(prev)
+                            if (e.target.checked) next.add(item.id)
+                            else next.delete(item.id)
+                            return next
+                          })
+                        }
+                      />
+                    </td>
                     <td>
                       <button
                         type="button"

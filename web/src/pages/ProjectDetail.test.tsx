@@ -13,6 +13,7 @@ vi.mock('../api', async (importOriginal) => {
   return {
     ...actual,
     fetchWorkflowProject: vi.fn(),
+    createRfq: vi.fn(),
     updateWorkflowProject: vi.fn(),
     deleteWorkflowProject: vi.fn(),
     createWorkflowItem: vi.fn(),
@@ -21,6 +22,7 @@ vi.mock('../api', async (importOriginal) => {
 })
 
 import {
+  createRfq,
   createWorkflowItem,
   deleteWorkflowItem,
   deleteWorkflowProject,
@@ -301,5 +303,77 @@ describe('ProjectDetail', () => {
     )
 
     await waitFor(() => expect(onBack).toHaveBeenCalled())
+  })
+  it('raises an RFQ covering the ticked items', async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(
+      detail({ items: [GENERATOR, CABLE] }),
+    )
+    vi.mocked(createRfq).mockResolvedValue(rfq('rfq_1', 'ADP-RFQ-2026-014', ['itm_1']))
+
+    renderDetail()
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select Gas generator' }))
+    fireEvent.click(screen.getByRole('button', { name: /raise rfq/i }))
+
+    const type = (label: string, value: string) =>
+      fireEvent.change(screen.getByLabelText(label), { target: { value } })
+    type('Reference', 'ADP-RFQ-2026-014')
+    type('Package', 'Power generation')
+    type('Discipline', 'Electrical')
+    type('Value estimate (AED)', '18000000')
+    fireEvent.click(screen.getByRole('button', { name: /create rfq/i }))
+
+    await waitFor(() =>
+      expect(createRfq).toHaveBeenCalledWith({
+        project_id: 'prj_1',
+        item_ids: ['itm_1'],
+        reference: 'ADP-RFQ-2026-014',
+        package: 'Power generation',
+        discipline: 'Electrical',
+        value_estimate_aed: 18000000,
+      }),
+    )
+  })
+
+  it('can raise one RFQ spanning several items', async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(
+      detail({ items: [GENERATOR, CABLE] }),
+    )
+    vi.mocked(createRfq).mockResolvedValue(
+      rfq('rfq_1', 'ADP-RFQ-2026-014', ['itm_1', 'itm_2']),
+    )
+
+    renderDetail()
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select Gas generator' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select HV cable' }))
+    fireEvent.click(screen.getByRole('button', { name: /raise rfq/i }))
+
+    expect(screen.getByText(/covering 2 items/i)).toBeInTheDocument()
+  })
+
+  it('cannot raise an RFQ with nothing selected', async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(detail())
+    renderDetail()
+    expect(await screen.findByRole('button', { name: /raise rfq/i })).toBeDisabled()
+  })
+
+  it("surfaces the server's refusal when an RFQ cannot be raised", async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(detail())
+    vi.mocked(createRfq).mockRejectedValue(
+      new Error('Item itm_1 does not belong to project prj_1'),
+    )
+
+    renderDetail()
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select Gas generator' }))
+    fireEvent.click(screen.getByRole('button', { name: /raise rfq/i }))
+
+    const type = (label: string, value: string) =>
+      fireEvent.change(screen.getByLabelText(label), { target: { value } })
+    type('Reference', 'ADP-RFQ-2026-014')
+    type('Package', 'Power generation')
+    type('Discipline', 'Electrical')
+    type('Value estimate (AED)', '18000000')
+    fireEvent.click(screen.getByRole('button', { name: /create rfq/i }))
+
+    expect(await screen.findByText(/does not belong to project/i)).toBeInTheDocument()
   })
 })
