@@ -60,10 +60,10 @@ interface NavEntry {
 const NAV: NavEntry[] = [
   // Both RFQ-process screens are project-agnostic in the sense the review gate
   // means it: their projects are the workflow store's own, not the ingestion
-  // `slug`s in the switcher above. The Bid-evaluation entry is called "Bid
-  // sets" rather than "Projects" for the same reason — two rail entries reading
-  // "Projects" over two different stores is the first confusion a reader hits.
-  // Unifying the two identities is phase 2.
+  // `slug`s the Bid-evaluation entries below are built from. That entry is
+  // called "Bid sets" rather than "Projects" for the same reason — two rail
+  // entries reading "Projects" over two different stores is the first confusion
+  // a reader hits. Unifying the two identities is phase 2.
   // Bidders sits between the two because that is the order the work happens
   // in: you have projects and their items, you have a list of who may bid, and
   // only then is there an RFQ to raise against both.
@@ -176,19 +176,23 @@ export default function App() {
     [tick, user],
   )
 
-  // The URL is the authority on which project a bid-evaluation screen is
-  // showing. `remembered` only answers the question the URL cannot: which
-  // project the switcher and the status bar should name while we are on
-  // `/projects` or `/bidders`, where no slug is in the path. Deriving in this
-  // order is what stops the two from ever disagreeing.
+  // The URL is the authority on which bid set the evaluation screens are
+  // showing, and `04 Bid sets` is where you choose one — opening a project
+  // there navigates to `/bid-sets/:slug/…`, which is what makes that choice an
+  // address rather than a hidden selection.
+  //
+  // `remembered` answers only the question the URL cannot: which bid set the
+  // rail's evaluation entries and the status bar should point at while we are
+  // on `/projects` or `/bidders`, where no slug is in the path. Deriving in
+  // this order is what stops the two from ever disagreeing.
   const pathSlug = bidSetSlug(location.pathname)
   const [remembered, setRemembered] = useState<string | null>(null)
   // Derived during render, not defaulted from an effect. An effect would leave
   // one commit where the roster has arrived but `slug` is still null — and in
   // that commit "Set up & ingest" points at `/bid-sets/new`, so a fast click
-  // lands on the create form instead of the project that is right there in the
-  // switcher. Falling through to the first project here closes that window
-  // rather than narrowing it.
+  // lands on the create form instead of the bid set the rail is about to point
+  // at. Falling through to the first project here closes that window rather
+  // than narrowing it.
   const slug = pathSlug ?? remembered ?? projects?.[0]?.slug ?? null
 
   useEffect(() => {
@@ -197,22 +201,6 @@ export default function App() {
 
   const active = projects?.find((p) => p.slug === slug) ?? null
   const reload = () => setTick((t) => t + 1)
-
-  /**
-   * The rail's project switcher.
-   *
-   * On a bid-evaluation screen this stays on the same screen for the newly
-   * chosen project. It no longer carries the I1 special case — the rule that
-   * switching off a review screen onto a project with no extraction must land
-   * on setup. `RequireResults` makes that decision now, for this path and for a
-   * pasted link equally.
-   */
-  function selectProject(next: string | null) {
-    setRemembered(next)
-    if (next && pathSlug) {
-      navigate(location.pathname.replace(`/bid-sets/${pathSlug}/`, `/bid-sets/${next}/`))
-    }
-  }
 
   // Every hook above must run on every render regardless of auth state, so
   // these gates come after them rather than before.
@@ -236,27 +224,6 @@ export default function App() {
           </div>
 
           <div className="rail-scroll">
-            <div className="rail-label">Project</div>
-            <div className="switcher">
-              <label className="sr-only" htmlFor="project-switch">
-                Active project
-              </label>
-              <select
-                id="project-switch"
-                value={slug ?? ''}
-                onChange={(e) => selectProject(e.target.value || null)}
-                disabled={!projects || projects.length === 0}
-              >
-                {(!projects || projects.length === 0) && (
-                  <option value="">No projects</option>
-                )}
-                {projects?.map((p) => (
-                  <option key={p.slug} value={p.slug}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            </div>
 
             {NAV_GROUPS.map((group) => {
               const items = visibleNav.filter((item) => item.group === group)

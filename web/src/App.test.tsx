@@ -89,14 +89,11 @@ async function renderWithProject(status: string, hasResults: boolean) {
     { ...baseProject, status, has_results: hasResults },
   ])
   renderApp()
-  // Wait for the project list to load and the app to auto-select it — both
-  // happen asynchronously, so any nav assertion made before this settles
-  // would be racing the fetch.
-  await waitFor(() => {
-    expect(
-      screen.getByRole('option', { name: baseProject.name }),
-    ).toBeInTheDocument()
-  })
+  // Wait for the project list to load and the app to settle on one — both
+  // happen asynchronously, so any nav assertion made before this settles would
+  // be racing the fetch. The status bar names the active bid set, which is
+  // independent of the nav gating these tests then assert on.
+  await screen.findByText(baseProject.name)
 }
 
 /** `App` reads the URL for its active highlight and its bid-set slug, so it
@@ -174,8 +171,12 @@ describe('review screens gate on has_results, not status (BUG-001, I2)', () => {
   })
 })
 
-describe('the rail switcher does not leave a review screen mounted for an unreachable project (I1)', () => {
-  it('sends the view back to setup when switching to a project with no results', async () => {
+// Reported against the rail's project switcher, which no longer exists. The
+// rule it broke is not about that control though — a review screen must never
+// be mounted for a bid set with nothing to read, however you arrived at it — so
+// it is asserted here on arrival, which is where `RequireResults` enforces it.
+describe('a review screen is never mounted for an unreachable bid set (I1)', () => {
+  it('sends a review URL to setup when the bid set has no results', async () => {
     const doneProject: ProjectSummary = {
       ...baseProject,
       slug: 'done-1',
@@ -191,42 +192,21 @@ describe('the rail switcher does not leave a review screen mounted for an unreac
       has_results: false,
     }
     vi.mocked(fetchProjects).mockResolvedValue([doneProject, newProject])
-    renderApp()
-    // Wait for the button to actually be *enabled*, not just for the option
-    // to exist: the project list resolving and the auto-select effect that
-    // sets `slug` (and so un-disables this button) are two separate render
-    // passes. Clicking as soon as the option appears races that effect — if
-    // `slug` is still null the button is disabled and the click is a no-op,
-    // which is exactly the flake this caused.
-    await waitFor(() => {
-      expect(navButton(/Compliance matrix/)).toBeEnabled()
-    })
-
-    // Open the matrix for the reachable project.
-    navButton(/Compliance matrix/).click()
-    await waitFor(() => {
-      expect(screen.getByText('Building compliance matrix…')).toBeInTheDocument()
-    })
-
-    // Switch the rail's project switcher to the unreachable one. Before the
-    // fix, `onChange` only called `setSlug` — `view` stayed `'matrix'`, so
-    // the compliance matrix stayed mounted and refetched for the
-    // never-ingested project, the exact state BUG-001 reports.
-    fireEvent.change(screen.getByLabelText('Active project'), {
-      target: { value: newProject.slug },
-    })
+    renderApp(`/bid-sets/${newProject.slug}/matrix`)
 
     await waitFor(() => {
+      // Never mounted — the matrix must not be sitting there refetching for a
+      // project that was never ingested, which is the state BUG-001 reports.
       expect(
         screen.queryByText('Building compliance matrix…'),
       ).not.toBeInTheDocument()
-      // Setup is where an unreachable project's view now lands — RequireResults
-      // redirects there, and Setup's own loading state proves it mounted.
+      // Setup is where it lands instead; Setup's own loading state proves it
+      // mounted rather than the guard merely rendering nothing.
       expect(screen.getByText('Loading project…')).toBeInTheDocument()
     })
   })
 
-  it('leaves the view alone when switching to another reachable project', async () => {
+  it('mounts the review screen when the bid set does hold results', async () => {
     const doneProject: ProjectSummary = {
       ...baseProject,
       slug: 'done-1',
@@ -242,22 +222,7 @@ describe('the rail switcher does not leave a review screen mounted for an unreac
       has_results: true,
     }
     vi.mocked(fetchProjects).mockResolvedValue([doneProject, otherDoneProject])
-    renderApp()
-    // See the comment in the previous test: wait for the button to be
-    // enabled, not just for the option to exist, or the click can race the
-    // auto-select effect that sets `slug`.
-    await waitFor(() => {
-      expect(navButton(/Compliance matrix/)).toBeEnabled()
-    })
-
-    navButton(/Compliance matrix/).click()
-    await waitFor(() => {
-      expect(screen.getByText('Building compliance matrix…')).toBeInTheDocument()
-    })
-
-    fireEvent.change(screen.getByLabelText('Active project'), {
-      target: { value: otherDoneProject.slug },
-    })
+    renderApp(`/bid-sets/${otherDoneProject.slug}/matrix`)
 
     await waitFor(() => {
       expect(vi.mocked(fetchComplianceMatrix)).toHaveBeenCalledWith(otherDoneProject.slug)
@@ -301,11 +266,7 @@ describe('the dead "Review compliance matrix" button (I2 leftover)', () => {
     vi.mocked(fetchProjects).mockResolvedValue([failedWithResults])
     vi.mocked(fetchSetup).mockResolvedValue(setup)
     renderApp()
-    await waitFor(() => {
-      expect(
-        screen.getByRole('option', { name: failedWithResults.name }),
-      ).toBeInTheDocument()
-    })
+    await screen.findByText(failedWithResults.name)
 
     navButton(/Set up & ingest/).click()
     const reviewButton = await screen.findByRole('button', {

@@ -21,7 +21,11 @@ const NavHistoryContext = createContext<NavHistoryValue>({
   canForward: false,
 })
 
-export function useNavHistory(): NavHistoryValue {
+// Not exported: `BackForwardControls` below is the only consumer, and a file
+// that exports a hook alongside its components loses fast refresh for all of
+// them. If another screen ever needs to know, move the context and this hook
+// into their own module rather than widening this one.
+function useNavHistory(): NavHistoryValue {
   return useContext(NavHistoryContext)
 }
 

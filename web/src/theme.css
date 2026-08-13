@@ -143,32 +143,6 @@ a { color: var(--accent-ink); text-underline-offset: 2px; }
   padding: 0.75rem 0.5rem 0.4rem;
 }
 
-/* project switcher */
-.switcher { position: relative; margin: 0 0.2rem 0.4rem; }
-.switcher select {
-  width: 100%;
-  appearance: none;
-  background: var(--ink-3);
-  border: 1px solid var(--ink-line);
-  color: #fff;
-  border-radius: var(--radius-sm);
-  padding: 0.55rem 2rem 0.55rem 0.7rem;
-  font-size: 0.9rem;
-  cursor: pointer;
-}
-.switcher::after {
-  content: '';
-  position: absolute;
-  right: 0.75rem;
-  top: 50%;
-  width: 0.5rem;
-  height: 0.5rem;
-  border-right: 2px solid var(--ink-muted);
-  border-bottom: 2px solid var(--ink-muted);
-  transform: translateY(-70%) rotate(45deg);
-  pointer-events: none;
-}
-
 /* nav */
 .rail-nav { list-style: none; margin: 0.3rem 0 0; padding: 0; display: grid; gap: 2px; }
 .rail-nav button {
