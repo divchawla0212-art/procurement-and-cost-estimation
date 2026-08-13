@@ -1,0 +1,267 @@
+"""API tests for `/api/workflow/*`.
+
+These routes sit behind the same fail-closed session middleware as every other
+`/api/` path — they are deliberately NOT in `middleware.PUBLIC_PATHS`, so each
+test signs in first, and one test below asserts the challenge directly.
+
+`api.main` is imported lazily inside the helpers for the reason spelled out at
+the top of `tests/test_api_setup.py`: importing it at module scope runs
+`load_dotenv()` during collection and can turn a permanently-skipped live-API
+test into a billed call.
+"""
+import pytest
+from fastapi.testclient import TestClient
+
+from tests.auth_helpers import signed_in_admin
+
+
+@pytest.fixture(autouse=True)
+def _fresh_workflow_store():
+    """The workflow store is a module-level singleton, so state would otherwise
+    leak between tests in file order."""
+    from api import workflow_routes
+
+    workflow_routes.workflow_store = workflow_routes.WorkflowStore()
+    yield
+
+
+def _client(tmp_path, monkeypatch) -> TestClient:
+    monkeypatch.setenv("PROCUREMENT_PROJECTS_ROOT", str(tmp_path))
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    import api.main as api_main
+    monkeypatch.setattr(api_main, "ROOT", str(tmp_path))
+    return signed_in_admin(TestClient(api_main.app), tmp_path)
+
+
+def create_project(client: TestClient) -> str:
+    r = client.post("/api/workflow/projects", json={
+        "name": "Haliba Field Development",
+        "code": "HAL",
+        "client": "Al Dhafra Petroleum",
+        "location": "Haliba field, UAE",
+        "live_period_start": "2026-01-01",
+        "live_period_end": "2029-12-31",
+    })
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def create_rfq(client: TestClient) -> str:
+    project_id = create_project(client)
+    r = client.post(f"/api/workflow/projects/{project_id}/items", json={
+        "item_type": "Wellhead tie-in materials",
+        "description": "Wellhead & CGF tie-in materials",
+        "qty": 1,
+        "uom": "lot",
+        "discipline": "Mechanical / piping",
+        "estimated_value_aed": 46200000,
+    })
+    assert r.status_code == 201, r.text
+    item_id = r.json()["id"]
+
+    r = client.post("/api/workflow/rfqs", json={
+        "project_id": project_id,
+        "item_ids": [item_id],
+        "reference": "ADP-RFQ-2026-014",
+        "package": "Wellhead & CGF tie-in materials",
+        "discipline": "Mechanical / piping",
+        "value_estimate_aed": 46200000,
+    })
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def test_workflow_routes_require_a_session(tmp_path, monkeypatch):
+    """Fail-closed by default — no route here is on the public allowlist."""
+    monkeypatch.setenv("PROCUREMENT_PROJECTS_ROOT", str(tmp_path))
+    import api.main as api_main
+    monkeypatch.setattr(api_main, "ROOT", str(tmp_path))
+    anonymous = TestClient(api_main.app)
+    assert anonymous.get("/api/workflow/stages").status_code == 401
+
+
+def test_stages_endpoint_lists_all_nine_in_order(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    r = client.get("/api/workflow/stages")
+    assert r.status_code == 200
+    assert r.json()["stages"] == [
+        "Scoping", "Shortlisting", "Issued", "Clarifications",
+        "Bids Received", "Evaluation", "Negotiation", "Awarded", "PO Issued",
+    ]
+
+
+def test_new_rfq_starts_at_scoping_with_a_blocking_gate(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    rfq_id = create_rfq(client)
+    r = client.get(f"/api/workflow/rfqs/{rfq_id}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["rfq"]["stage"] == "Scoping"
+    assert body["gate"]["passed"] is False
+    assert "frozen" in body["gate"]["reason"].lower()
+
+
+def test_blocked_transition_returns_409_with_the_reason(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    rfq_id = create_rfq(client)
+    r = client.post(f"/api/workflow/rfqs/{rfq_id}/transition", json={
+        "target": "Shortlisting", "by": "amal@example.com",
+    })
+    assert r.status_code == 409
+    assert "frozen" in r.json()["detail"].lower()
+
+
+def test_a_blocked_transition_does_not_move_the_rfq(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    rfq_id = create_rfq(client)
+    client.post(f"/api/workflow/rfqs/{rfq_id}/transition", json={
+        "target": "Shortlisting", "by": "amal@example.com",
+    })
+    body = client.get(f"/api/workflow/rfqs/{rfq_id}").json()
+    assert body["rfq"]["stage"] == "Scoping"
+    assert len(body["rfq"]["history"]) == 1
+
+
+def test_unknown_rfq_returns_404(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    r = client.get("/api/workflow/rfqs/rfq_missing")
+    assert r.status_code == 404
+
+
+def test_item_under_an_unknown_project_returns_404(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    r = client.post("/api/workflow/projects/prj_missing/items", json={
+        "item_type": "Generator",
+        "description": "Generator package",
+        "qty": 1,
+        "uom": "ea",
+        "discipline": "Electrical",
+        "estimated_value_aed": 100,
+    })
+    assert r.status_code == 404
+
+
+def test_rfq_against_a_foreign_item_returns_422(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    mine = create_project(client)
+    theirs = create_project(client)
+    r = client.post(f"/api/workflow/projects/{theirs}/items", json={
+        "item_type": "Generator",
+        "description": "Generator package",
+        "qty": 1,
+        "uom": "ea",
+        "discipline": "Electrical",
+        "estimated_value_aed": 100,
+    })
+    foreign_item = r.json()["id"]
+
+    r = client.post("/api/workflow/rfqs", json={
+        "project_id": mine,
+        "item_ids": [foreign_item],
+        "reference": "ADP-RFQ-2026-015",
+        "package": "Package",
+        "discipline": "Electrical",
+        "value_estimate_aed": 100,
+    })
+    assert r.status_code == 422
+    assert "does not belong" in r.json()["detail"]
+
+
+def test_invalid_target_stage_returns_422(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    rfq_id = create_rfq(client)
+    r = client.post(f"/api/workflow/rfqs/{rfq_id}/transition", json={
+        "target": "Not A Stage", "by": "amal@example.com",
+    })
+    assert r.status_code == 422
+
+
+def test_a_satisfied_gate_lets_the_rfq_advance(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    rfq_id = create_rfq(client)
+
+    r = client.put(f"/api/workflow/rfqs/{rfq_id}/technical-package", json={
+        "revision": "Rev. B",
+        "basis_of_design": "129 wellhead tie-ins, CGF, 16in export line to ASAB",
+        "attachments": [
+            {"doc_code": "HAL-PID-001", "title": "P&ID export line", "revision": "Rev. C"}
+        ],
+    })
+    assert r.status_code == 200, r.text
+    r = client.post(f"/api/workflow/rfqs/{rfq_id}/technical-package/freeze",
+                    json={"by": "lead.engineer@example.com"})
+    assert r.status_code == 200, r.text
+
+    body = client.get(f"/api/workflow/rfqs/{rfq_id}").json()
+    assert body["gate"]["passed"] is True
+
+    r = client.post(f"/api/workflow/rfqs/{rfq_id}/transition", json={
+        "target": "Shortlisting", "by": "amal@example.com",
+    })
+    assert r.status_code == 200, r.text
+    assert r.json()["stage"] == "Shortlisting"
+
+
+def test_freezing_a_package_with_an_indefinite_revision_returns_409(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    rfq_id = create_rfq(client)
+    client.put(f"/api/workflow/rfqs/{rfq_id}/technical-package", json={
+        "revision": "Rev. B",
+        "basis_of_design": "basis",
+        "attachments": [{"doc_code": "HAL-PID-001", "title": "P&ID", "revision": None}],
+    })
+    r = client.post(f"/api/workflow/rfqs/{rfq_id}/technical-package/freeze",
+                    json={"by": "lead.engineer@example.com"})
+    assert r.status_code == 409
+    assert "definite revision" in r.json()["detail"]
+
+
+def test_rfq_roster_counts_every_stage_including_the_empty_ones(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    create_rfq(client)
+
+    body = client.get("/api/workflow/rfqs").json()
+    assert len(body["rfqs"]) == 1
+    assert len(body["stage_counts"]) == 9, "a strip that drops empty stages changes shape"
+    assert body["stage_counts"]["Scoping"] == 1
+    assert body["stage_counts"]["Awarded"] == 0
+    assert sum(body["stage_counts"].values()) == len(body["rfqs"])
+
+
+def test_rfq_roster_filters_by_project(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    rfq_id = create_rfq(client)
+    create_rfq(client)
+    project_id = client.get(f"/api/workflow/rfqs/{rfq_id}").json()["rfq"]["project_id"]
+
+    body = client.get("/api/workflow/rfqs", params={"project_id": project_id}).json()
+    assert [r["id"] for r in body["rfqs"]] == [rfq_id]
+
+
+def test_project_roster_lists_created_projects(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    project_id = create_project(client)
+    body = client.get("/api/workflow/projects").json()
+    assert [p["id"] for p in body["projects"]] == [project_id]
+
+
+def test_items_of_an_unknown_project_returns_404(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    assert client.get("/api/workflow/projects/prj_missing/items").status_code == 404
+
+
+def test_terminal_stage_reports_a_passing_gate(tmp_path, monkeypatch):
+    """PO Issued has no successor, so there is nothing left to block."""
+    client = _client(tmp_path, monkeypatch)
+    rfq_id = create_rfq(client)
+    from api import workflow_routes
+    from workflow.stages import Stage
+
+    rfq = workflow_routes.workflow_store.get_rfq(rfq_id)
+    workflow_routes.workflow_store._rfqs[rfq_id] = rfq.model_copy(
+        update={"stage": Stage.PO_ISSUED}
+    )
+
+    body = client.get(f"/api/workflow/rfqs/{rfq_id}").json()
+    assert body["rfq"]["stage"] == "PO Issued"
+    assert body["gate"]["passed"] is True

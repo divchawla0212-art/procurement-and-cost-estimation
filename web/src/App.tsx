@@ -13,6 +13,7 @@ import { ComparativeStatement } from './pages/ComparativeStatement'
 import { ExtractionStatus } from './pages/ExtractionStatus'
 import { Setup } from './pages/Setup'
 import { Admin } from './pages/Admin'
+import { RfqWorkflow } from './pages/RfqWorkflow'
 
 type View =
   | 'dashboard'
@@ -21,6 +22,7 @@ type View =
   | 'matrix'
   | 'statement'
   | 'extraction'
+  | 'workflow'
   | 'admin'
 
 // `needsReview` marks the screens that read a stored extraction (BUG-001,
@@ -51,9 +53,13 @@ const NAV: {
   { view: 'matrix', index: '03', label: 'Compliance matrix', needsProject: true, needsReview: true },
   { view: 'statement', index: '04', label: 'Comparative statement', needsProject: true, needsReview: true },
   { view: 'extraction', index: '05', label: 'Extraction status', needsProject: true, needsReview: false },
+  // The RFQ workflow is project-agnostic in Phase 1: its projects are the
+  // workflow store's own, not the ingestion `slug`s in the switcher above, so
+  // it carries neither gate. Phase 2 unifies the two project identities.
+  { view: 'workflow', index: '06', label: 'RFQ workflow', needsProject: false, needsReview: false },
   {
     view: 'admin',
-    index: '06',
+    index: '07',
     label: 'Users and access',
     needsProject: false,
     needsReview: false,
@@ -304,6 +310,7 @@ export default function App() {
             {view === 'extraction' && active && (
               <ExtractionStatus slug={active.slug} projectName={active.name} />
             )}
+            {view === 'workflow' && <RfqWorkflow />}
             {view === 'admin' && user.role === 'admin' && (
               // The role check is repeated here rather than trusted from the
               // nav filter: `view` is component state, so a stale 'admin' left

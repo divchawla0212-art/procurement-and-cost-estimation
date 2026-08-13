@@ -27,10 +27,16 @@ def test_every_api_route_outside_the_allowlist_requires_a_session(tmp_path, monk
         if not path.startswith("/api/") or path in PUBLIC_PATHS:
             continue
         for method in sorted(getattr(route, "methods", set()) - {"HEAD", "OPTIONS"}):
+            # Every path parameter in the app needs an entry here. The
+            # assertion below is what makes that true: a new parameter name
+            # fails this test rather than silently skipping the route it
+            # appears in.
             probe = (
                 path.replace("{slug}", "any")
                 .replace("{vendor}", "any")
                 .replace("{user_id}", "any")
+                .replace("{project_id}", "any")
+                .replace("{rfq_id}", "any")
             )
             assert "{" not in probe, f"{path} has a path parameter the probe cannot fill"
             res = client.request(method, probe)

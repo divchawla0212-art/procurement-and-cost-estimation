@@ -36,6 +36,7 @@ from api.auth import store as auth_store
 from api.auth.deps import current_user, require_admin, require_project_access
 from api.auth.models import User
 from api.auth.routes import router as auth_router
+from api.workflow_routes import router as workflow_router
 from procurement import project as proj
 from procurement.coverage import build_extraction_status, rollup
 from procurement.feedback import save_feedback
@@ -107,6 +108,7 @@ app.add_middleware(
 )
 app.include_router(auth_router)
 app.include_router(admin_router)
+app.include_router(workflow_router)
 
 
 def _project_summary(p) -> dict:

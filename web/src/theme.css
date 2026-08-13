@@ -899,6 +899,55 @@ table.grid.rank .rank-row:hover td { background: var(--accent-soft); }
   flex-wrap: wrap;
 }
 
+/* ------------------------------------------------------------ stage strip */
+
+/* The nine RFQ workflow stages. Scrolls inside itself rather than widening
+   the page — nine cards do not fit a narrow viewport, and a horizontally
+   scrolling *page* is the worse of the two failures. */
+.stagestrip {
+  display: flex;
+  gap: 0.4rem;
+  overflow-x: auto;
+  padding: 0 0 0.3rem;
+  margin: 0 0 1rem;
+  list-style: none;
+}
+
+.stagestep {
+  flex: 1 0 7.5rem;
+  min-width: 7.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 0.5rem 0.65rem;
+}
+
+.stagestep.is-done { background: var(--surface-2); border-color: var(--border-strong); }
+.stagestep.is-current { border-color: var(--accent); background: var(--accent-soft); }
+
+.stagestep-code {
+  display: block;
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  color: var(--muted-2);
+}
+
+.stagestep.is-current .stagestep-code { color: var(--accent-ink); }
+
+.stagestep-name {
+  display: block;
+  font-size: 0.79rem;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--text);
+}
+
+.stagestep-count {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
 .muted { color: var(--muted); }
 .mono { font-family: var(--font-mono); }
 /* utility color for a called-out condition (zero facts, a failed secondary
@@ -926,3 +975,8 @@ p.warn { margin: 0.5rem 0 0; }
   .vbar-row { grid-template-columns: 6rem 1fr 2.6rem; }
   .hbar-row { grid-template-columns: 6rem 1fr; }
 }
+
+/* ------------------------------------------------------- rfq stage history */
+
+.historylist { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.55rem; }
+.historylist li { border-left: 2px solid var(--border-strong); padding-left: 0.7rem; }

@@ -217,3 +217,70 @@ export interface AdminUser {
   created_at: string
   grants: string[]
 }
+
+/**
+ * The nine workflow stages, as `/api/workflow/stages` returns them. The union
+ * exists for call sites that switch on a stage; `StageStrip` deliberately
+ * takes `string[]` instead, so the server stays the single source of the
+ * stage vocabulary and adding a stage server-side does not need a matching
+ * edit here before the strip renders it.
+ */
+export type RfqStage =
+  | 'Scoping'
+  | 'Shortlisting'
+  | 'Issued'
+  | 'Clarifications'
+  | 'Bids Received'
+  | 'Evaluation'
+  | 'Negotiation'
+  | 'Awarded'
+  | 'PO Issued'
+
+export interface StageStripProps {
+  stages: string[]
+  counts: Record<string, number>
+  /** The stage one RFQ sits at. Omit on a roster view. */
+  current?: string | null
+}
+
+/** One entry in an RFQ's stage history. Append-only: a backward transition
+ *  adds an entry, it never rewrites an earlier one, so this is the audit
+ *  trail of a retender as much as of the first pass. */
+export interface StageTransition {
+  from_stage: string | null
+  to_stage: string
+  at: string
+  by: string
+  reason: string | null
+}
+
+export interface Rfq {
+  id: string
+  reference: string
+  project_id: string
+  item_ids: string[]
+  package: string
+  discipline: string
+  value_estimate_aed: number
+  stage: string
+  history: StageTransition[]
+}
+
+/** Whether the next forward stage is reachable, and if not, why not. A
+ *  blocked gate always carries a `reason` — the server never sends a bare
+ *  `false`. */
+export interface Gate {
+  passed: boolean
+  reason: string | null
+}
+
+export interface RfqDetail {
+  rfq: Rfq
+  gate: Gate
+}
+
+export interface RfqRoster {
+  rfqs: Rfq[]
+  stages: string[]
+  stage_counts: Record<string, number>
+}

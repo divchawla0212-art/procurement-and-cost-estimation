@@ -60,6 +60,9 @@ class WorkflowStore:
     def get_project(self, project_id: str) -> Project | None:
         return self._projects.get(project_id)
 
+    def list_projects(self) -> list[Project]:
+        return list(self._projects.values())
+
     def rename_project(self, project_id: str, new_name: str) -> Project:
         project = self._projects.get(project_id)
         if project is None:
@@ -158,6 +161,12 @@ class WorkflowStore:
 
     def get_rfq(self, rfq_id: str) -> RfqRecord | None:
         return self._rfqs.get(rfq_id)
+
+    def list_rfqs(self, project_id: str | None = None) -> list[RfqRecord]:
+        rfqs = list(self._rfqs.values())
+        if project_id is None:
+            return rfqs
+        return [r for r in rfqs if r.project_id == project_id]
 
     def transition(
         self,
