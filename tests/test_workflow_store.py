@@ -40,7 +40,7 @@ def test_rename_preserves_the_id():
     p = make_project(store)
     original_id = p.id
 
-    store.rename_project(p.id, "Haliba Phase 2")
+    store.update_project(p.id, {"name": "Haliba Phase 2"})
 
     renamed = store.get_project(original_id)
     assert renamed is not None, "renaming must not orphan the project"
@@ -51,7 +51,31 @@ def test_rename_preserves_the_id():
 def test_rename_of_unknown_project_raises():
     store = make_store()
     with pytest.raises(KeyError):
-        store.rename_project("prj_missing", "Anything")
+        store.update_project("prj_missing", {"name": "Anything"})
+
+
+def test_update_project_replaces_only_the_named_fields():
+    """A partial update: a field absent from `changes` is left alone, not
+    cleared. That is what makes the route's PATCH partial."""
+    store = make_store()
+    p = make_project(store)
+
+    updated = store.update_project(p.id, {"name": "Haliba Phase 2", "status": "On Hold"})
+
+    assert updated.name == "Haliba Phase 2"
+    assert updated.status == "On Hold"
+    assert updated.code == "HAL"
+    assert updated.id == p.id
+    # Replaced in place. A record appended rather than replaced would leave two.
+    assert len(store.list_projects()) == 1
+
+
+def test_update_project_refuses_to_change_the_id():
+    store = make_store()
+    p = make_project(store)
+    with pytest.raises(ValueError, match="id"):
+        store.update_project(p.id, {"id": "prj_somethingelse"})
+    assert store.get_project(p.id) is not None
 
 
 def test_two_projects_may_share_a_name_but_never_an_id():
@@ -105,8 +129,47 @@ def test_renaming_a_project_does_not_orphan_its_items():
     store = make_store()
     p = make_project(store)
     make_item(store, p.id)
-    store.rename_project(p.id, "Renamed Entirely")
+    store.update_project(p.id, {"name": "Renamed Entirely"})
     assert len(store.items_for_project(p.id)) == 1
+
+
+def test_get_item_returns_none_for_an_unknown_id():
+    assert make_store().get_item("itm_missing") is None
+
+
+def test_update_item_replaces_only_the_named_fields():
+    store = make_store()
+    p = make_project(store)
+    item = make_item(store, p.id, "Gas generator")
+
+    updated = store.update_item(item.id, {"qty": 3, "is_long_lead": True})
+
+    assert updated.qty == 3
+    assert updated.is_long_lead is True
+    assert updated.item_type == "Gas generator"
+    assert updated.id == item.id
+    assert len(store.items_for_project(p.id)) == 1
+
+
+def test_update_of_unknown_item_raises():
+    store = make_store()
+    with pytest.raises(KeyError):
+        store.update_item("itm_missing", {"qty": 3})
+
+
+def test_update_item_refuses_to_move_it_between_projects():
+    """An item's parent is not editable. Moving one would silently change which
+    project's RFQs are allowed to cover it, so the honest operation is a delete
+    and a re-add."""
+    store = make_store()
+    a = make_project(store)
+    b = make_project(store)
+    item = make_item(store, a.id, "Cable")
+
+    with pytest.raises(ValueError, match="project_id"):
+        store.update_item(item.id, {"project_id": b.id})
+
+    assert store.get_item(item.id).project_id == a.id
 
 
 def test_date_inside_live_period_validates():

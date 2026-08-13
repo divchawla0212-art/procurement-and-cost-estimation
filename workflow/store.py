@@ -15,6 +15,21 @@ from workflow.gates import check_gate
 from workflow.stages import Stage, is_allowed
 
 
+# Fields no update may write. `id` is identity. `project_id` is parentage, and
+# moving an item between projects would change which project's RFQs are allowed
+# to cover it without either project's RFQ records changing — so the honest
+# operation is a delete and a re-add. Enforced here as well as by the route's
+# request model, so a caller that bypasses the route cannot do it either.
+_PROJECT_IMMUTABLE = frozenset({"id"})
+_ITEM_IMMUTABLE = frozenset({"id", "project_id"})
+
+
+def _reject_immutable(changes: dict, immutable: frozenset[str]) -> None:
+    blocked = immutable & set(changes)
+    if blocked:
+        raise ValueError(f"These fields cannot be changed: {', '.join(sorted(blocked))}")
+
+
 class WorkflowStore:
     """In-memory store for workflow entities.
 
@@ -70,11 +85,19 @@ class WorkflowStore:
     def list_projects(self) -> list[Project]:
         return list(self._projects.values())
 
-    def rename_project(self, project_id: str, new_name: str) -> Project:
+    def update_project(self, project_id: str, changes: dict) -> Project:
+        """A partial update: a field absent from `changes` is left alone, never
+        cleared. That is what makes the route's PATCH partial.
+
+        Rebuilt through the model rather than `model_copy(update=...)`, because
+        `model_copy` skips validation outright — it would happily store a
+        `status` no `ProjectStatus` allows.
+        """
         project = self._projects.get(project_id)
         if project is None:
             raise KeyError(f"Unknown project: {project_id}")
-        updated = project.model_copy(update={"name": new_name})
+        _reject_immutable(changes, _PROJECT_IMMUTABLE)
+        updated = Project(**{**project.model_dump(), **changes})
         self._projects[project_id] = updated
         return updated
 
@@ -108,8 +131,22 @@ class WorkflowStore:
         self._items[item.id] = item
         return item
 
+    def get_item(self, item_id: str) -> Item | None:
+        return self._items.get(item_id)
+
     def items_for_project(self, project_id: str) -> list[Item]:
         return [i for i in self._items.values() if i.project_id == project_id]
+
+    def update_item(self, item_id: str, changes: dict) -> Item:
+        """Partial, and validating, for the same two reasons as
+        `update_project`. `project_id` is refused: see `_ITEM_IMMUTABLE`."""
+        item = self._items.get(item_id)
+        if item is None:
+            raise KeyError(f"Unknown item: {item_id}")
+        _reject_immutable(changes, _ITEM_IMMUTABLE)
+        updated = Item(**{**item.model_dump(), **changes})
+        self._items[item_id] = updated
+        return updated
 
     def validate_against_live_period(self, project_id: str, when: date) -> str | None:
         """Returns None when `when` is in range, otherwise the reason it is not.
