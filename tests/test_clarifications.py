@@ -322,3 +322,173 @@ def test_no_query_ever_points_at_an_entry_that_is_gone():
 
     live = {e.id for e in store.shortlist_for(rfq_id)}
     assert all(q.raised_by_entry_id in live for q in store.queries_for(rfq_id))
+
+
+# -- addenda: the one sanctioned door through a frozen package ----------------
+
+
+def frozen_rfq() -> tuple[WorkflowStore, str, str]:
+    store, rfq_id, entry_id = store_with_a_shortlisted_rfq()
+    store.set_technical_package(
+        rfq_id, revision="Rev. A", basis_of_design="Battery-limit transmitters.",
+        attachments=[Attachment(doc_code="RUU-IO-411", title="IO list", revision="Rev. A")],
+    )
+    store.freeze_package(rfq_id, by="lead@example.com")
+    return store, rfq_id, entry_id
+
+
+def a_draft(store: WorkflowStore, rfq_id: str, **overrides) -> Addendum:
+    defaults = dict(
+        revision="Rev. B",
+        summary="IO list corrected; two transmitters added.",
+        attachments=[Attachment(doc_code="RUU-IO-411", title="IO list", revision="Rev. B")],
+    )
+    return store.draft_addendum(rfq_id, **{**defaults, **overrides})
+
+
+def test_a_draft_records_what_it_supersedes_from_the_package_not_the_caller():
+    store, rfq_id, _entry_id = frozen_rfq()
+    draft = a_draft(store, rfq_id)
+    assert draft.number == "ADD-01"
+    assert draft.supersedes_revision == "Rev. A"
+    assert clarifications.is_draft(draft) is True
+    # Nothing has moved yet: the package is still what vendors hold.
+    assert store.get_technical_package(rfq_id).revision == "Rev. A"
+
+
+def test_an_addendum_cannot_be_drafted_against_an_unfrozen_package():
+    store, rfq_id, _entry_id = store_with_a_shortlisted_rfq()
+    store.set_technical_package(rfq_id, revision="Rev. A", basis_of_design="d",
+                                attachments=[])
+    with pytest.raises(ValueError, match="frozen"):
+        a_draft(store, rfq_id)
+
+
+def test_a_draft_that_does_not_move_the_revision_is_refused():
+    store, rfq_id, _entry_id = frozen_rfq()
+    with pytest.raises(ValueError, match="revision"):
+        a_draft(store, rfq_id, revision="Rev. A")
+
+
+def test_a_draft_naming_a_query_of_another_rfq_is_refused():
+    store, rfq_id, _entry_id = frozen_rfq()
+    with pytest.raises(KeyError):
+        a_draft(store, rfq_id, arising_from_query_ids=["clq_nobody"])
+
+
+def test_issuing_supersedes_the_package_and_re_freezes_at_the_new_revision():
+    store, rfq_id, _entry_id = frozen_rfq()
+    draft = a_draft(store, rfq_id)
+    issued = store.issue_addendum(rfq_id, draft.id, by="buyer@example.com")
+
+    assert clarifications.is_draft(issued) is False
+    assert issued.issued_by == "buyer@example.com"
+    package = store.get_technical_package(rfq_id)
+    assert package.revision == "Rev. B"
+    assert package.frozen_at is not None
+    assert package.frozen_by == "buyer@example.com"
+    assert [a.revision for a in package.attachments] == ["Rev. B"]
+
+
+def test_the_frozen_package_still_refuses_an_ordinary_edit_after_an_addendum():
+    """The invariant keeps its teeth. The addendum is a door, not a bypass."""
+    store, rfq_id, _entry_id = frozen_rfq()
+    store.issue_addendum(rfq_id, a_draft(store, rfq_id).id, by="buyer@example.com")
+    with pytest.raises(ValueError, match="frozen"):
+        store.set_technical_package(rfq_id, revision="Rev. C", basis_of_design="d",
+                                    attachments=[])
+
+
+def test_a_stale_draft_is_refused_rather_than_rolling_the_package_back():
+    """Check 2, and the reason all four live inside the store method: two
+    drafts cut against Rev. A, both reading "current is Rev. A" outside a lock,
+    would both write and the second would undo the first."""
+    store, rfq_id, _entry_id = frozen_rfq()
+    first = a_draft(store, rfq_id, revision="Rev. B")
+    second = a_draft(store, rfq_id, revision="Rev. B2")
+    store.issue_addendum(rfq_id, first.id, by="buyer@example.com")
+
+    with pytest.raises(ValueError, match="Rev. B"):
+        store.issue_addendum(rfq_id, second.id, by="buyer@example.com")
+    assert store.get_technical_package(rfq_id).revision == "Rev. B"
+
+
+def test_issuing_refuses_an_attachment_with_no_definite_revision():
+    """Issuing re-freezes, and `freeze_package` already refuses to freeze
+    without one — the same rule, reused rather than restated."""
+    store, rfq_id, _entry_id = frozen_rfq()
+    draft = a_draft(store, rfq_id, attachments=[
+        Attachment(doc_code="RUU-IO-411", title="IO list", revision=None),
+    ])
+    with pytest.raises(ValueError, match="RUU-IO-411"):
+        store.issue_addendum(rfq_id, draft.id, by="buyer@example.com")
+    assert store.get_technical_package(rfq_id).revision == "Rev. A"
+
+
+def test_an_issued_addendum_can_be_neither_edited_nor_deleted():
+    store, rfq_id, _entry_id = frozen_rfq()
+    draft = a_draft(store, rfq_id)
+    store.issue_addendum(rfq_id, draft.id, by="buyer@example.com")
+
+    with pytest.raises(ValueError, match="issued"):
+        store.update_addendum(rfq_id, draft.id, {"summary": "Reworded."})
+    with pytest.raises(ValueError, match="issued"):
+        store.delete_addendum(rfq_id, draft.id)
+    with pytest.raises(ValueError, match="issued"):
+        store.issue_addendum(rfq_id, draft.id, by="buyer@example.com")
+
+
+def test_a_draft_is_editable_partially_and_deletable():
+    store, rfq_id, _entry_id = frozen_rfq()
+    draft = a_draft(store, rfq_id)
+    edited = store.update_addendum(rfq_id, draft.id, {"summary": "Reworded."})
+    assert edited.summary == "Reworded."
+    assert edited.revision == "Rev. B"        # absent from changes, so untouched
+    assert edited.number == "ADD-01"
+
+    store.delete_addendum(rfq_id, draft.id)
+    assert store.addenda_for(rfq_id) == []
+
+
+def test_an_update_cannot_forge_identity_or_issuance():
+    store, rfq_id, _entry_id = frozen_rfq()
+    draft = a_draft(store, rfq_id)
+    for field in ["id", "rfq_id", "number", "issued_at", "issued_by"]:
+        with pytest.raises(ValueError, match="cannot be changed"):
+            store.update_addendum(rfq_id, draft.id, {field: "forged"})
+
+
+def test_the_bid_due_date_comes_from_the_latest_issued_addendum_only():
+    store, rfq_id, _entry_id = frozen_rfq()
+    assert store.current_bid_due_date(rfq_id) is None
+
+    first = a_draft(store, rfq_id, revision="Rev. B", bid_due_date=date(2026, 9, 15))
+    store.issue_addendum(rfq_id, first.id, by="buyer@example.com")
+    assert store.current_bid_due_date(rfq_id) == date(2026, 9, 15)
+
+    # A draft carrying a later date does not count — nobody has been told.
+    a_draft(store, rfq_id, revision="Rev. C", bid_due_date=date(2026, 10, 31))
+    assert store.current_bid_due_date(rfq_id) == date(2026, 9, 15)
+
+
+def test_an_issued_addendum_that_names_no_date_leaves_the_last_one_standing():
+    store, rfq_id, _entry_id = frozen_rfq()
+    first = a_draft(store, rfq_id, revision="Rev. B", bid_due_date=date(2026, 9, 15))
+    store.issue_addendum(rfq_id, first.id, by="buyer@example.com")
+    second = a_draft(store, rfq_id, revision="Rev. C")
+    store.issue_addendum(rfq_id, second.id, by="buyer@example.com")
+    assert store.current_bid_due_date(rfq_id) == date(2026, 9, 15)
+
+
+def test_the_addenda_chain_records_an_unbroken_revision_trail():
+    """The invariant this task owns."""
+    store, rfq_id, _entry_id = frozen_rfq()
+    for revision in ["Rev. B", "Rev. C", "Rev. D"]:
+        draft = a_draft(store, rfq_id, revision=revision)
+        store.issue_addendum(rfq_id, draft.id, by="buyer@example.com")
+
+    issued = [a for a in store.addenda_for(rfq_id) if not clarifications.is_draft(a)]
+    issued.sort(key=lambda a: a.issued_at)
+    assert [a.number for a in issued] == ["ADD-01", "ADD-02", "ADD-03"]
+    assert [a.supersedes_revision for a in issued] == ["Rev. A", "Rev. B", "Rev. C"]
+    assert store.get_technical_package(rfq_id).revision == issued[-1].revision

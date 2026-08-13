@@ -31,6 +31,10 @@ from workflow.stages import Stage, is_allowed
 _PROJECT_IMMUTABLE = frozenset({"id"})
 _ITEM_IMMUTABLE = frozenset({"id", "project_id"})
 _BIDDER_IMMUTABLE = frozenset({"id"})
+# Identity, parentage, the number already quoted on a document, and the two
+# fields that record issuance. An update that could set `issued_at` would let a
+# draft claim it went to bidders without the package ever moving.
+_ADDENDUM_IMMUTABLE = frozenset({"id", "rfq_id", "number", "issued_at", "issued_by"})
 
 
 class IncompleteShortlistEntry(ValueError):
@@ -866,3 +870,173 @@ class WorkflowStore:
 
     def queries_for(self, rfq_id: str) -> list[ClarificationQuery]:
         return list(self._queries.get(rfq_id, []))
+
+    # -- addenda ----------------------------------------------------------
+
+    def _addendum_or_raise(self, rfq_id: str, addendum_id: str) -> Addendum:
+        for addendum in self._addenda.get(rfq_id, []):
+            if addendum.id == addendum_id:
+                return addendum
+        raise KeyError(f"Unknown addendum: {addendum_id}")
+
+    def _frozen_package_or_raise(self, rfq_id: str) -> TechnicalPackage:
+        package = self._packages.get(rfq_id)
+        if package is None:
+            raise ValueError(
+                "This RFQ has no technical package, so there is nothing for an "
+                "addendum to supersede."
+            )
+        if package.frozen_at is None:
+            raise ValueError(
+                "The technical package is not frozen yet. Edit it directly — an "
+                "addendum amends what vendors were already given."
+            )
+        return package
+
+    def draft_addendum(
+        self,
+        rfq_id: str,
+        revision: str,
+        summary: str,
+        attachments: list[Attachment],
+        arising_from_query_ids: list[str] | None = None,
+        bid_due_date: date | None = None,
+        addendum_id: str | None = None,
+    ) -> Addendum:
+        """`supersedes_revision` is read from the package, never supplied.
+
+        A caller-supplied "what I am superseding" is a claim; the store already
+        knows the answer, and the answer is what makes the addenda list a
+        revision trail rather than a pile of assertions.
+        """
+        if rfq_id not in self._rfqs:
+            raise KeyError(f"Unknown RFQ: {rfq_id}")
+        package = self._frozen_package_or_raise(rfq_id)
+        if not summary.strip():
+            raise ValueError("An addendum needs a summary of what changed.")
+        if revision.strip() == package.revision:
+            raise ValueError(
+                f"An addendum must move the revision. The package is already at "
+                f"{package.revision}, so bidders would have no way to tell which "
+                f"one they hold."
+            )
+        known = {q.id for q in self._queries.get(rfq_id, [])}
+        for query_id in arising_from_query_ids or []:
+            if query_id not in known:
+                raise KeyError(f"Unknown clarification query for this RFQ: {query_id}")
+
+        addendum = Addendum(
+            **_with_id(addendum_id),
+            rfq_id=rfq_id,
+            number=clarifications.next_addendum_number(self._addenda.get(rfq_id, [])),
+            supersedes_revision=package.revision,
+            revision=revision.strip(),
+            summary=summary.strip(),
+            attachments=list(attachments),
+            arising_from_query_ids=list(arising_from_query_ids or []),
+            bid_due_date=bid_due_date,
+        )
+        self._addenda.setdefault(rfq_id, []).append(addendum)
+        return addendum
+
+    def update_addendum(self, rfq_id: str, addendum_id: str, changes: dict) -> Addendum:
+        """Partial, and validating, for the same two reasons as
+        `update_project`: an absent field is left alone rather than cleared, and
+        rebuilding through the model rather than `model_copy(update=...)` is
+        what stops an invalid value reaching the store."""
+        addendum = self._addendum_or_raise(rfq_id, addendum_id)
+        if addendum.issued_at is not None:
+            raise ValueError(
+                f"{addendum.number} has been issued and can no longer be edited. "
+                f"Bidders hold it."
+            )
+        _reject_immutable(changes, _ADDENDUM_IMMUTABLE)
+        updated = Addendum(**{**addendum.model_dump(), **changes})
+        self._addenda[rfq_id] = [
+            updated if a.id == addendum_id else a for a in self._addenda.get(rfq_id, [])
+        ]
+        return updated
+
+    def issue_addendum(self, rfq_id: str, addendum_id: str, by: str) -> Addendum:
+        """Supersede the frozen package.
+
+        The one sanctioned door through the immutability rule, exactly as
+        retender and renegotiate are the only documented backward edges — the
+        rule is not weakened, it is given one exit that says who used it and
+        why. `set_technical_package` keeps refusing a frozen package.
+
+        Four reads gate this write, and all four are here rather than in the
+        route because the route runs this whole method inside `locked_update`.
+        Check 2 is the one that would actually be lost by splitting them: two
+        concurrent issues, each reading "current revision is B" outside the
+        lock, would both write and the second would undo the first.
+        """
+        addendum = self._addendum_or_raise(rfq_id, addendum_id)
+        if addendum.issued_at is not None:
+            raise ValueError(f"{addendum.number} has already been issued.")
+
+        package = self._frozen_package_or_raise(rfq_id)            # 1
+        if addendum.supersedes_revision != package.revision:       # 2
+            raise ValueError(
+                f"{addendum.number} was drafted against "
+                f"{addendum.supersedes_revision}, but the package is now at "
+                f"{package.revision}. Redraft it against the current revision."
+            )
+        if addendum.revision == package.revision:                  # 3
+            raise ValueError(
+                f"{addendum.number} does not move the revision away from "
+                f"{package.revision}."
+            )
+        missing = [a.doc_code for a in addendum.attachments if not a.revision]   # 4
+        if missing:
+            raise ValueError(
+                f"Cannot issue {addendum.number}: attachments without a definite "
+                f"revision: {', '.join(missing)}"
+            )
+
+        at = datetime.now(timezone.utc)
+        self._packages[rfq_id] = TechnicalPackage(
+            rfq_id=rfq_id,
+            revision=addendum.revision,
+            basis_of_design=package.basis_of_design,
+            attachments=list(addendum.attachments),
+            frozen_at=at,
+            frozen_by=by,
+        )
+        issued = addendum.model_copy(update={"issued_at": at, "issued_by": by})
+        self._addenda[rfq_id] = [
+            issued if a.id == addendum_id else a for a in self._addenda.get(rfq_id, [])
+        ]
+        return issued
+
+    def delete_addendum(self, rfq_id: str, addendum_id: str) -> None:
+        addendum = self._addendum_or_raise(rfq_id, addendum_id)
+        if addendum.issued_at is not None:
+            raise ValueError(
+                f"{addendum.number} has been issued and cannot be deleted. "
+                f"Bidders hold it."
+            )
+        self._addenda[rfq_id] = [
+            a for a in self._addenda.get(rfq_id, []) if a.id != addendum_id
+        ]
+
+    def addenda_for(self, rfq_id: str) -> list[Addendum]:
+        return list(self._addenda.get(rfq_id, []))
+
+    def current_bid_due_date(self, rfq_id: str) -> date | None:
+        """The operative due date: the latest *issued* addendum that names one.
+
+        Ordered by `issued_at`, not by list position or by number. A draft does
+        not count — a due date nobody has been told about is not a due date.
+
+        No field is added to `RfqRecord`: the original due date is set at
+        Issued, which this phase does not touch, so a stored field here would be
+        half-owned and wrong for every RFQ that has no addendum.
+        """
+        dated = [
+            a for a in self._addenda.get(rfq_id, [])
+            if a.issued_at is not None and a.bid_due_date is not None
+        ]
+        if not dated:
+            return None
+        return max(dated, key=lambda a: a.issued_at).bid_due_date
