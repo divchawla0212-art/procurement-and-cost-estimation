@@ -239,6 +239,77 @@ def test_removing_an_artifact_does_not_survive_on_disk(tmp_path):
     assert persistence.load(str(tmp_path)).shortlist_for(rfq_id) == []
 
 
+# -- the bidder registry -----------------------------------------------------
+#
+# CLAUDE.md names this file's exact failure mode: a field added to
+# `WorkflowStore.__init__` without a matching line in *both* `to_document` and
+# `from_document` silently fails to survive a restart. `_bidders` is such a
+# field, so it is asserted directly rather than only through a screen.
+
+
+def a_registered_bidder(store: WorkflowStore, **overrides):
+    defaults = dict(
+        name="Al Munara Switchgear LLC",
+        country="United Arab Emirates",
+        trade_categories=["Electrical", "Power generation"],
+        prequal_status="Approved",
+        prequal_expires_on=date(2027, 3, 31),
+        turnover_band="AED 50–100m",
+        performance_rating=4.2,
+        past_awards=6,
+    )
+    return store.create_bidder(**{**defaults, **overrides})
+
+
+def test_a_bidder_survives_a_round_trip_with_every_field(tmp_path):
+    store, _ = populated_store()
+    bidder = a_registered_bidder(store, notes="Preferred for LV frames")
+    persistence.save(str(tmp_path), store)
+
+    loaded = persistence.load(str(tmp_path)).get_bidder(bidder.id)
+    assert loaded == bidder
+
+
+def test_the_document_carries_a_bidders_collection(tmp_path):
+    store, _ = populated_store()
+    a_registered_bidder(store)
+    persistence.save(str(tmp_path), store)
+
+    doc = json.loads((tmp_path / "workflow.json").read_text(encoding="utf-8"))
+    assert doc["bidders"][0]["name"] == "Al Munara Switchgear LLC"
+    # Derived, never stored — the load has nothing to keep honest.
+    assert "effective_prequal" not in doc["bidders"][0]
+
+
+def test_a_document_written_before_the_registry_loads_as_an_empty_one(tmp_path):
+    """No version bump and no migration: a document with no `bidders` key means
+    no bidders, which is the correct reading of it."""
+    store, _ = populated_store()
+    persistence.save(str(tmp_path), store)
+    path = tmp_path / "workflow.json"
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    del doc["bidders"]
+    path.write_text(json.dumps(doc), encoding="utf-8")
+
+    loaded = persistence.load(str(tmp_path))
+    assert loaded.list_bidders() == []
+    assert loaded.list_projects()  # everything else still loaded
+
+
+def test_a_shortlist_link_survives_a_round_trip(tmp_path):
+    store, rfq_id = populated_store()
+    bidder = a_registered_bidder(store)
+    store.add_shortlist_entry(rfq_id, vendor_id=bidder.id, as_of=date(2026, 8, 13))
+    persistence.save(str(tmp_path), store)
+
+    loaded = persistence.load(str(tmp_path))
+    linked = [e for e in loaded.shortlist_for(rfq_id) if e.vendor_id]
+    assert [e.vendor_id for e in linked] == [bidder.id]
+    # The reference still resolves after the restart, which is what makes the
+    # delete guard mean anything.
+    assert loaded.rfqs_inviting(bidder.id) == ["ADP-RFQ-2026-014"]
+
+
 # -- the two-run mutation matrix ---------------------------------------------
 #
 # Every row below mutates the store between two runs and then reads run 2 *from

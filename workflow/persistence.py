@@ -22,6 +22,7 @@ from typing import Iterator
 
 from procurement.store import layout
 from workflow.models.bid import Bid, BidShortlist, VdrlReceipt
+from workflow.models.bidder import Bidder
 from workflow.models.project import Item, Project
 from workflow.models.rfq import (
     RfqRecord,
@@ -49,6 +50,10 @@ def to_document(store: WorkflowStore) -> dict:
         "version": VERSION,
         "projects": [p.model_dump(mode="json") for p in store._projects.values()],
         "items": [i.model_dump(mode="json") for i in store._items.values()],
+        # Only what is stored. `effective_prequal` is computed from
+        # `prequal_expires_on` and the date it is asked on, so writing it here
+        # would put a value in the document that is wrong the next morning.
+        "bidders": [b.model_dump(mode="json") for b in store._bidders.values()],
         "rfqs": [r.model_dump(mode="json") for r in store._rfqs.values()],
         "packages": [p.model_dump(mode="json") for p in store._packages.values()],
         "shortlists": [
@@ -84,6 +89,10 @@ def from_document(doc: dict) -> WorkflowStore:
     store = WorkflowStore()
     store._projects = {p["id"]: Project(**p) for p in doc.get("projects", [])}
     store._items = {i["id"]: Item(**i) for i in doc.get("items", [])}
+    # `.get` with a default, so a document written before the registry existed
+    # loads as an empty one. That is the correct reading of a missing key, not
+    # a migration, which is why `VERSION` does not move.
+    store._bidders = {b["id"]: Bidder(**b) for b in doc.get("bidders", [])}
     store._rfqs = {r["id"]: RfqRecord(**r) for r in doc.get("rfqs", [])}
     store._packages = {p["rfq_id"]: TechnicalPackage(**p) for p in doc.get("packages", [])}
     store._tbe = {t["rfq_id"]: TbeTemplate(**t) for t in doc.get("tbe", [])}
