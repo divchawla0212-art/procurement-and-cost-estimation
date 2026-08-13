@@ -8,6 +8,7 @@
 // explicitly rather than inferring it from `status`.
 import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
 import App from './App'
 import type { ProjectSetup, ProjectSummary } from './types'
 
@@ -87,7 +88,7 @@ async function renderWithProject(status: string, hasResults: boolean) {
   vi.mocked(fetchProjects).mockResolvedValue([
     { ...baseProject, status, has_results: hasResults },
   ])
-  render(<App />)
+  renderApp()
   // Wait for the project list to load and the app to auto-select it — both
   // happen asynchronously, so any nav assertion made before this settles
   // would be racing the fetch.
@@ -96,6 +97,18 @@ async function renderWithProject(status: string, hasResults: boolean) {
       screen.getByRole('option', { name: baseProject.name }),
     ).toBeInTheDocument()
   })
+}
+
+/** `App` reads the URL for its active highlight and its bid-set slug, so it
+ *  cannot mount without a router. Entries start at the root, which the route
+ *  table redirects to the project roster — the same landing this suite has
+ *  always asserted. */
+function renderApp(path = '/') {
+  return render(
+    <MemoryRouter initialEntries={[path]}>
+      <App />
+    </MemoryRouter>,
+  )
 }
 
 function navButton(name: RegExp) {
@@ -178,7 +191,7 @@ describe('the rail switcher does not leave a review screen mounted for an unreac
       has_results: false,
     }
     vi.mocked(fetchProjects).mockResolvedValue([doneProject, newProject])
-    render(<App />)
+    renderApp()
     // Wait for the button to actually be *enabled*, not just for the option
     // to exist: the project list resolving and the auto-select effect that
     // sets `slug` (and so un-disables this button) are two separate render
@@ -207,7 +220,8 @@ describe('the rail switcher does not leave a review screen mounted for an unreac
       expect(
         screen.queryByText('Building compliance matrix…'),
       ).not.toBeInTheDocument()
-      // Setup is where an unreachable project's view now lands.
+      // Setup is where an unreachable project's view now lands — RequireResults
+      // redirects there, and Setup's own loading state proves it mounted.
       expect(screen.getByText('Loading project…')).toBeInTheDocument()
     })
   })
@@ -228,7 +242,7 @@ describe('the rail switcher does not leave a review screen mounted for an unreac
       has_results: true,
     }
     vi.mocked(fetchProjects).mockResolvedValue([doneProject, otherDoneProject])
-    render(<App />)
+    renderApp()
     // See the comment in the previous test: wait for the button to be
     // enabled, not just for the option to exist, or the click can race the
     // auto-select effect that sets `slug`.
@@ -286,7 +300,7 @@ describe('the dead "Review compliance matrix" button (I2 leftover)', () => {
     }
     vi.mocked(fetchProjects).mockResolvedValue([failedWithResults])
     vi.mocked(fetchSetup).mockResolvedValue(setup)
-    render(<App />)
+    renderApp()
     await waitFor(() => {
       expect(
         screen.getByRole('option', { name: failedWithResults.name }),
@@ -363,16 +377,18 @@ describe('signing in lands on the RFQ process, not on bid evaluation', () => {
 })
 
 describe('a rail click returns a section to its top level (BUG-016)', () => {
-  // The drill-down state of `Projects` and `RfqWorkflow` lives inside those
-  // components. Clicking the rail entry for the section you are already in ran
-  // `setView` against the value it already held — a no-op — so the component
-  // kept its state and the button read as dead. `navEpoch` is what makes that
-  // click mean "back to the top of this section".
+  // This used to need `navEpoch`: the drill-down lived inside `Projects`, so
+  // clicking the rail entry for the section you were already in ran `setView`
+  // against the value it already held — a no-op that left the drill-down
+  // mounted and made the button read as dead. The counter forced a remount.
+  //
+  // With the drill-down in the URL the click is an ordinary navigation from
+  // `/projects/:id/items/:itemId` to `/projects`, and the counter is gone.
   it('clicking 01 while inside an item returns to the project roster', async () => {
     vi.mocked(fetchWorkflowProjects).mockResolvedValue([HALIBA_ROW])
     vi.mocked(fetchWorkflowProject).mockResolvedValue(detail())
 
-    render(<App />)
+    renderApp()
 
     // Drill in: roster -> project -> item.
     fireEvent.click(await screen.findByRole('button', { name: HALIBA_ROW.name }))

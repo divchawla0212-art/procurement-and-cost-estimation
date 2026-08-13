@@ -264,6 +264,34 @@ a { color: var(--accent-ink); text-underline-offset: 2px; }
 .statusbar .sb-spacer { margin-left: auto; }
 .statusbar .sb-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--pass); }
 
+/* Back and forward. A tighter gap than the status bar's own, so the pair reads
+   as one control rather than as two more status chips. */
+.statusbar .sb-nav { display: flex; gap: 0.25rem; margin-right: -0.9rem; }
+.sb-nav-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.9rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.sb-nav-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.sb-nav-btn:disabled {
+  /* Disabled rather than hidden: a control that vanishes moves everything
+     beside it, and at the left edge of the bar that twitches the whole row on
+     the first navigation of a session. */
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
 .canvas-scroll { padding: 1.75rem 1.9rem 3rem; overflow: auto; }
 .wrap { max-width: 1240px; }
 

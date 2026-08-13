@@ -138,7 +138,12 @@ function RequireProject({
   children,
 }: AppRoutesProps & { children: (project: ProjectSummary) => ReactElement }) {
   const { slug } = useParams<{ slug: string }>()
-  if (loading || projects === null) return <LoadingState label="Loading project…" />
+  // Deliberately not "Loading project…": that is what `Setup` and
+  // `ProjectDetail` say while fetching one project, and a shared label would
+  // make "the roster is still in flight" indistinguishable from "the screen
+  // mounted and is fetching" — including to the tests that use the label to
+  // prove which screen is up.
+  if (loading || projects === null) return <LoadingState label="Loading bid sets…" />
   if (error) return <ErrorState message={error} />
   const project = projects.find((p) => p.slug === slug)
   if (!project) return <Navigate to="/bid-sets" replace />
