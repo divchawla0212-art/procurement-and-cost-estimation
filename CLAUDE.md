@@ -25,8 +25,8 @@ untracked fixture directories are present, never in pass/fail:
 
 | where | baseline |
 |---|---|
-| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1497 passed, 3 skipped, 0 failed** |
-| CI, and any clean checkout | **1479 passed, 21 skipped, 0 failed** |
+| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1521 passed, 3 skipped, 0 failed** |
+| CI, and any clean checkout | **1503 passed, 21 skipped, 0 failed** |
 
 Anything else is a real regression.
 
@@ -55,17 +55,19 @@ parser itself is covered in CI — only the tests that assert against the *real*
 
 So the CI row is the workstation row with the four corpus-coverage passes, the
 three `data/` passes, the two `pdftotext` passes and the nine AVL passes turned
-into skips — `1479 = 1497 - 4 - 3 - 2 - 9`, `21 = 3 + 4 + 3 + 2 + 9`; 1500
+into skips — `1503 = 1521 - 4 - 3 - 2 - 9`, `21 = 3 + 4 + 3 + 2 + 9`; 1524
 tests either way. When the counts move, measure the workstation row and derive
 the CI row from it; editing the two rows independently is how they drift
 apart.
 
-**The workstation row is measured, not derived**: **1497 passed, 3 skipped**,
+**The workstation row is measured, not derived**: **1521 passed, 3 skipped**,
 taken on 2026-08-13 on the `rfq-platform-phase-1` branch, in an environment
 with `pdftotext`, `data/` (including the ADNOC export) and an ingested
 multi-vendor `projects/` all present. The nine-skip figure that the fourth gate
 contributes is measured too — by moving `data/bidders_details/` aside and
-re-running the two affected files, not by counting decorators.
+re-running the two affected files, not by counting decorators. It was measured
+that way again when the client-approval gap added tests to both of those files,
+and it is still nine.
 That matters, because a row this file once carried was not. While the auth
 branch was in flight the workstation figure was *derived backwards* — measured
 on a checkout that had neither fixture directory, then extrapolated upward —
@@ -99,11 +101,23 @@ five seeded ones are deliberately **not** behind `needs_real_avl` — they asser
 against whichever registry the seed built, so the AVL gate stays at nine, which
 was re-measured by moving `data/bidders_details/` aside rather than assumed.
 
+The **24** after that are the client-approval gap: 10 in
+`test_bidder_suitability.py`, 5 in `test_bidder_endpoints.py`, 6 mutation-matrix
+rows in `test_workflow_persistence.py`, 1 in `test_avl_import.py` and 2 in
+`test_seed_demo.py`. The last three are the reason the AVL gate was measured
+again rather than carried forward: they sit in the two gated files but are not
+gated themselves — the importer one builds its workbook in memory, and both
+seeded ones read the invented cast — so all 24 land in both rows and the gate
+is still nine. Only four of `PLAN-TEMPLATE.md`'s nine matrix rows have an
+analogue in a subsystem that stores nothing and calls no model; the other five
+are deliberately absent rather than fabricated, and `test_workflow_persistence.py`
+says so above the rows.
+
 The web suite is separate and not part of either row above — both rows are
 `python -m pytest` counts. Run it with `npm test` under `web/` (vitest,
 non-watching, exits non-zero on failure); `npm run build` also type-checks the
 test files, since `web/tsconfig.app.json` includes `src`. CI runs both, in the
-`web` job of the same workflow. It stands at **222 passed** across 19 files.
+`web` job of the same workflow. It stands at **224 passed** across 19 files.
 
 The RFQ wizard's steps live one-per-file under `web/src/pages/wizard/`;
 `RfqWizard.tsx` is only the shell — stepper, banners, stage history, gate card.
@@ -344,6 +358,16 @@ them, so keeping them apart stops a reader assuming one set covers both.
   sweep job is needed to keep the store honest and both boundaries are
   testable without freezing the clock. `workflow/bidders.py` is pure — no
   store, no I/O, no clock — and the routes resolve `as_of` at the boundary.
+  **The client-approval gap is derived the same way and for the same reason.**
+  `missing_client_approval` builds its sentence from `approved_by` at read
+  time; there is no field for it on `Bidder`, none on `ShortlistEntry`, and no
+  key for it in `workflow.json`, because a stored copy is wrong the moment
+  `approved_by` is edited. It is a **caution and never a blocker** —
+  `Suitability.eligible` is unchanged by it and no path it opens demands an
+  `override_reason` — and the sentence is built in exactly one function, so
+  neither `_bidder_payload` nor the browser reconstructs it. That last part is
+  why `ADNOC` / `ASTRA` live in `workflow/models/bidder.py`: naming the client
+  approver from the pure module must not drag `openpyxl` in behind it.
 - **A registry-linked shortlist entry's snapshot comes from the registry, not
   the request.** With a `vendor_id`, `add_shortlist_entry` derives
   `vendor_name`, `prequal_status` and `scope_code_fit` itself and ignores what

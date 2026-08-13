@@ -18,6 +18,7 @@ import pytest
 
 from workflow import clarifications, persistence, seed_demo
 from workflow.avl_import import ADNOC, ASTRA, parse_avl
+from workflow.bidders import missing_client_approval
 from workflow.gates import check_gate
 from workflow.stages import Stage, is_backward
 
@@ -353,6 +354,23 @@ def test_every_seeded_query_points_at_a_live_shortlist_entry():
             assert query.raised_by_entry_id in live, (
                 f"{query.number} on {rfq.reference} points at a removed entry"
             )
+
+
+def test_none_of_the_invented_cast_is_off_the_client_list():
+    """The demo registry shows this flag nowhere until somebody adds a bidder
+    by hand — which is the only path that can produce it. A seeded caution
+    would read as a fact about a named company that nobody recorded."""
+    for bidder in seed_demo.invented_bidders(AS_OF):
+        assert missing_client_approval(bidder) is None
+
+
+def test_the_whole_seeded_registry_is_on_the_client_list():
+    """The same property against whichever registry the seed actually built —
+    the imported one on a workstation, the invented cast in CI. Deliberately
+    not behind `needs_real_avl`, so it holds in both rows."""
+    store = seed_demo.build_demo_store(AS_OF)
+    for bidder in store.list_bidders():
+        assert missing_client_approval(bidder) is None
 
 
 def test_the_seeded_clarifications_survive_a_round_trip(tmp_path):

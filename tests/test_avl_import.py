@@ -24,6 +24,7 @@ import openpyxl
 import pytest
 
 from workflow.avl_import import ASTRA, ADNOC, parse_avl, astra_approves
+from workflow.bidders import missing_client_approval
 
 HEADERS = [
     "Product Group Number",
@@ -218,6 +219,19 @@ def test_astra_approval_favours_vendors_listed_across_more_product_groups():
 def test_the_astra_subset_is_a_real_subset_not_everybody_or_nobody():
     approved = sum(astra_approves(f"1000{n:04d}", group_count=3) for n in range(600))
     assert 0 < approved < 600
+
+
+# -- the client-approval gap is unreachable through the importer --------------
+
+
+def test_no_imported_bidder_is_ever_off_the_client_list(tmp_path):
+    """Every AVL row is by definition on the client's list, so the caution the
+    registry computes must be unreachable through this path — with or without
+    the Astra subset, which adds an approval rather than replacing one."""
+    for astra_subset in (False, True):
+        for bidder in parse_avl(workbook(tmp_path), astra_subset=astra_subset):
+            assert ADNOC in bidder.approved_by
+            assert missing_client_approval(bidder) is None
 
 
 # -- the real export ---------------------------------------------------------

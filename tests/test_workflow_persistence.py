@@ -1058,3 +1058,188 @@ def test_the_document_equals_the_store_after_the_whole_round(tmp_path):
     assert [q["number"] for q in on_disk["queries"]] == ["TQ-001", "CQ-001"]
     assert [a["number"] for a in on_disk["addenda"]] == ["ADD-01"]
     assert persistence.load(root).current_bid_due_date(rfq_id) == date(2026, 11, 1)
+
+
+# -- the client-approval rows of the mutation matrix --------------------------
+#
+# Same shape again: mutate between two runs, then read run 2 *from disk*. What
+# is new here is that the value under test is never written at all, so every
+# row below is as much about what the document does *not* contain as about
+# what the reloaded store computes.
+#
+# PLAN-TEMPLATE.md's nine rows describe the extraction pipeline — sibling
+# revisions, prompt-version bumps, transient and permanent LLM failures, an
+# omitted optional array in a model response. None of those has a counterpart
+# in a subsystem that stores nothing and calls no model, so five of the nine
+# are deliberately absent rather than fabricated. The four with a real
+# analogue are rows 1-4; rows 5 and 6 are specific to this change.
+#
+# | mutation between run 1 and run 2        | invariant at risk                  |
+# |-----------------------------------------|------------------------------------|
+# | the client approver is patched away     | a patch changes the next read with |
+# |                                         | no second write                    |
+# | the client approver is patched in       | ...and in the other direction      |
+# | a bidder is created, saved, reloaded    | nothing derived was persisted      |
+# | a document written before this change   | no migration is needed             |
+# | a cautioned bidder is shortlisted       | the caution never lands on the     |
+# |                                         | ShortlistEntry snapshot            |
+# | ...and then a delete is attempted       | the delete guard is unaffected     |
+
+
+def test_removing_the_client_approver_changes_the_next_read_with_no_second_write(tmp_path):
+    """Row 1. Derived, never stored: the only edit is to `approved_by`, and the
+    caution the *reloaded* store computes has already followed it. A cached
+    copy anywhere would still be reading the old answer here."""
+    from workflow.bidders import missing_client_approval
+
+    root = str(tmp_path)
+    with persistence.locked_update(root) as store:
+        bidder = a_registered_bidder(store, approved_by=["ADNOC", "Astra"])
+    assert missing_client_approval(persistence.load(root).get_bidder(bidder.id)) is None
+
+    # The one write this feature ever needs — of the source field, not of the
+    # sentence derived from it.
+    with persistence.locked_update(root) as store:
+        store.update_bidder(bidder.id, {"approved_by": ["Astra"]})
+
+    reloaded = persistence.load(root)                      # run 2: from disk
+    assert missing_client_approval(reloaded.get_bidder(bidder.id)) == (
+        "Al Munara Switchgear LLC is not on the ADNOC Approved Vendor List "
+        "— approved by Astra only."
+    )
+
+
+def test_adding_the_client_approver_clears_the_caution_across_a_restart(tmp_path):
+    """Row 2. The same rule in the direction that matters operationally: a
+    vendor who gets onto the client's list is cleared by correcting one field,
+    with nothing to re-save and no sweep to run."""
+    from workflow.bidders import missing_client_approval
+
+    root = str(tmp_path)
+    with persistence.locked_update(root) as store:
+        bidder = a_registered_bidder(store, approved_by=["Astra"])
+    assert missing_client_approval(persistence.load(root).get_bidder(bidder.id)) is not None
+
+    with persistence.locked_update(root) as store:
+        store.update_bidder(bidder.id, {"approved_by": ["Astra", "ADNOC"]})
+
+    reloaded = persistence.load(root)
+    assert missing_client_approval(reloaded.get_bidder(bidder.id)) is None
+
+
+def test_no_derived_caution_is_ever_written_to_the_document(tmp_path):
+    """Row 3. The invariant Task 1 owns: `Bidder`'s persisted field set is
+    exactly what it was, so the sentence exists only at read time. Reading the
+    raw text *is* the assertion here — `to_document` agreeing with itself would
+    not catch a key both halves of the round trip knew about."""
+    from workflow.bidders import missing_client_approval
+
+    root = str(tmp_path)
+    with persistence.locked_update(root) as store:
+        cautioned = a_registered_bidder(store, approved_by=["Astra"])
+        approved = a_registered_bidder(
+            store, name="Northwind Valve Works", approved_by=["ADNOC"]
+        )
+    live = missing_client_approval(persistence.load(root).get_bidder(cautioned.id))
+
+    raw = Path(persistence.workflow_path(root)).read_text(encoding="utf-8")
+    assert "approval_caution" not in raw
+    # Not just the key: the sentence itself must appear nowhere in the file,
+    # under any spelling a well-meaning cache might have chosen.
+    assert "Approved Vendor List" not in raw
+
+    reloaded = persistence.load(root)
+    assert missing_client_approval(reloaded.get_bidder(cautioned.id)) == live
+    assert "approved by Astra only." in live
+    assert missing_client_approval(reloaded.get_bidder(approved.id)) is None
+
+
+def test_a_document_written_before_this_change_needs_no_migration(tmp_path):
+    """Row 4. An existing registry has bidders that never carried anything
+    approval-derived, because there was nothing to carry. Every one of them
+    loads, and each computes its caution from `approved_by` alone."""
+    from workflow.bidders import missing_client_approval
+
+    root = str(tmp_path)
+    with persistence.locked_update(root) as store:
+        project, generator, _cable = project_and_items(store)
+        cover_with_rfq(store, project.id, [generator.id])
+
+    # Hand-written the way a pre-change document really looks: bidder records
+    # carrying only the fields the model has always declared.
+    path = Path(persistence.workflow_path(root))
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    doc["bidders"] = [
+        {"id": "bdr_onlist", "name": "On The List LLC", "approved_by": ["ADNOC"]},
+        {"id": "bdr_ourslc", "name": "Ours Only LLC", "approved_by": ["Astra"]},
+        {"id": "bdr_nobody", "name": "Nobody Approved LLC", "approved_by": []},
+    ]
+    path.write_text(json.dumps(doc), encoding="utf-8")
+
+    loaded = persistence.load(root)
+    assert len(loaded.list_bidders()) == 3
+    assert loaded.list_projects()          # everything else still loaded
+    assert missing_client_approval(loaded.get_bidder("bdr_onlist")) is None
+    assert "approved by Astra only." in missing_client_approval(
+        loaded.get_bidder("bdr_ourslc")
+    )
+    assert "has no approval recorded." in missing_client_approval(
+        loaded.get_bidder("bdr_nobody")
+    )
+    # No migration, so the version never moved.
+    assert doc["version"] == 1
+
+
+def test_a_caution_never_lands_on_the_shortlist_snapshot(tmp_path):
+    """Row 5. The invariant Task 2 owns. `ShortlistEntry` snapshots
+    `vendor_name`, `prequal_status` and `scope_code_fit` and nothing else, so an
+    invitation issued while the bidder was off the client's list leaves no trace
+    of that once the bidder gets onto it."""
+    root = str(tmp_path)
+    with persistence.locked_update(root) as store:
+        project, generator, _cable = project_and_items(store)
+        rfq = cover_with_rfq(store, project.id, [generator.id])
+        bidder = a_registered_bidder(store, approved_by=["Astra"])
+        entry = store.add_shortlist_entry(
+            rfq.id, vendor_id=bidder.id, as_of=date(2026, 8, 13)
+        )
+    before = json.loads(Path(persistence.workflow_path(root)).read_text(encoding="utf-8"))
+    [stored_entry] = before["shortlists"]
+
+    with persistence.locked_update(root) as store:
+        store.update_bidder(bidder.id, {"approved_by": ["Astra", "ADNOC"]})
+
+    raw = Path(persistence.workflow_path(root)).read_text(encoding="utf-8")
+    assert "Approved Vendor List" not in raw
+    reloaded = persistence.load(root)
+    [survivor] = reloaded.shortlist_for(rfq.id)
+    assert survivor.id == entry.id
+    assert survivor.vendor_name == "Al Munara Switchgear LLC"
+    assert survivor.prequal_status == "Approved"
+    # The entry is byte-for-byte what it was: the mutation touched the bidder.
+    assert json.loads(raw)["shortlists"] == [stored_entry]
+
+
+def test_the_delete_guard_is_unaffected_by_the_caution(tmp_path):
+    """Row 6. A caution is not a blocker in either direction — it neither
+    permits a delete the guard refuses nor stands in for the refusal. The
+    sentence naming the RFQ is still what comes back."""
+    root = str(tmp_path)
+    with persistence.locked_update(root) as store:
+        project, generator, _cable = project_and_items(store)
+        rfq = cover_with_rfq(store, project.id, [generator.id])
+        bidder = a_registered_bidder(store, approved_by=["Astra"])
+        entry = store.add_shortlist_entry(
+            rfq.id, vendor_id=bidder.id, as_of=date(2026, 8, 13)
+        )
+    before = Path(persistence.workflow_path(root)).read_bytes()
+
+    with pytest.raises(ValueError, match="ADP-RFQ-2026-014") as refusal:
+        with persistence.locked_update(root) as store:
+            store.delete_bidder(bidder.id)
+    assert "Approved Vendor List" not in str(refusal.value)
+
+    assert Path(persistence.workflow_path(root)).read_bytes() == before
+    reloaded = persistence.load(root)
+    assert reloaded.get_bidder(bidder.id) is not None
+    assert [e.id for e in reloaded.shortlist_for(rfq.id)] == [entry.id]
