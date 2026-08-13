@@ -97,7 +97,7 @@ def test_blocked_transition_returns_409_with_the_reason(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     rfq_id = create_rfq(client)
     r = client.post(f"/api/workflow/rfqs/{rfq_id}/transition", json={
-        "target": "Shortlisting", "by": "amal@example.com",
+        "target": "Shortlisting",
     })
     assert r.status_code == 409
     assert "frozen" in r.json()["detail"].lower()
@@ -107,7 +107,7 @@ def test_a_blocked_transition_does_not_move_the_rfq(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     rfq_id = create_rfq(client)
     client.post(f"/api/workflow/rfqs/{rfq_id}/transition", json={
-        "target": "Shortlisting", "by": "amal@example.com",
+        "target": "Shortlisting",
     })
     body = client.get(f"/api/workflow/rfqs/{rfq_id}").json()
     assert body["rfq"]["stage"] == "Scoping"
@@ -163,7 +163,7 @@ def test_invalid_target_stage_returns_422(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     rfq_id = create_rfq(client)
     r = client.post(f"/api/workflow/rfqs/{rfq_id}/transition", json={
-        "target": "Not A Stage", "by": "amal@example.com",
+        "target": "Not A Stage",
     })
     assert r.status_code == 422
 
@@ -180,18 +180,43 @@ def test_a_satisfied_gate_lets_the_rfq_advance(tmp_path, monkeypatch):
         ],
     })
     assert r.status_code == 200, r.text
-    r = client.post(f"/api/workflow/rfqs/{rfq_id}/technical-package/freeze",
-                    json={"by": "lead.engineer@example.com"})
+    r = client.post(f"/api/workflow/rfqs/{rfq_id}/technical-package/freeze", json={})
     assert r.status_code == 200, r.text
 
     body = client.get(f"/api/workflow/rfqs/{rfq_id}").json()
     assert body["gate"]["passed"] is True
 
     r = client.post(f"/api/workflow/rfqs/{rfq_id}/transition", json={
-        "target": "Shortlisting", "by": "amal@example.com",
+        "target": "Shortlisting",
     })
     assert r.status_code == 200, r.text
     assert r.json()["stage"] == "Shortlisting"
+
+
+def test_who_moved_an_rfq_comes_from_the_session_not_the_request(tmp_path, monkeypatch):
+    """The history exists to answer "who did this", so `by` must not be a body
+    field — a signed-in user could otherwise sign a stage change as anyone."""
+    client = _client(tmp_path, monkeypatch)
+    rfq_id = create_rfq(client)
+    client.put(f"/api/workflow/rfqs/{rfq_id}/technical-package", json={
+        "revision": "Rev. B",
+        "basis_of_design": "basis",
+        "attachments": [{"doc_code": "HAL-PID-001", "title": "P&ID", "revision": "Rev. C"}],
+    })
+    client.post(f"/api/workflow/rfqs/{rfq_id}/technical-package/freeze", json={})
+
+    r = client.post(f"/api/workflow/rfqs/{rfq_id}/transition", json={
+        "target": "Shortlisting",
+        "by": "someone.else@example.com",  # ignored, not honoured
+        "reason": "shortlist prepared",
+    })
+    assert r.status_code == 200, r.text
+    assert r.json()["history"][-1]["by"] == ADMIN_EMAIL
+    assert r.json()["history"][-1]["reason"] == "shortlist prepared"
+
+    from workflow import persistence
+    package = persistence.load(str(tmp_path)).get_technical_package(rfq_id)
+    assert package.frozen_by == ADMIN_EMAIL
 
 
 def test_freezing_a_package_with_an_indefinite_revision_returns_409(tmp_path, monkeypatch):
@@ -202,8 +227,7 @@ def test_freezing_a_package_with_an_indefinite_revision_returns_409(tmp_path, mo
         "basis_of_design": "basis",
         "attachments": [{"doc_code": "HAL-PID-001", "title": "P&ID", "revision": None}],
     })
-    r = client.post(f"/api/workflow/rfqs/{rfq_id}/technical-package/freeze",
-                    json={"by": "lead.engineer@example.com"})
+    r = client.post(f"/api/workflow/rfqs/{rfq_id}/technical-package/freeze", json={})
     assert r.status_code == 409
     assert "definite revision" in r.json()["detail"]
 
@@ -284,7 +308,7 @@ def test_a_refused_transition_leaves_the_document_untouched(tmp_path, monkeypatc
 
     before = persistence.load(str(tmp_path)).get_rfq(rfq_id)
     r = client.post(f"/api/workflow/rfqs/{rfq_id}/transition", json={
-        "target": "Shortlisting", "by": "amal@example.com",
+        "target": "Shortlisting",
     })
     assert r.status_code == 409
 

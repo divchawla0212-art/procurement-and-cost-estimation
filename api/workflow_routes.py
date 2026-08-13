@@ -21,9 +21,11 @@ Status mapping, kept consistent across the module:
 """
 from datetime import date
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from api.auth.deps import current_user
+from api.auth.models import User
 from workflow import persistence
 from workflow.gates import GateResult, check_gate
 from workflow.models.rfq import Attachment
@@ -77,8 +79,13 @@ class RfqIn(BaseModel):
 
 
 class TransitionIn(BaseModel):
+    """`by` is deliberately absent. Who moved an RFQ is taken from the session,
+    never from the request body — a client-supplied `by` would let any
+    signed-in user write someone else's name into an append-only history that
+    exists precisely to answer "who did this". `reason` stays a body field:
+    it is the actor's own words, and only they can supply it."""
+
     target: Stage
-    by: str
     reason: str | None = None
 
 
@@ -89,7 +96,8 @@ class TechnicalPackageIn(BaseModel):
 
 
 class FreezeIn(BaseModel):
-    by: str
+    """Empty for the same reason `TransitionIn` has no `by`: freezing a package
+    is an attributed act, and the attribution comes from the session."""
 
 
 @router.get("/stages")
@@ -175,13 +183,17 @@ def get_rfq(rfq_id: str) -> dict:
 
 
 @router.post("/rfqs/{rfq_id}/transition")
-def transition(rfq_id: str, body: TransitionIn) -> dict:
+def transition(
+    rfq_id: str, body: TransitionIn, user: User = Depends(current_user)
+) -> dict:
     try:
         # The gate check lives inside `transition`, which runs inside the lock.
         # A ValueError here leaves the document untouched — `locked_update`
         # writes only on a clean exit — so a refused transition cannot half-land.
         with persistence.locked_update(_root()) as store:
-            rfq = store.transition(rfq_id, target=body.target, by=body.by, reason=body.reason)
+            rfq = store.transition(
+                rfq_id, target=body.target, by=user.email, reason=body.reason
+            )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -207,10 +219,12 @@ def set_technical_package(rfq_id: str, body: TechnicalPackageIn) -> dict:
 
 
 @router.post("/rfqs/{rfq_id}/technical-package/freeze")
-def freeze_technical_package(rfq_id: str, body: FreezeIn) -> dict:
+def freeze_technical_package(
+    rfq_id: str, body: FreezeIn, user: User = Depends(current_user)
+) -> dict:
     try:
         with persistence.locked_update(_root()) as store:
-            package = store.freeze_package(rfq_id, by=body.by)
+            package = store.freeze_package(rfq_id, by=user.email)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
