@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
+from workflow import clarifications
 from workflow.stages import Stage, is_backward
 
 if TYPE_CHECKING:  # avoids a circular import at runtime
@@ -49,6 +50,39 @@ def _shortlisting_exit(store: "WorkflowStore", rfq_id: str) -> GateResult:
     return _passed()
 
 
+def _clarifications_exit(store: "WorkflowStore", rfq_id: str) -> GateResult:
+    """Nothing outstanding before the bids are opened.
+
+    Both halves appear in the reason when both are true. `_scoping_exit` records
+    the rule and the mistake behind it: a reader told only the nearer half fixes
+    that, retries, and is refused again for something nobody mentioned.
+
+    The two failures this prevents are recoverable in principle and
+    unrecoverable in practice — once the bids are open, a bidder who never got
+    their answer cannot be given one, and a package change that was drafted and
+    never issued cannot be issued.
+    """
+    outstanding = []
+    open_queries = sorted(
+        q.number for q in store.queries_for(rfq_id) if clarifications.is_open(q)
+    )
+    if open_queries:
+        outstanding.append(f"queries still open ({', '.join(open_queries)})")
+    drafts = sorted(
+        a.number for a in store.addenda_for(rfq_id) if clarifications.is_draft(a)
+    )
+    if drafts:
+        outstanding.append(f"addenda still in draft ({', '.join(drafts)})")
+
+    if not outstanding:
+        return _passed()
+    return _blocked(
+        "Bids cannot be opened while there are "
+        + " and ".join(outstanding)
+        + ". Answer or withdraw each query, and issue or delete each draft addendum."
+    )
+
+
 def _bids_received_exit(store: "WorkflowStore", rfq_id: str) -> GateResult:
     if store.get_bid_shortlist(rfq_id) is None:
         return _blocked(
@@ -62,6 +96,7 @@ def _bids_received_exit(store: "WorkflowStore", rfq_id: str) -> GateResult:
 _GATES = {
     (Stage.SCOPING, Stage.SHORTLISTING): _scoping_exit,
     (Stage.SHORTLISTING, Stage.ISSUED): _shortlisting_exit,
+    (Stage.CLARIFICATIONS, Stage.BIDS_RECEIVED): _clarifications_exit,
     (Stage.BIDS_RECEIVED, Stage.EVALUATION): _bids_received_exit,
 }
 

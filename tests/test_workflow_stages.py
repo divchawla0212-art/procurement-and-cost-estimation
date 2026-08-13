@@ -225,3 +225,107 @@ def test_backward_transitions_are_not_gated():
 
     retendered = store.transition(rfq_id, Stage.ISSUED, by="amal@example.com", reason="retender")
     assert retendered.stage is Stage.ISSUED
+
+
+# -- the Clarifications exit gate --------------------------------------------
+
+
+def rfq_at_clarifications() -> tuple[WorkflowStore, str, str]:
+    store = WorkflowStore()
+    project = store.create_project(
+        name="Ruwais", code="RUU", client="ADNOC Refining", location="Ruwais",
+        live_period_start=date(2026, 1, 1), live_period_end=date(2029, 12, 31),
+    )
+    item = store.create_item(
+        project_id=project.id, item_type="Transmitters", description="d", qty=1,
+        uom="lot", discipline="Instrumentation", estimated_value_aed=1,
+    )
+    rfq = store.create_rfq(
+        project_id=project.id, item_ids=[item.id], reference="RUU-RFQ-2026-006",
+        package="Field transmitters", discipline="Instrumentation",
+        value_estimate_aed=1,
+    )
+    store.set_technical_package(
+        rfq.id, revision="Rev. A", basis_of_design="d",
+        attachments=[Attachment(doc_code="IO-411", title="IO list", revision="Rev. A")],
+    )
+    store.freeze_package(rfq.id, by="lead@example.com")
+    entry = store.add_shortlist_entry(
+        rfq.id, vendor_name="Al Munara Switchgear LLC", prequal_status="Approved",
+        scope_code_fit=True, included=True,
+    )
+    store.approve_shortlist(rfq.id, by="procurement@example.com")
+    store.set_tbe_template(rfq.id, criteria=["Accuracy class"])
+    store.transition(rfq.id, Stage.SHORTLISTING, by="buyer@example.com")
+    store.transition(rfq.id, Stage.ISSUED, by="buyer@example.com")
+    store.transition(rfq.id, Stage.CLARIFICATIONS, by="buyer@example.com")
+    return store, rfq.id, entry.id
+
+
+def test_clarifications_with_nothing_outstanding_passes():
+    store, rfq_id, _entry_id = rfq_at_clarifications()
+    gate = check_gate(store, rfq_id, Stage.CLARIFICATIONS, Stage.BIDS_RECEIVED)
+    assert gate.passed is True
+
+
+def test_an_open_query_blocks_bids_from_being_opened():
+    store, rfq_id, entry_id = rfq_at_clarifications()
+    store.raise_query(rfq_id, entry_id, question="Which revision?",
+                      category="Technical", raised_on=date(2026, 8, 13))
+    gate = check_gate(store, rfq_id, Stage.CLARIFICATIONS, Stage.BIDS_RECEIVED)
+    assert gate.passed is False
+    assert "TQ-001" in gate.reason
+
+
+def test_answering_or_withdrawing_every_query_clears_the_gate():
+    store, rfq_id, entry_id = rfq_at_clarifications()
+    a = store.raise_query(rfq_id, entry_id, question="a", category="Technical",
+                          raised_on=date(2026, 8, 13))
+    b = store.raise_query(rfq_id, entry_id, question="b", category="Commercial",
+                          raised_on=date(2026, 8, 13))
+    store.answer_query(rfq_id, a.id, answer="Rev. A.", by="buyer@example.com")
+    store.withdraw_query(rfq_id, b.id, reason="Duplicate.", by="buyer@example.com")
+    assert check_gate(store, rfq_id, Stage.CLARIFICATIONS, Stage.BIDS_RECEIVED).passed
+
+
+def test_a_draft_addendum_blocks_bids_from_being_opened():
+    store, rfq_id, _entry_id = rfq_at_clarifications()
+    store.draft_addendum(rfq_id, revision="Rev. B", summary="s", attachments=[])
+    gate = check_gate(store, rfq_id, Stage.CLARIFICATIONS, Stage.BIDS_RECEIVED)
+    assert gate.passed is False
+    assert "ADD-01" in gate.reason
+
+
+def test_the_reason_names_both_halves_when_both_are_outstanding():
+    """`_scoping_exit`s lesson: a reader told only the nearer half fixes it,
+    retries, and is refused again for a reason nobody mentioned."""
+    store, rfq_id, entry_id = rfq_at_clarifications()
+    store.raise_query(rfq_id, entry_id, question="a", category="Technical",
+                      raised_on=date(2026, 8, 13))
+    store.draft_addendum(rfq_id, revision="Rev. B", summary="s", attachments=[])
+    reason = check_gate(store, rfq_id, Stage.CLARIFICATIONS, Stage.BIDS_RECEIVED).reason
+    assert "TQ-001" in reason and "ADD-01" in reason
+
+
+def test_the_transition_itself_is_refused_with_the_gates_own_sentence():
+    store, rfq_id, entry_id = rfq_at_clarifications()
+    store.raise_query(rfq_id, entry_id, question="a", category="Technical",
+                      raised_on=date(2026, 8, 13))
+    with pytest.raises(ValueError, match="TQ-001"):
+        store.transition(rfq_id, Stage.BIDS_RECEIVED, by="buyer@example.com")
+    assert store.get_rfq(rfq_id).stage is Stage.CLARIFICATIONS
+
+
+def test_a_backward_transition_is_never_blocked_by_the_new_gate():
+    """Retender is a recovery. A forward gate that blocked one would leave a
+    stuck RFQ with no way out."""
+    store, rfq_id, entry_id = rfq_at_clarifications()
+    store.transition(rfq_id, Stage.BIDS_RECEIVED, by="buyer@example.com")
+    bid = store.register_bid(rfq_id, vendor_name="Al Munara", headline_price_aed=1)
+    store.select_bids(rfq_id, [bid.id], by="client@example.com", rationale="Only bid")
+    store.transition(rfq_id, Stage.EVALUATION, by="buyer@example.com")
+    store.raise_query(rfq_id, entry_id, question="late query", category="Technical",
+                      raised_on=date(2026, 8, 20))
+
+    store.transition(rfq_id, Stage.ISSUED, by="buyer@example.com", reason="retender")
+    assert store.get_rfq(rfq_id).stage is Stage.ISSUED
