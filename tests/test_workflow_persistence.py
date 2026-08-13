@@ -11,6 +11,7 @@ includes the append-only stage history, which is the audit trail of a retender.
 """
 import json
 from datetime import date
+from pathlib import Path
 
 import pytest
 
@@ -236,3 +237,234 @@ def test_removing_an_artifact_does_not_survive_on_disk(tmp_path):
     persistence.save(str(tmp_path), store)
 
     assert persistence.load(str(tmp_path)).shortlist_for(rfq_id) == []
+
+
+# -- the two-run mutation matrix ---------------------------------------------
+#
+# Every row below mutates the store between two runs and then reads run 2 *from
+# disk*, never from the store object that made the change. That is the whole
+# point: a single-run assertion passes while the document is already wrong.
+#
+# PLAN-TEMPLATE.md's nine required rows all mutate the extraction pipeline — a
+# newer document revision, a prompt-version bump, an LLM call failing between
+# runs. None of that exists in `workflow.json`. What carries across is their
+# shape: each catches state that should have left the store and didn't. These
+# rows reproduce that shape against the entities this subsystem mutates.
+#
+# | mutation between run 1 and run 2      | invariant at risk                          |
+# |---------------------------------------|--------------------------------------------|
+# | a project holding items is deleted     | _items holds exactly the items of live      |
+# |                                        | projects                                    |
+# | ...with a second project also holding  | the cascade filters by project_id           |
+# | an item covered by an RFQ is deleted   | a refused call writes nothing               |
+# | a project holding an RFQ is deleted    | a refused call writes nothing               |
+# | a project is patched                   | one record per id, replaced in place        |
+# | an item is dated outside the period    | the warning is advisory, not a write barrier|
+# | an item is deleted, another is added   | every item_id in every RFQ resolves         |
+# | create -> patch -> delete              | the document equals the store               |
+
+
+def project_and_items(store: WorkflowStore, name: str = "Haliba"):
+    project = store.create_project(
+        name=name,
+        code=name[:3].upper(),
+        client="Al Dhafra Petroleum",
+        location="Haliba field, UAE",
+        live_period_start=date(2026, 1, 1),
+        live_period_end=date(2029, 12, 31),
+    )
+    generator = store.create_item(
+        project_id=project.id,
+        item_type="Gas generator",
+        description="2 x 5 MW containerised",
+        qty=2,
+        uom="no",
+        discipline="Electrical",
+        estimated_value_aed=18_000_000,
+    )
+    cable = store.create_item(
+        project_id=project.id,
+        item_type="HV cable",
+        description="11 kV, 3-core",
+        qty=1200,
+        uom="m",
+        discipline="Electrical",
+        estimated_value_aed=900_000,
+    )
+    return project, generator, cable
+
+
+def cover_with_rfq(store: WorkflowStore, project_id: str, item_ids: list[str]):
+    return store.create_rfq(
+        project_id=project_id,
+        item_ids=item_ids,
+        reference="ADP-RFQ-2026-014",
+        package="Power generation",
+        discipline="Electrical",
+        value_estimate_aed=18_000_000,
+    )
+
+
+def test_deleting_a_project_does_not_leave_its_items_on_disk(tmp_path):
+    """Row 1. An item pruned only in memory reappears on the next load — this
+    is the orphaned-facts defect in its new home."""
+    root = str(tmp_path)
+    with persistence.locked_update(root) as store:
+        project, generator, cable = project_and_items(store)
+
+    with persistence.locked_update(root) as store:
+        store.delete_project(project.id)
+
+    reloaded = persistence.load(root)          # run 2: from disk
+    assert reloaded.get_project(project.id) is None
+    assert reloaded.get_item(generator.id) is None
+    assert reloaded.get_item(cable.id) is None
+    assert persistence.to_document(reloaded)["items"] == []
+
+
+def test_deleting_one_project_leaves_the_others_items_on_disk(tmp_path):
+    """Row 2. A cascade that forgot to filter by project_id would empty both."""
+    root = str(tmp_path)
+    with persistence.locked_update(root) as store:
+        doomed, doomed_gen, doomed_cable = project_and_items(store, "Haliba")
+        kept, kept_gen, kept_cable = project_and_items(store, "Bab")
+
+    with persistence.locked_update(root) as store:
+        store.delete_project(doomed.id)
+
+    reloaded = persistence.load(root)
+    assert reloaded.get_item(doomed_gen.id) is None
+    assert reloaded.get_item(doomed_cable.id) is None
+    assert reloaded.get_item(kept_gen.id) is not None
+    assert reloaded.get_item(kept_cable.id) is not None
+    assert len(reloaded.items_for_project(kept.id)) == 2
+
+
+def test_a_refused_item_delete_leaves_the_document_untouched(tmp_path):
+    """Row 3. `locked_update` writes only on a clean exit, so the refusal must
+    not have touched the file at all — not "written the same content back"."""
+    root = str(tmp_path)
+    with persistence.locked_update(root) as store:
+        project, generator, _cable = project_and_items(store)
+        cover_with_rfq(store, project.id, [generator.id])
+
+    before = Path(persistence.workflow_path(root)).read_bytes()
+
+    with pytest.raises(ValueError):
+        with persistence.locked_update(root) as store:
+            store.delete_item(generator.id)
+
+    assert Path(persistence.workflow_path(root)).read_bytes() == before
+    assert persistence.load(root).get_item(generator.id) is not None
+
+
+def test_a_refused_project_delete_leaves_the_document_untouched(tmp_path):
+    """Row 4. Nothing half-lands: the guard raises before the cascade runs, and
+    the block never reaches `save`."""
+    root = str(tmp_path)
+    with persistence.locked_update(root) as store:
+        project, generator, cable = project_and_items(store)
+        cover_with_rfq(store, project.id, [generator.id])
+
+    before = Path(persistence.workflow_path(root)).read_bytes()
+
+    with pytest.raises(ValueError):
+        with persistence.locked_update(root) as store:
+            store.delete_project(project.id)
+
+    assert Path(persistence.workflow_path(root)).read_bytes() == before
+    reloaded = persistence.load(root)
+    assert reloaded.get_project(project.id) is not None
+    assert reloaded.get_item(generator.id) is not None
+    assert reloaded.get_item(cable.id) is not None
+    assert len(reloaded.list_rfqs()) == 1
+
+
+def test_a_patched_project_survives_as_exactly_one_record(tmp_path):
+    """Row 5. An update that inserted under a fresh id rather than replacing in
+    place would leave two projects here, and the reader would see a duplicate
+    that no screen can delete."""
+    root = str(tmp_path)
+    with persistence.locked_update(root) as store:
+        project, _generator, _cable = project_and_items(store)
+
+    with persistence.locked_update(root) as store:
+        store.update_project(project.id, {"name": "Haliba Phase 2", "status": "On Hold"})
+
+    reloaded = persistence.load(root)
+    assert len(reloaded.list_projects()) == 1
+    survivor = reloaded.get_project(project.id)
+    assert survivor.name == "Haliba Phase 2"
+    assert survivor.status == "On Hold"
+    assert survivor.code == "HAL"          # never sent, so never changed
+    assert len(reloaded.items_for_project(project.id)) == 2
+
+
+def test_an_item_dated_outside_the_live_period_still_persists(tmp_path):
+    """Row 6. The caution is advisory. A validator that raised instead would
+    lose the edit, and the store would disagree with what the user was told."""
+    root = str(tmp_path)
+    with persistence.locked_update(root) as store:
+        project, generator, _cable = project_and_items(store)
+
+    with persistence.locked_update(root) as store:
+        store.update_item(generator.id, {"required_on_site": date(2030, 6, 1)})
+        # The same call the route makes to build its warning.
+        warning = store.validate_against_live_period(project.id, date(2030, 6, 1))
+        assert warning is not None
+
+    assert persistence.load(root).get_item(generator.id).required_on_site == date(2030, 6, 1)
+
+
+def test_a_deleted_item_leaves_no_dangling_reference_in_any_rfq(tmp_path):
+    """Row 7. The RFQ covers the cable only, so deleting the generator is
+    allowed — and afterwards no RFQ may name an item that is gone."""
+    root = str(tmp_path)
+    with persistence.locked_update(root) as store:
+        project, generator, cable = project_and_items(store)
+        cover_with_rfq(store, project.id, [cable.id])
+
+    with persistence.locked_update(root) as store:
+        store.delete_item(generator.id)
+        added = store.create_item(
+            project_id=project.id,
+            item_type="Transformer",
+            description="11/0.415 kV",
+            qty=1,
+            uom="no",
+            discipline="Electrical",
+            estimated_value_aed=2_400_000,
+        )
+
+    # And the covered item is still undeletable — without this the row only
+    # exercises the easy half, and dropping the guard entirely would leave it
+    # green while RFQs ended up naming items that no longer exist.
+    with pytest.raises(ValueError):
+        with persistence.locked_update(root) as store:
+            store.delete_item(cable.id)
+
+    reloaded = persistence.load(root)
+    assert reloaded.get_item(generator.id) is None
+    assert reloaded.get_item(added.id) is not None
+    assert reloaded.get_item(cable.id) is not None
+    live = {i.id for i in reloaded.items_for_project(project.id)}
+    for rfq in reloaded.list_rfqs():
+        assert set(rfq.item_ids) <= live, "an RFQ names an item that no longer exists"
+
+
+def test_the_document_equals_the_store_after_create_patch_delete(tmp_path):
+    """Row 8. The end-to-end shape: whatever sequence ran, what is on disk is
+    what the store holds — no more, no fewer."""
+    root = str(tmp_path)
+    with persistence.locked_update(root) as store:
+        project, generator, cable = project_and_items(store)
+
+    with persistence.locked_update(root) as store:
+        store.update_item(generator.id, {"qty": 3})
+        store.delete_item(cable.id)
+
+    on_disk = json.loads(Path(persistence.workflow_path(root)).read_text(encoding="utf-8"))
+    assert persistence.to_document(persistence.load(root)) == on_disk
+    assert [i["id"] for i in on_disk["items"]] == [generator.id]
+    assert on_disk["items"][0]["qty"] == 3
+    assert [p["id"] for p in on_disk["projects"]] == [project.id]
