@@ -27,11 +27,13 @@ from pydantic import BaseModel
 from api.auth.deps import current_user
 from api.auth.models import User
 from workflow import persistence
+from workflow.bidders import effective_prequal, evaluate
 from workflow.gates import GateResult, check_gate
+from workflow.models.bidder import Bidder, PrequalStatus
 from workflow.models.project import Item, ProjectStatus
 from workflow.models.rfq import Attachment
 from workflow.stages import STAGE_ORDER, Stage
-from workflow.store import WorkflowStore
+from workflow.store import IncompleteShortlistEntry, WorkflowStore
 
 router = APIRouter(prefix="/api/workflow", tags=["workflow"])
 
@@ -136,11 +138,60 @@ class FreezeIn(BaseModel):
     is an attributed act, and the attribution comes from the session."""
 
 
+class BidderIn(BaseModel):
+    name: str
+    country: str
+    currency: str = "AED"
+    trade_categories: list[str] = []
+    prequal_status: PrequalStatus = "Under review"
+    prequal_expires_on: date | None = None
+    on_hold: bool = False
+    hold_reason: str | None = None
+    turnover_band: str | None = None
+    performance_rating: float | None = None
+    past_awards: int = 0
+    notes: str | None = None
+
+
+class BidderPatch(BaseModel):
+    """Partial for the same reason as `ProjectPatch`: an absent key means
+    "leave it alone", never "clear it". `id` is deliberately not a field, and
+    the store refuses it a second time for callers that never come through
+    here.
+
+    `prequal_status` keeps its literal rather than widening to `str`, so an
+    unknown status is a 422 from the request model and never reaches the
+    store."""
+
+    name: str | None = None
+    country: str | None = None
+    currency: str | None = None
+    trade_categories: list[str] | None = None
+    prequal_status: PrequalStatus | None = None
+    prequal_expires_on: date | None = None
+    on_hold: bool | None = None
+    hold_reason: str | None = None
+    turnover_band: str | None = None
+    performance_rating: float | None = None
+    past_awards: int | None = None
+    notes: str | None = None
+
+
 class ShortlistEntryIn(BaseModel):
-    vendor_name: str
-    prequal_status: str
-    scope_code_fit: bool
-    included: bool
+    """Either a `vendor_id` from the registry, or the three free-text fields.
+
+    The three stay optional rather than being split into two request models
+    because the store is what decides between the paths, and it is the store —
+    inside the lock — that ignores them when a `vendor_id` is present. A route
+    that pre-emptively dropped them would be making that decision a second
+    time, in a second place.
+    """
+
+    vendor_id: str | None = None
+    vendor_name: str | None = None
+    prequal_status: str | None = None
+    scope_code_fit: bool | None = None
+    included: bool = True
     # An override is a positive act, so it carries its own reason. `override_by`
     # is not an input for the same reason `by` never is — it comes from the
     # session, or a user could sign someone else's name to the exception.
@@ -313,6 +364,81 @@ def delete_item(project_id: str, item_id: str) -> None:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+# -- bidders -----------------------------------------------------------------
+#
+# The registry is organisation-wide, so these paths hang off `/bidders` rather
+# than off a project. Nothing here decides anything: the delete guard and the
+# eligibility rule both live in `WorkflowStore`, because a check in the route
+# and a write in the store are two critical sections rather than one.
+
+
+def _bidder_payload(store: WorkflowStore, bidder: Bidder, as_of: date) -> dict:
+    """A bidder, plus the two values a screen must not compute for itself.
+
+    `effective_prequal` is derived rather than stored, so there has to be
+    exactly one definition of it and this is where callers read it. Letting a
+    screen compare `prequal_expires_on` to its own clock would be a second.
+    """
+    return {
+        **bidder.model_dump(mode="json"),
+        "effective_prequal": effective_prequal(bidder, as_of),
+        "invited_count": len(store.rfqs_inviting(bidder.id)),
+    }
+
+
+@router.get("/bidders")
+def list_bidders() -> dict:
+    store = _read()
+    today = date.today()
+    return {"bidders": [_bidder_payload(store, b, today) for b in store.list_bidders()]}
+
+
+@router.post("/bidders", status_code=201)
+def create_bidder(body: BidderIn) -> dict:
+    with persistence.locked_update(_root()) as store:
+        bidder = store.create_bidder(**body.model_dump())
+    return bidder.model_dump(mode="json")
+
+
+@router.get("/bidders/{bidder_id}")
+def get_bidder(bidder_id: str) -> dict:
+    store = _read()
+    bidder = store.get_bidder(bidder_id)
+    if bidder is None:
+        raise HTTPException(status_code=404, detail=f"Unknown bidder: {bidder_id}")
+    return {
+        **_bidder_payload(store, bidder, date.today()),
+        # Named rather than counted here: this is the screen that has to tell
+        # the reader why a delete was refused before they attempt it.
+        "invited_by": store.rfqs_inviting(bidder_id),
+    }
+
+
+@router.patch("/bidders/{bidder_id}")
+def patch_bidder(bidder_id: str, body: BidderPatch) -> dict:
+    try:
+        with persistence.locked_update(_root()) as store:
+            bidder = store.update_bidder(bidder_id, body.model_dump(exclude_unset=True))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return bidder.model_dump(mode="json")
+
+
+@router.delete("/bidders/{bidder_id}", status_code=204)
+def delete_bidder(bidder_id: str) -> None:
+    try:
+        with persistence.locked_update(_root()) as store:
+            store.delete_bidder(bidder_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        # A shortlist still references them. The bidder exists and the request
+        # is well-formed; the workflow refuses.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.get("/rfqs")
 def list_rfqs(project_id: str | None = None) -> dict:
     """The RFQ roster, plus the counts the stage strip renders.
@@ -458,6 +584,37 @@ def freeze_technical_package(
 # authorises are one critical section.
 
 
+@router.get("/rfqs/{rfq_id}/candidates")
+def list_candidates(rfq_id: str) -> dict:
+    """The whole registry, judged against this one RFQ.
+
+    This is the screen that replaces typing a vendor name into a box. Each
+    candidate carries the reasons it is blocked or worth a second look, so the
+    reader decides with the same information the store will decide with when
+    they click Invite.
+
+    `as_of` is resolved here, at the boundary, and passed down — that is what
+    keeps `workflow.bidders` a pure module with testable expiry boundaries.
+    """
+    store = _read()
+    rfq = store.get_rfq(rfq_id)
+    if rfq is None:
+        raise HTTPException(status_code=404, detail=f"Unknown RFQ: {rfq_id}")
+
+    today = date.today()
+    shortlisted = {e.vendor_id for e in store.shortlist_for(rfq_id) if e.vendor_id}
+    return {
+        "candidates": [
+            {
+                "bidder": _bidder_payload(store, bidder, today),
+                "suitability": evaluate(bidder, rfq, today).model_dump(),
+                "shortlisted": bidder.id in shortlisted,
+            }
+            for bidder in store.list_bidders()
+        ]
+    }
+
+
 @router.post("/rfqs/{rfq_id}/shortlist", status_code=201)
 def add_shortlist_entry(
     rfq_id: str, body: ShortlistEntryIn, user: User = Depends(current_user)
@@ -466,6 +623,7 @@ def add_shortlist_entry(
         with persistence.locked_update(_root()) as store:
             entry = store.add_shortlist_entry(
                 rfq_id,
+                vendor_id=body.vendor_id,
                 vendor_name=body.vendor_name,
                 prequal_status=body.prequal_status,
                 scope_code_fit=body.scope_code_fit,
@@ -476,6 +634,15 @@ def add_shortlist_entry(
             )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except IncompleteShortlistEntry as exc:
+        # Caught before the `ValueError` it subclasses. This one is a malformed
+        # request, not a refusal — the caller named neither a bidder nor a
+        # vendor.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ValueError as exc:
+        # A blocked bidder invited with no override reason: both entities
+        # exist and the request is well-formed. The workflow says no.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return entry.model_dump(mode="json")
 
 

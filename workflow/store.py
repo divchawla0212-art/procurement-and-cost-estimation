@@ -27,6 +27,17 @@ _ITEM_IMMUTABLE = frozenset({"id", "project_id"})
 _BIDDER_IMMUTABLE = frozenset({"id"})
 
 
+class IncompleteShortlistEntry(ValueError):
+    """A shortlist add that names neither a registry bidder nor a complete
+    free-text vendor.
+
+    A distinct type rather than a distinguishing message, because the route has
+    to map it to 422 while every other refusal here is a 409, and a route that
+    told them apart by matching on wording would break the next time the
+    wording improved.
+    """
+
+
 def _reject_immutable(changes: dict, immutable: frozenset[str]) -> None:
     blocked = immutable & set(changes)
     if blocked:
@@ -486,7 +497,7 @@ class WorkflowStore:
             # Not coerced to a passing default: an unnamed vendor with an
             # assumed "Qualified" is exactly the record this feature exists to
             # stop being created.
-            raise ValueError(
+            raise IncompleteShortlistEntry(
                 "A shortlist entry needs either a vendor_id from the registry, "
                 "or a vendor_name with its prequal_status and scope_code_fit."
             )

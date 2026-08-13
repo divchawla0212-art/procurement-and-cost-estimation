@@ -42,6 +42,7 @@ def test_every_api_route_outside_the_allowlist_requires_a_session(tmp_path, monk
                 .replace("{item_id}", "any")
                 .replace("{entry_id}", "any")
                 .replace("{line_id}", "any")
+                .replace("{bidder_id}", "any")
             )
             assert "{" not in probe, f"{path} has a path parameter the probe cannot fill"
             res = client.request(method, probe)
