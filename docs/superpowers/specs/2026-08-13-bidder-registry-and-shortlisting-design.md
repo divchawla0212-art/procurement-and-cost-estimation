@@ -310,3 +310,83 @@ Bid-window timers, a returnables checklist, per-project bidder approval, bidder
 self-service or a supplier portal, document attachments on a bidder record, and
 any change to the stage set or `TRANSITIONS`. Unifying the workflow store's
 `Project` with the ingestion store's project `slug` remains phase 2's problem.
+
+---
+
+## Addendum, same day — the registry is a real ADNOC AVL
+
+The design above assumed a registry typed in by hand. It is now also
+importable from a real client export, which changes three things in the model
+and one thing in what the demo may claim.
+
+### `workflow/avl_import.py`
+
+`parse_avl(path, astra_subset=False) -> list[Bidder]` folds an ADNOC Approved
+Vendor List export — one row per (product group, vendor, manufacturer), about
+18 000 of them — into about 1 300 bidders. `bdr_<vendor number>` is the id, so
+re-importing a later export updates the same bidder rather than creating a
+near-duplicate under a slightly different spelling of the name.
+
+**Columns are located by header, not by position.** A re-export with a column
+inserted would otherwise load manufacturer names into `vendor_name`, and the
+registry would look entirely plausible while being wrong about every company
+in it. A missing required header raises, naming itself.
+
+### Three fields on `Bidder`
+
+| field | why |
+|---|---|
+| `country: str \| None` | widened. The export's only country is the *manufacturer's*; copying it across would record a UAE supplier as Indian because their principal is. |
+| `approved_by: list[str]` | which organisations have approved this bidder — `["ADNOC"]`, or `["ADNOC", "Astra"]`. A list, because the same company is commonly on several lists and which one matters depends on whose project the RFQ is for. |
+| `represented_manufacturers: list[str]` | the OEMs a vendor is listed against. Often the real difference between two suppliers of one product group, and the thing a buyer actually searches by. |
+
+### What the import must not do
+
+**Nothing the export does not say is invented.** There is no prequalification
+expiry in it, no hold, no turnover band and no performance rating, so those
+stay empty on every imported bidder. These are real, named companies:
+synthesising a suspension, a lapse or a 3.2-out-of-5 against one of them
+manufactures a record about a real business, and it would be indistinguishable
+from a real one on the screen. A demo with fewer columns filled in is by a wide
+margin the cheaper problem.
+
+The blocker mechanism still demonstrates honestly on imported data, because
+scope fit is computed from the vendor's *real* product groups against the
+RFQ's, and any bidder can be suspended live in the UI during a demo.
+
+**The Astra subset is invented, and says so** — in `astra_approves`'s
+docstring, in the module header, and in the seed's output line. There is no
+Astra approval in the ADNOC export and no real Astra list has been supplied.
+It exists so a demo can show a client's AVL and an internal subset of it side
+by side. It is stable (derived from the vendor number, so a reseed does not
+reshuffle it) and explicable (weighted towards vendors listed against more
+product groups). On the real export it selects 297 of 1 346.
+
+### Consequences for the two screens
+
+A registry of 1 346 cannot be rendered as 1 346 cards, and a common product
+group has over a hundred approved vendors. Both screens therefore filter
+first and cap second, **and say that they have capped** — a screen that
+silently shows the first sixty of thirteen hundred misrepresents the registry.
+
+- **Bidders**: a search across name, trade category and represented
+  manufacturer; an approved-by filter built from the data rather than
+  hardcoded; a count, and a cap of 60.
+- **Shortlisting candidates**: the same search, plus an "only those registered
+  for this discipline" filter that is **on by default** — the registry is the
+  client's whole approved list, and the question in front of the reader is
+  almost always "who of ours can do this". Cap of 25.
+
+### The demo RFQs use real product group descriptions
+
+`SWITCHGEARS - LV -415V`, `VALVES - BALL - API 6D - UP TO 12"` and six others,
+quoted exactly. A made-up discipline like "Electrical" matches nothing in the
+export, and every candidate would read as a scope mismatch — the feature would
+appear broken rather than strict. The seed's shortlists are then drawn
+dynamically: Astra-approved first, then alphabetically, which is both a
+defensible procurement habit and the only way a rehearsed demo picks the same
+companies twice out of a hundred.
+
+`_invite` skips a blocked bidder that has no curated override text rather than
+generating one. A generated justification for an exception is exactly the
+record this whole feature exists to make deliberate.

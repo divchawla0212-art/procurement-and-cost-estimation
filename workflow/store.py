@@ -245,8 +245,9 @@ class WorkflowStore:
     def create_bidder(
         self,
         name: str,
-        country: str,
+        country: str | None = None,
         currency: str = "AED",
+        approved_by: list[str] | None = None,
         trade_categories: list[str] | None = None,
         prequal_status: PrequalStatus = "Under review",
         prequal_expires_on: date | None = None,
@@ -255,6 +256,7 @@ class WorkflowStore:
         turnover_band: str | None = None,
         performance_rating: float | None = None,
         past_awards: int = 0,
+        represented_manufacturers: list[str] | None = None,
         notes: str | None = None,
         bidder_id: str | None = None,
     ) -> Bidder:
@@ -263,6 +265,7 @@ class WorkflowStore:
             name=name,
             country=country,
             currency=currency,
+            approved_by=list(approved_by or []),
             trade_categories=list(trade_categories or []),
             prequal_status=prequal_status,
             prequal_expires_on=prequal_expires_on,
@@ -271,6 +274,7 @@ class WorkflowStore:
             turnover_band=turnover_band,
             performance_rating=performance_rating,
             past_awards=past_awards,
+            represented_manufacturers=list(represented_manufacturers or []),
             notes=notes,
         )
         self._bidders[bidder.id] = bidder

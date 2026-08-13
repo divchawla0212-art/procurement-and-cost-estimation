@@ -539,3 +539,202 @@ def test_the_document_equals_the_store_after_create_patch_delete(tmp_path):
     assert [i["id"] for i in on_disk["items"]] == [generator.id]
     assert on_disk["items"][0]["qty"] == 3
     assert [p["id"] for p in on_disk["projects"]] == [project.id]
+
+
+# -- the registry's rows of the mutation matrix -------------------------------
+#
+# The rows above cover the project -> item hierarchy. These cover the collection
+# this change adds, in the same shape: mutate between two runs, then read run 2
+# *from disk*, never from the store object that made the change.
+#
+# | mutation between run 1 and run 2       | invariant at risk                  |
+# |----------------------------------------|------------------------------------|
+# | a bidder is created, then deleted      | the document holds exactly the     |
+# |                                        | store's bidders                    |
+# | a shortlisted bidder is deleted        | no delete under a live reference   |
+# | the reference is removed, then deleted | ...and the guard releases          |
+# | an approval lapses between the runs    | "Expired" is never stored          |
+# | a bidder is suspended after invitation | the entry's snapshot is of the     |
+# |                                        | moment it was added                |
+# | trade categories edited to not match   | ...including scope_code_fit        |
+# | a linked invitation after approval     | approval cannot outlive an edit    |
+# | a bidder is renamed                    | entries bind by id, not by name    |
+# | two invitations of the same bidder     | the store does not silently dedupe |
+
+
+def rfq_with_a_bidder(root: str):
+    """Run 1 for the rows below: a saved store holding one RFQ, one bidder and
+    one invitation linking them."""
+    with persistence.locked_update(root) as store:
+        project, generator, _cable = project_and_items(store)
+        rfq = cover_with_rfq(store, project.id, [generator.id])
+        bidder = a_registered_bidder(store)
+        entry = store.add_shortlist_entry(
+            rfq.id, vendor_id=bidder.id, as_of=date(2026, 8, 13)
+        )
+    return rfq.id, bidder.id, entry.id
+
+
+def test_a_deleted_bidder_does_not_survive_on_disk(tmp_path):
+    """Row 1. `save` replaces the document wholesale, so a bidder pruned in
+    memory cannot reappear after a restart."""
+    root = str(tmp_path)
+    with persistence.locked_update(root) as store:
+        bidder = a_registered_bidder(store)
+
+    with persistence.locked_update(root) as store:
+        store.delete_bidder(bidder.id)
+
+    assert persistence.load(root).get_bidder(bidder.id) is None
+
+
+def test_a_shortlisted_bidder_survives_a_refused_delete_intact(tmp_path):
+    """Row 2. The refusal is a read that gates a write, so it happens inside
+    the lock — and `locked_update` writes only on a clean exit, so the raise
+    leaves the document exactly as it was."""
+    root = str(tmp_path)
+    rfq_id, bidder_id, entry_id = rfq_with_a_bidder(root)
+
+    with pytest.raises(ValueError, match="ADP-RFQ-2026-014"):
+        with persistence.locked_update(root) as store:
+            store.delete_bidder(bidder_id)
+
+    reloaded = persistence.load(root)
+    assert reloaded.get_bidder(bidder_id) is not None
+    assert [e.id for e in reloaded.shortlist_for(rfq_id)] == [entry_id]
+
+
+def test_removing_the_invitation_releases_the_bidder_across_a_restart(tmp_path):
+    """Row 3. The guard has to release as well as hold, and it has to agree
+    with what is on disk — the reference it reads is the reloaded one."""
+    root = str(tmp_path)
+    rfq_id, bidder_id, entry_id = rfq_with_a_bidder(root)
+
+    with persistence.locked_update(root) as store:
+        store.remove_shortlist_entry(rfq_id, entry_id)
+    with persistence.locked_update(root) as store:
+        store.delete_bidder(bidder_id)
+
+    reloaded = persistence.load(root)
+    assert reloaded.get_bidder(bidder_id) is None
+    assert reloaded.shortlist_for(rfq_id) == []
+
+
+def test_an_approval_lapsing_between_runs_changes_no_stored_byte(tmp_path):
+    """Row 4. The whole reason `Expired` is derived: nothing has to be written
+    for a lapse to take effect, and nothing is."""
+    from workflow.bidders import effective_prequal
+
+    root = str(tmp_path)
+    with persistence.locked_update(root) as store:
+        bidder = a_registered_bidder(store, prequal_expires_on=date(2026, 9, 30))
+    before = json.loads(Path(persistence.workflow_path(root)).read_text(encoding="utf-8"))
+
+    # Run 2 mutates something else entirely; the clock is what moved.
+    with persistence.locked_update(root) as store:
+        store.update_bidder(bidder.id, {"notes": "Chased the renewal"})
+
+    reloaded = persistence.load(root).get_bidder(bidder.id)
+    assert reloaded.prequal_status == "Approved"
+    assert reloaded.prequal_expires_on == date(2026, 9, 30)
+    assert effective_prequal(reloaded, date(2026, 9, 30)) == "Approved"
+    assert effective_prequal(reloaded, date(2026, 10, 1)) == "Expired"
+    # The stored record is untouched but for the one field that was edited.
+    after = json.loads(Path(persistence.workflow_path(root)).read_text(encoding="utf-8"))
+    assert {**before["bidders"][0], "notes": "Chased the renewal"} == after["bidders"][0]
+
+
+def test_suspending_a_bidder_does_not_rewrite_an_invitation_already_recorded(tmp_path):
+    """Row 5. The entry records what was true when the decision was made. A
+    later suspension is a new fact, not a correction of the old one — but the
+    *next* invitation is refused without an override."""
+    root = str(tmp_path)
+    rfq_id, bidder_id, _entry_id = rfq_with_a_bidder(root)
+
+    with persistence.locked_update(root) as store:
+        store.update_bidder(bidder_id, {"prequal_status": "Suspended"})
+
+    reloaded = persistence.load(root)
+    assert [e.prequal_status for e in reloaded.shortlist_for(rfq_id)] == ["Approved"]
+    with pytest.raises(ValueError, match="suspended"):
+        reloaded.add_shortlist_entry(
+            rfq_id, vendor_id=bidder_id, as_of=date(2026, 8, 13)
+        )
+
+
+def test_narrowing_trade_categories_does_not_rewrite_a_recorded_scope_fit(tmp_path):
+    """Row 6. Same rule as row 5, on the other snapshotted field."""
+    root = str(tmp_path)
+    rfq_id, bidder_id, _entry_id = rfq_with_a_bidder(root)
+
+    with persistence.locked_update(root) as store:
+        store.update_bidder(bidder_id, {"trade_categories": ["Marine"]})
+
+    reloaded = persistence.load(root)
+    assert [e.scope_code_fit for e in reloaded.shortlist_for(rfq_id)] == [True]
+    # A fresh invitation records the mismatch — and is still allowed, because a
+    # scope mismatch is a caution rather than a refusal.
+    fresh = reloaded.add_shortlist_entry(
+        rfq_id, vendor_id=bidder_id, as_of=date(2026, 8, 13)
+    )
+    assert fresh.scope_code_fit is False
+
+
+def test_a_linked_invitation_after_approval_revokes_it_on_disk(tmp_path):
+    """Row 7. Approval is of a specific set of vendors. Linking does not exempt
+    an edit from that, and the revocation has to survive the restart —
+    otherwise a reload would re-approve a shortlist nobody approved."""
+    root = str(tmp_path)
+    rfq_id, _bidder_id, _entry_id = rfq_with_a_bidder(root)
+    with persistence.locked_update(root) as store:
+        store.approve_shortlist(rfq_id, by="procurement@example.com")
+    assert persistence.load(root).is_shortlist_approved(rfq_id)
+
+    with persistence.locked_update(root) as store:
+        second = store.create_bidder(
+            name="Northwind Valve Works", country="Oman",
+            trade_categories=["Electrical"], prequal_status="Approved",
+        )
+        store.add_shortlist_entry(rfq_id, vendor_id=second.id, as_of=date(2026, 8, 13))
+
+    assert not persistence.load(root).is_shortlist_approved(rfq_id)
+
+
+def test_renaming_a_bidder_leaves_the_invitation_resolving_by_id(tmp_path):
+    """Row 8. A vendor name is user-supplied text and two companies can share
+    one, so the link is by id — and the recorded name stays the one that was
+    true when the invitation went out."""
+    root = str(tmp_path)
+    rfq_id, bidder_id, _entry_id = rfq_with_a_bidder(root)
+
+    with persistence.locked_update(root) as store:
+        store.update_bidder(bidder_id, {"name": "Al Munara Electrical Industries LLC"})
+
+    reloaded = persistence.load(root)
+    entry = reloaded.shortlist_for(rfq_id)[0]
+    assert entry.vendor_id == bidder_id
+    assert entry.vendor_name == "Al Munara Switchgear LLC"
+    # The guard still finds it, which is what makes the link a real reference.
+    assert reloaded.rfqs_inviting(bidder_id) == ["ADP-RFQ-2026-014"]
+
+
+def test_two_invitations_of_one_bidder_both_survive(tmp_path):
+    """Row 9. A duplicate is a user error the screen can show. Collapsing it
+    here would make a removal ambiguous, and the document must hold exactly
+    what the store holds — including the mistake."""
+    root = str(tmp_path)
+    rfq_id, bidder_id, first_id = rfq_with_a_bidder(root)
+
+    with persistence.locked_update(root) as store:
+        second = store.add_shortlist_entry(
+            rfq_id, vendor_id=bidder_id, as_of=date(2026, 8, 13)
+        )
+
+    reloaded = persistence.load(root)
+    assert [e.id for e in reloaded.shortlist_for(rfq_id)] == [first_id, second.id]
+    # Removing one leaves the other still holding the bidder.
+    with persistence.locked_update(root) as store:
+        store.remove_shortlist_entry(rfq_id, first_id)
+    with pytest.raises(ValueError):
+        with persistence.locked_update(root) as store:
+            store.delete_bidder(bidder_id)

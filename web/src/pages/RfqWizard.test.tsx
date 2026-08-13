@@ -65,18 +65,33 @@ function candidate(over: Partial<Candidate> = {}): Candidate {
   }
 }
 
+/** Blocked by a lapsed prequalification, but *in* scope — so it survives the
+ *  candidate list's default "only those registered for this discipline"
+ *  filter, and each test below is about one thing. */
 const BLOCKED_CANDIDATE: Candidate = {
   bidder: EXPIRED_BIDDER,
   suitability: {
     eligible: false,
-    scope_fit: false,
+    scope_fit: true,
     effective_prequal: 'Expired',
     blockers: [
       'Prequalification lapsed on 2026-05-09 and must be renewed before Sandstone Piping Industries can be invited.',
     ],
-    cautions: [
-      'Sandstone Piping Industries is not registered for Mechanical (Wellhead tie-in materials).',
-    ],
+    cautions: [],
+  },
+  shortlisted: false,
+}
+
+/** Approved, but not listed for this RFQ's discipline. A caution, never a
+ *  blocker — and hidden by the default filter until it is unticked. */
+const OUT_OF_SCOPE_CANDIDATE: Candidate = {
+  bidder: { ...APPROVED_BIDDER, id: 'bdr_offscope', name: 'Blue Harbour Marine Services' },
+  suitability: {
+    eligible: true,
+    scope_fit: false,
+    effective_prequal: 'Approved',
+    blockers: [],
+    cautions: ['Not registered for Mechanical — inviting them records a scope mismatch.'],
   },
   shortlisted: false,
 }
@@ -222,7 +237,45 @@ describe('RfqWizard', () => {
     expect(
       await screen.findByText(/Prequalification lapsed on 2026-05-09/),
     ).toBeInTheDocument()
-    expect(screen.getByText(/not registered for Mechanical/)).toBeInTheDocument()
+    // Still invitable — with a reason. Hiding the control would move the
+    // decision to a spreadsheet rather than prevent it.
+    expect(screen.getByRole('button', { name: /Invite Sandstone/ })).toBeInTheDocument()
+  })
+
+  it('hides out-of-scope candidates behind a filter that says what it is doing', async () => {
+    // A client's imported AVL is the whole approved list; on a common product
+    // group most of it is irrelevant to this package. The filter is on by
+    // default and the count says how much it is holding back.
+    await show(detail({ rfq: { ...detail().rfq, stage: 'Shortlisting' } }), [
+      candidate(),
+      OUT_OF_SCOPE_CANDIDATE,
+    ])
+
+    // A candidate's name appears twice — as the heading and inside its Invite
+    // button — so these count matches rather than expecting exactly one.
+    await screen.findAllByText(/Al Munara Switchgear LLC/)
+    expect(screen.queryAllByText(/Blue Harbour Marine Services/)).toHaveLength(0)
+    expect(screen.getByText(/1 of 2 in the registry/)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByLabelText(/Only those registered for/))
+
+    expect(screen.getAllByText(/Blue Harbour Marine Services/).length).toBeGreaterThan(0)
+    expect(screen.getByText(/records a scope mismatch/)).toBeInTheDocument()
+  })
+
+  it('searches candidates by the manufacturers they represent', async () => {
+    await show(detail({ rfq: { ...detail().rfq, stage: 'Shortlisting' } }), [
+      candidate(),
+      { ...candidate(), bidder: { ...APPROVED_BIDDER, id: 'bdr_other', name: 'Another Vendor', represented_manufacturers: ['ABB'] } },
+    ])
+
+    await screen.findAllByText(/Al Munara Switchgear LLC/)
+    fireEvent.change(screen.getByLabelText('Search candidates'), {
+      target: { value: 'ABB' },
+    })
+
+    expect(screen.getAllByText(/Another Vendor/).length).toBeGreaterThan(0)
+    expect(screen.queryAllByText(/Al Munara Switchgear LLC/)).toHaveLength(0)
   })
 
   it('sends the override reason typed against a blocked candidate', async () => {

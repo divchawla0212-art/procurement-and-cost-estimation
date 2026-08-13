@@ -407,3 +407,66 @@ appears.
 - [x] The Rule 3 banner appears above the first reference block.
 - [x] The plan states which reference parts are load-bearing and which are
       illustrative.
+
+---
+
+## Task 11 (added after Task 10): import the registry from a real ADNOC AVL
+
+**Spec:** the addendum at the foot of the design document.
+
+**Files:**
+- Create: `workflow/avl_import.py`, `tests/test_avl_import.py`
+- Modify: `workflow/models/bidder.py`, `workflow/store.py`,
+  `api/workflow_routes.py`, `workflow/seed_demo.py`, `tests/test_seed_demo.py`,
+  `web/src/pages/Bidders.tsx`, `web/src/pages/RfqWizard.tsx`, and their tests
+
+**Interfaces:**
+- Consumes: an ADNOC Approved Vendor List `.xlsx` export
+- Produces: `parse_avl(path, astra_subset=False) -> list[Bidder]`,
+  `astra_approves(vendor_number, group_count) -> bool`,
+  `seed_demo --avl`
+- **Store invariant owned:** every imported bidder holds exactly what the
+  export says about them and nothing more — no expiry, hold, turnover or
+  rating is present on any bidder the import created.
+
+That invariant is unusual in being about what is *absent*, and it is the most
+important one in this task. These are real, named companies. A synthesised
+suspension or a fabricated 3.2-out-of-5 is indistinguishable on screen from a
+recorded one, and a demo shown to a client would be circulating a
+manufactured record about a real business. The rule is enforced by
+`test_an_imported_registry_invents_nothing_about_a_real_company`.
+
+The Astra subset is the one invented thing, and it is labelled as invented in
+three places — the function docstring, the module header, and the line the
+seed prints. It is stable and explicable so that a fabricated answer is at
+least not also arbitrary.
+
+- [x] **Step 1: Write the failing test** — the fold, header-not-position
+      column lookup, skipped rows, the local-manufacture marker, the absent
+      fields, and the subset's stability. Two further tests read the real
+      export, guarded on its presence the way the other fixture-backed tests
+      in this repository are.
+- [x] **Step 2: Run to verify it fails.**
+- [x] **Step 3: Write the implementation.**
+- [x] **Step 4: Run to verify it passes** — 21 in `test_avl_import.py`, and
+      the eight AVL-guarded additions to `test_seed_demo.py`, of which the
+      important one replays every seeded RFQ's gates against a 1 346-bidder
+      registry whose shortlists were picked dynamically.
+- [x] **Step 4b: Screens.** A registry of 1 346 and a candidate list of 107
+      both need filtering; both cap their render and say so, because a screen
+      that silently shows the first sixty of thirteen hundred misrepresents
+      the registry.
+- [x] **Step 5: Commit.**
+
+### What this task deliberately did not do
+
+- **No synthetic prequalification dates or holds on imported bidders**, and no
+  flag to add them. It was considered and rejected: the value is a livelier
+  demo, the cost is a fabricated adverse record against a named real company.
+  The blocker mechanism demonstrates honestly anyway, because scope fit is
+  computed from the vendor's real product groups.
+- **No inference of vendor country** from `Manufacture Country`. That column
+  is the OEM's.
+- **No Astra-approval gate in `evaluate`.** Being absent from the internal
+  list is shown, not enforced: nobody asked for it to block, and a blocker is
+  a refusal that needs an owner.

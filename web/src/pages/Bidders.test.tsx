@@ -95,7 +95,7 @@ describe('Bidders', () => {
     })
     fireEvent.change(screen.getByLabelText('Country'), { target: { value: 'Oman' } })
     fireEvent.change(screen.getByLabelText('Trade categories'), {
-      target: { value: 'Valves, Piping' },
+      target: { value: 'VALVES - BALL, FLANGES FOR PIPES ' },
     })
     fireEvent.click(screen.getByRole('button', { name: 'Create bidder' }))
 
@@ -104,8 +104,11 @@ describe('Bidders', () => {
       name: 'Northwind Valve Works',
       country: 'Oman',
       // Split and trimmed, so the form's comma-separated field does not store
-      // " Piping" as a category that will never match an RFQ's discipline.
-      trade_categories: ['Valves', 'Piping'],
+      // " FLANGES" as a category that will never match an RFQ's discipline.
+      trade_categories: ['VALVES - BALL', 'FLANGES FOR PIPES'],
+      // A bidder added by hand is on our own list, never claimed as the
+      // client's.
+      approved_by: ['Astra'],
     })
     // The roster refetches, so a bidder added here is visible without a
     // reload — the counts on it are server-computed and cannot be patched in.
@@ -143,5 +146,100 @@ describe('Bidders', () => {
     expect(
       await screen.findByText(/shortlisted on HAL-RFQ-2026-002/),
     ).toBeTruthy()
+  })
+
+  it('shows which organisations have approved a bidder', async () => {
+    vi.mocked(fetchBidders).mockResolvedValue([APPROVED_BIDDER, EXPIRED_BIDDER])
+
+    render(<Bidders />)
+
+    const munara = (await screen.findByText('Al Munara Switchgear LLC')).closest(
+      'article',
+    )!
+    expect(within(munara).getByText('ADNOC')).toBeTruthy()
+    expect(within(munara).getByText('Astra')).toBeTruthy()
+
+    const sandstone = screen.getByText('Sandstone Piping Industries').closest(
+      'article',
+    )!
+    expect(within(sandstone).queryByText('Astra')).toBeNull()
+  })
+
+  it('filters the registry to one approving organisation', async () => {
+    vi.mocked(fetchBidders).mockResolvedValue([APPROVED_BIDDER, EXPIRED_BIDDER])
+
+    render(<Bidders />)
+    await screen.findByText('Al Munara Switchgear LLC')
+
+    fireEvent.change(screen.getByLabelText('Approved by'), {
+      target: { value: 'Astra' },
+    })
+
+    expect(screen.getByText('Al Munara Switchgear LLC')).toBeTruthy()
+    expect(screen.queryByText('Sandstone Piping Industries')).toBeNull()
+    expect(screen.getByText(/1 of 2 bidders match/)).toBeTruthy()
+  })
+
+  it('searches names, trade categories and the manufacturers represented', async () => {
+    vi.mocked(fetchBidders).mockResolvedValue([APPROVED_BIDDER, EXPIRED_BIDDER])
+
+    render(<Bidders />)
+    await screen.findByText('Al Munara Switchgear LLC')
+    const search = screen.getByLabelText('Search bidders')
+
+    // A product group the reader would type from the RFQ in front of them.
+    fireEvent.change(search, { target: { value: 'FLANGES' } })
+    expect(screen.queryByText('Al Munara Switchgear LLC')).toBeNull()
+    expect(screen.getByText('Sandstone Piping Industries')).toBeTruthy()
+
+    // "Who can supply Schneider" is the question a buyer actually arrives
+    // with, and the answer is in the manufacturer list, not the vendor name.
+    fireEvent.change(search, { target: { value: 'schneider' } })
+    expect(screen.getByText('Al Munara Switchgear LLC')).toBeTruthy()
+    expect(screen.queryByText('Sandstone Piping Industries')).toBeNull()
+  })
+
+  it('caps how many cards it renders and says that it has', async () => {
+    // An imported ADNOC AVL is about 1 300 bidders. Rendering all of them is
+    // slow; rendering the first 60 silently would misrepresent the registry.
+    vi.mocked(fetchBidders).mockResolvedValue(
+      Array.from({ length: 80 }, (_, i) => ({
+        ...APPROVED_BIDDER,
+        id: `bdr_${i}`,
+        name: `Vendor ${String(i).padStart(3, '0')}`,
+      })),
+    )
+
+    render(<Bidders />)
+
+    await screen.findByText('Vendor 000')
+    expect(screen.getByText(/Showing the first 60/)).toBeTruthy()
+    expect(screen.queryByText('Vendor 070')).toBeNull()
+  })
+
+  it('offers a way forward when a search matches nothing', async () => {
+    vi.mocked(fetchBidders).mockResolvedValue([APPROVED_BIDDER])
+
+    render(<Bidders />)
+    await screen.findByText('Al Munara Switchgear LLC')
+
+    fireEvent.change(screen.getByLabelText('Search bidders'), {
+      target: { value: 'zzzz' },
+    })
+
+    expect(screen.getByText(/Nothing matches that search/)).toBeTruthy()
+  })
+
+  it('reports a country the registry does not hold rather than inventing one', async () => {
+    // AVL-imported bidders have no country: the export only carries the
+    // manufacturer's.
+    vi.mocked(fetchBidders).mockResolvedValue([{ ...APPROVED_BIDDER, country: null }])
+
+    render(<Bidders />)
+
+    const card = (await screen.findByText('Al Munara Switchgear LLC')).closest(
+      'article',
+    )!
+    expect(within(card).getByText('—')).toBeTruthy()
   })
 })

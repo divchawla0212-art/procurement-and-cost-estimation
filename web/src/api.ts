@@ -330,6 +330,10 @@ export function createRfq(body: RfqInput): Promise<Rfq> {
   return sendJson('/api/workflow/rfqs', 'POST', body)
 }
 
+export function extractRfqDoc(file: File): Promise<Partial<RfqInput>> {
+  return sendFile('/api/workflow/rfqs/extract', file)
+}
+
 /* ------------------------------------------------------------------ workflow */
 
 export function fetchRfqRoster(projectId?: string | null): Promise<RfqRoster> {

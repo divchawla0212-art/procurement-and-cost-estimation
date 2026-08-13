@@ -25,8 +25,8 @@ untracked fixture directories are present, never in pass/fail:
 
 | where | baseline |
 |---|---|
-| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1269 passed, 3 skipped, 0 failed** |
-| CI, and any clean checkout | **1260 passed, 12 skipped, 0 failed** |
+| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1397 passed, 3 skipped, 0 failed** |
+| CI, and any clean checkout | **1379 passed, 21 skipped, 0 failed** |
 
 Anything else is a real regression.
 
@@ -37,21 +37,35 @@ three skips a workstation already shows are credential guards
 (`test_anthropic_client.py`, `test_bedrock_client.py`,
 `test_procurement_real_data.py`) and skip in both places.
 
-There is now a **third** environmental gate, and it splits the two rows further
+There is a **third** environmental gate, and it splits the two rows further
 apart than the sentence above describes. Two tests in
 `test_datasheet_row_recall.py` are guarded on the `pdftotext` CLI, which comes
 from poppler-utils; `.github/workflows/tests.yml` does not install it, so they
 pass on a workstation that has it and skip in CI.
 
-So the CI row is the workstation row with the four corpus-coverage passes, the
-three `data/` passes and the two `pdftotext` passes turned into skips —
-`1260 = 1269 - 4 - 3 - 2`, `12 = 3 + 4 + 3 + 2`; 1272 tests either way. When
-the counts move, measure the workstation row and derive the CI row from it;
-editing the two rows independently is how they drift apart.
+And now a **fourth**, the largest of them: **nine** tests guarded on
+`data/bidders_details/ADNOC Approved Vendor List as of 10.12.2025.xlsx` — two
+in `test_avl_import.py` and seven in `test_seed_demo.py`, all carrying the
+`needs_real_avl` marker. That export is untracked and will not be committed;
+it is a real client document, and the point of the import is that it is not
+reproducible from anything in this repository. The other twenty-one tests in
+`test_avl_import.py` build a small workbook in memory with `openpyxl`, so the
+parser itself is covered in CI — only the tests that assert against the *real*
+1 346-vendor export skip.
 
-**The workstation row is measured, not derived**: **1269 passed, 3 skipped**,
+So the CI row is the workstation row with the four corpus-coverage passes, the
+three `data/` passes, the two `pdftotext` passes and the nine AVL passes turned
+into skips — `1379 = 1397 - 4 - 3 - 2 - 9`, `21 = 3 + 4 + 3 + 2 + 9`; 1400
+tests either way. When the counts move, measure the workstation row and derive
+the CI row from it; editing the two rows independently is how they drift
+apart.
+
+**The workstation row is measured, not derived**: **1397 passed, 3 skipped**,
 taken on 2026-08-13 on the `rfq-platform-phase-1` branch, in an environment
-with `pdftotext`, `data/` and an ingested multi-vendor `projects/` all present.
+with `pdftotext`, `data/` (including the ADNOC export) and an ingested
+multi-vendor `projects/` all present. The nine-skip figure that the fourth gate
+contributes is measured too — by moving `data/bidders_details/` aside and
+re-running the two affected files, not by counting decorators.
 That matters, because a row this file once carried was not. While the auth
 branch was in flight the workstation figure was *derived backwards* — measured
 on a checkout that had neither fixture directory, then extrapolated upward —
@@ -71,11 +85,17 @@ four files: the store's updates and delete guards, the five project/item
 routes, and the eight-row mutation matrix in `test_workflow_persistence.py`.
 Same story — no fixture directory, no provider key, both rows.
 
+The 128 after *that* are the bidder registry: `test_bidder_suitability.py`,
+`test_bidder_registry.py`, `test_shortlist_linking.py`,
+`test_bidder_endpoints.py`, `test_avl_import.py`, `test_seed_demo.py`, and nine
+more rows on the mutation matrix. All but nine of them land in both rows; the
+nine are the AVL gate above.
+
 The web suite is separate and not part of either row above — both rows are
 `python -m pytest` counts. Run it with `npm test` under `web/` (vitest,
 non-watching, exits non-zero on failure); `npm run build` also type-checks the
 test files, since `web/tsconfig.app.json` includes `src`. CI runs both, in the
-`web` job of the same workflow. It stands at **106 passed** across 13 files.
+`web` job of the same workflow. It stands at **141 passed** across 14 files.
 
 `web/src/pages/workflow-fixtures.ts` is test data in a non-test module on
 purpose. Importing fixtures from a `.test.tsx` file re-runs that file's
@@ -274,6 +294,33 @@ them, so keeping them apart stops a reader assuming one set covers both.
   removing a vendor revokes approval, so an RFQ cannot issue with a vendor
   procurement never signed off. Removal addresses `ShortlistEntry` and
   `VdrlLine` by their `id`, never by position.
+- **The bidder registry is organisation-wide, and eligibility is computed, not
+  stored.** There is no `Expired` member of `PrequalStatus`: expiry is derived
+  from `prequal_expires_on` against an `as_of` the caller passes in, so no
+  sweep job is needed to keep the store honest and both boundaries are
+  testable without freezing the clock. `workflow/bidders.py` is pure — no
+  store, no I/O, no clock — and the routes resolve `as_of` at the boundary.
+- **A registry-linked shortlist entry's snapshot comes from the registry, not
+  the request.** With a `vendor_id`, `add_shortlist_entry` derives
+  `vendor_name`, `prequal_status` and `scope_code_fit` itself and ignores what
+  the caller sent; without one, the free-text path is exactly what it always
+  was. Inviting a blocked bidder requires an `override_reason`, which is the
+  positive attributed act `ShortlistEntry`'s docstring always claimed. Both are
+  reads that gate a write, so both live in the store method the route runs
+  inside `locked_update` — the same rule, for the fourth time.
+- **A bidder is never deleted out from under a shortlist**, and the refusal
+  names the RFQs. Third instance of that rule after `delete_item` and
+  `delete_project`.
+- **Nothing imported from a real vendor list is embellished.**
+  `workflow/avl_import.py` folds an ADNOC Approved Vendor List export into
+  ~1 300 bidders and leaves every field the sheet does not carry empty — no
+  expiry, no hold, no turnover, no rating, and no country (the export's only
+  country is the *manufacturer's*). These are real, named companies, and a
+  synthesised suspension is indistinguishable on screen from a recorded one.
+  The Astra subset is the one invented thing and says so in three places. The
+  demo seed's RFQ disciplines are real product group descriptions, quoted
+  exactly, so scope matching resolves against an imported registry instead of
+  never matching.
 - **`WorkflowStore` knows nothing about disk.** Serialization lives in
   `workflow/persistence.py`, the one module allowed to touch the store's dicts
   directly, so replacing the JSON file with a database is a change to that

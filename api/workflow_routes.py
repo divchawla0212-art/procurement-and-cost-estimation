@@ -140,8 +140,9 @@ class FreezeIn(BaseModel):
 
 class BidderIn(BaseModel):
     name: str
-    country: str
+    country: str | None = None
     currency: str = "AED"
+    approved_by: list[str] = []
     trade_categories: list[str] = []
     prequal_status: PrequalStatus = "Under review"
     prequal_expires_on: date | None = None
@@ -150,6 +151,7 @@ class BidderIn(BaseModel):
     turnover_band: str | None = None
     performance_rating: float | None = None
     past_awards: int = 0
+    represented_manufacturers: list[str] = []
     notes: str | None = None
 
 
@@ -166,6 +168,7 @@ class BidderPatch(BaseModel):
     name: str | None = None
     country: str | None = None
     currency: str | None = None
+    approved_by: list[str] | None = None
     trade_categories: list[str] | None = None
     prequal_status: PrequalStatus | None = None
     prequal_expires_on: date | None = None
@@ -174,6 +177,7 @@ class BidderPatch(BaseModel):
     turnover_band: str | None = None
     performance_rating: float | None = None
     past_awards: int | None = None
+    represented_manufacturers: list[str] | None = None
     notes: str | None = None
 
 
@@ -603,16 +607,28 @@ def list_candidates(rfq_id: str) -> dict:
 
     today = date.today()
     shortlisted = {e.vendor_id for e in store.shortlist_for(rfq_id) if e.vendor_id}
-    return {
-        "candidates": [
-            {
-                "bidder": _bidder_payload(store, bidder, today),
-                "suitability": evaluate(bidder, rfq, today).model_dump(),
-                "shortlisted": bidder.id in shortlisted,
-            }
-            for bidder in store.list_bidders()
-        ]
-    }
+    candidates = [
+        {
+            "bidder": _bidder_payload(store, bidder, today),
+            "suitability": evaluate(bidder, rfq, today).model_dump(),
+            "shortlisted": bidder.id in shortlisted,
+        }
+        for bidder in store.list_bidders()
+    ]
+    # Ordered here rather than on the screen, so every consumer sees the same
+    # list and the ordering rule has one definition. Whoever can be invited
+    # without an argument comes first; a blocked bidder is last because
+    # inviting them is the exceptional act, not the default one. Name breaks
+    # the tie, because insertion order into the registry means nothing to a
+    # reader scanning for a company.
+    candidates.sort(
+        key=lambda c: (
+            not c["suitability"]["eligible"],
+            not c["suitability"]["scope_fit"],
+            c["bidder"]["name"].casefold(),
+        )
+    )
+    return {"candidates": candidates}
 
 
 @router.post("/rfqs/{rfq_id}/shortlist", status_code=201)

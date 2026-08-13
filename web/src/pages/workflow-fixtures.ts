@@ -98,7 +98,8 @@ export const APPROVED_BIDDER: BidderSummary = {
   name: 'Al Munara Switchgear LLC',
   country: 'United Arab Emirates',
   currency: 'AED',
-  trade_categories: ['Electrical', 'LV switchgear'],
+  approved_by: ['ADNOC', 'Astra'],
+  trade_categories: ['SWITCHGEARS - LV -415V'],
   prequal_status: 'Approved',
   prequal_expires_on: '2028-03-31',
   on_hold: false,
@@ -106,6 +107,7 @@ export const APPROVED_BIDDER: BidderSummary = {
   turnover_band: 'AED 50–100m',
   performance_rating: 4.4,
   past_awards: 7,
+  represented_manufacturers: ['SCHNEIDER ELECTRIC'],
   notes: null,
   effective_prequal: 'Approved',
   invited_count: 0,
@@ -117,7 +119,11 @@ export const EXPIRED_BIDDER: BidderSummary = {
   ...APPROVED_BIDDER,
   id: 'bdr_sandstone',
   name: 'Sandstone Piping Industries',
-  trade_categories: ['Piping', 'Structural steel'],
+  approved_by: ['ADNOC'],
+  trade_categories: ['FLANGES FOR PIPES - CS/AS/SS'],
+  // Its own, not the spread's: the search test needs a manufacturer that
+  // matches this bidder and not the other one.
+  represented_manufacturers: ['METALFAR SPA'],
   prequal_expires_on: '2026-05-09',
   effective_prequal: 'Expired',
 }
@@ -126,7 +132,8 @@ export const SUSPENDED_BIDDER: BidderSummary = {
   ...APPROVED_BIDDER,
   id: 'bdr_gulfcrescent',
   name: 'Gulf Crescent Fabricators',
-  trade_categories: ['Structural steel'],
+  approved_by: ['ADNOC'],
+  trade_categories: ['STEEL STRUCTURE FABRICATED'],
   prequal_status: 'Suspended',
   effective_prequal: 'Suspended',
 }

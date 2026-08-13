@@ -1336,3 +1336,18 @@ p.warn { margin: 0.5rem 0 0; }
 .candidate > p {
   margin: 0.35rem 0 0;
 }
+
+/* Which organisations have approved a bidder. Deliberately quieter than the
+   prequalification chip beside it: the status answers "can they bid at all",
+   which is the louder question, and this answers "on whose list". */
+.approval-badge {
+  padding: 0.1rem 0.45rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: var(--surface-2);
+}

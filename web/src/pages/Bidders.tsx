@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { JSX } from 'react'
 import { createBidder, deleteBidder, fetchBidders, updateBidder } from '../api'
 import { useAsync } from '../useAsync'
@@ -19,7 +19,7 @@ import {
  * company with a validity period, and asserting it per RFQ, by hand, from
  * memory, is how a suspended vendor ends up on a shortlist.
  *
- * Two rules it follows and does not bend:
+ * Three rules it follows and does not bend:
  *
  * - **`effective_prequal` comes from the server and is never recomputed here.**
  *   Comparing `prequal_expires_on` to the browser's clock would be a second
@@ -29,6 +29,10 @@ import {
  *   refusal shows the server's own sentence naming the RFQs that block it.
  *   A greyed-out button explains nothing — the same choice `RfqWizard` makes
  *   for a closed gate.
+ * - **Nothing renders 1 300 cards.** An imported ADNOC AVL is that big, so the
+ *   list is filtered first and capped second, and the cap says so rather than
+ *   quietly truncating. A screen that silently shows the first fifty of
+ *   thirteen hundred is a screen that lies about what is in the registry.
  */
 
 const PREQUAL_STATES: PrequalStatus[] = [
@@ -38,10 +42,41 @@ const PREQUAL_STATES: PrequalStatus[] = [
   'Not qualified',
 ]
 
+/** Enough to scroll through and judge, few enough to render instantly. */
+const RENDER_CAP = 60
+
 /** `Under review` → `under-review`, so a chip can carry a colour without the
  *  class name depending on how the label happens to be capitalised. */
 function chipModifier(status: string): string {
   return status.toLowerCase().replace(/\s+/g, '-')
+}
+
+function matches(bidder: BidderSummary, query: string): boolean {
+  if (!query) return true
+  const needle = query.toLowerCase()
+  // Manufacturers are searched too: "who can supply Rosemount" is the question
+  // a buyer actually arrives with, and the answer is in that list, not in the
+  // vendor's own name.
+  return (
+    bidder.name.toLowerCase().includes(needle) ||
+    bidder.trade_categories.some((c) => c.toLowerCase().includes(needle)) ||
+    bidder.represented_manufacturers.some((m) => m.toLowerCase().includes(needle))
+  )
+}
+
+function ApprovalBadges({ approvedBy }: { approvedBy: string[] }): JSX.Element {
+  if (approvedBy.length === 0) {
+    return <span className="muted">No approval recorded</span>
+  }
+  return (
+    <>
+      {approvedBy.map((org) => (
+        <span key={org} className="approval-badge">
+          {org}
+        </span>
+      ))}
+    </>
+  )
 }
 
 function BidderCard({
@@ -57,12 +92,11 @@ function BidderCard({
   onReinstate: () => void
   onDelete: () => void
 }): JSX.Element {
-  const blocked = bidder.effective_prequal !== 'Approved' || bidder.on_hold
   return (
     <article className="pcard">
       <header className="pcard-head">
         <h3 className="pcard-title">{bidder.name}</h3>
-        <span className="pcard-code mono">{bidder.country}</span>
+        <span className="pcard-code mono">{bidder.country ?? '—'}</span>
       </header>
 
       <div className="pcard-facts">
@@ -73,6 +107,7 @@ function BidderCard({
         >
           {bidder.effective_prequal}
         </span>
+        <ApprovalBadges approvedBy={bidder.approved_by} />
         <span className="pcard-count">
           <b>{bidder.invited_count}</b>{' '}
           {bidder.invited_count === 1 ? 'RFQ' : 'RFQs'}
@@ -85,9 +120,12 @@ function BidderCard({
       </div>
 
       <p className="muted">
-        {bidder.trade_categories.length
-          ? bidder.trade_categories.join(' · ')
-          : 'No trade categories recorded — every RFQ will read as a scope mismatch.'}
+        {bidder.trade_categories.length === 0
+          ? 'No trade categories recorded — every RFQ will read as a scope mismatch.'
+          : bidder.trade_categories.slice(0, 3).join(' · ') +
+            (bidder.trade_categories.length > 3
+              ? ` · +${bidder.trade_categories.length - 3} more`
+              : '')}
       </p>
 
       {bidder.on_hold && (
@@ -106,16 +144,19 @@ function BidderCard({
           </dd>
 
           <dt>Valid until</dt>
-          <dd className="mono">{bidder.prequal_expires_on ?? 'open-ended'}</dd>
+          <dd className="mono">{bidder.prequal_expires_on ?? 'not recorded'}</dd>
 
-          <dt>Trade categories</dt>
+          <dt>Approved by</dt>
+          <dd>{bidder.approved_by.join(', ') || 'not recorded'}</dd>
+
+          <dt>Trade categories ({bidder.trade_categories.length})</dt>
           <dd>{bidder.trade_categories.join(', ') || '—'}</dd>
 
-          <dt>Turnover band</dt>
-          <dd>{bidder.turnover_band ?? '—'}</dd>
+          <dt>Represents ({bidder.represented_manufacturers.length})</dt>
+          <dd>{bidder.represented_manufacturers.join(', ') || '—'}</dd>
 
-          <dt>Awards before this system</dt>
-          <dd className="mono">{bidder.past_awards}</dd>
+          <dt>Turnover band</dt>
+          <dd>{bidder.turnover_band ?? 'not recorded'}</dd>
 
           <dt>RFQs invited here</dt>
           <dd className="mono">{bidder.invited_count}</dd>
@@ -149,17 +190,7 @@ function BidderCard({
             Suspend
           </button>
         )}
-        <button
-          type="button"
-          className="linkish"
-          disabled={busy}
-          onClick={onDelete}
-          title={
-            blocked
-              ? undefined
-              : 'Refused while any shortlist still names this bidder'
-          }
-        >
+        <button type="button" className="linkish" disabled={busy} onClick={onDelete}>
           Delete
         </button>
       </div>
@@ -188,8 +219,12 @@ function BidderForm({
         e.preventDefault()
         void onSubmit({
           name: name.trim(),
-          country: country.trim(),
+          country: country.trim() || null,
           currency: 'AED',
+          // A bidder added by hand here is on your own list, not the client's.
+          // Claiming an ADNOC approval nobody has checked is the one thing
+          // this form must not do quietly.
+          approved_by: ['Astra'],
           // Split and trimmed here rather than stored raw: a category of
           // " Piping" never matches an RFQ's discipline, and the mismatch
           // would show up as a scope caution nobody can explain.
@@ -204,6 +239,7 @@ function BidderForm({
           turnover_band: band.trim() || null,
           performance_rating: null,
           past_awards: 0,
+          represented_manufacturers: [],
           notes: notes.trim() || null,
         })
       }}
@@ -225,7 +261,6 @@ function BidderForm({
       <input
         id="bidder-country"
         className="input"
-        required
         value={country}
         onChange={(e) => setCountry(e.target.value)}
       />
@@ -236,13 +271,14 @@ function BidderForm({
       <input
         id="bidder-categories"
         className="input"
-        placeholder="Electrical, LV switchgear"
+        placeholder="SWITCHGEARS - LV -415V"
         value={categories}
         onChange={(e) => setCategories(e.target.value)}
       />
       <p className="muted">
-        Comma separated. These are matched against an RFQ's discipline and
-        package to work out scope fit.
+        Comma separated, and matched whole against an RFQ's discipline. On a
+        registry imported from an ADNOC AVL these are the product group
+        descriptions, so copy the wording exactly.
       </p>
 
       <label className="field-label" htmlFor="bidder-status">
@@ -313,6 +349,8 @@ export function Bidders(): JSX.Element {
   const [creating, setCreating] = useState(false)
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
+  const [approver, setApprover] = useState<string>('')
   const { data, error, loading } = useAsync(() => fetchBidders(), [tick])
 
   const reload = () => setTick((t) => t + 1)
@@ -332,10 +370,25 @@ export function Bidders(): JSX.Element {
     }
   }
 
+  const bidders = useMemo(() => data ?? [], [data])
+
+  /** Built from the data rather than hardcoded to ADNOC and Astra: a second
+   *  client's AVL should show up as a filter without an edit here. */
+  const approvers = useMemo(
+    () => [...new Set(bidders.flatMap((b) => b.approved_by))].sort(),
+    [bidders],
+  )
+
+  const shown = useMemo(
+    () =>
+      bidders.filter(
+        (b) => (!approver || b.approved_by.includes(approver)) && matches(b, query),
+      ),
+    [bidders, approver, query],
+  )
+
   if (loading) return <LoadingState label="Loading bidders…" />
   if (error) return <ErrorState message={error} />
-
-  const bidders = data ?? []
 
   return (
     <>
@@ -373,28 +426,73 @@ export function Bidders(): JSX.Element {
       {bidders.length === 0 ? (
         <EmptyState title="No bidders yet">
           The registry is who your RFQs can be issued to. Add the companies you
-          prequalify, and their approvals will be checked for you every time a
-          shortlist is drawn up.
+          prequalify, or import a client's approved vendor list, and their
+          approvals will be checked for you every time a shortlist is drawn up.
         </EmptyState>
       ) : (
-        <div className="project-grid">
-          {bidders.map((b) => (
-            <BidderCard
-              key={b.id}
-              bidder={b}
-              busy={busy}
-              // Partial by contract: only the field that changed is sent, so
-              // an edit cannot quietly overwrite something a colleague set.
-              onSuspend={() =>
-                run(() => updateBidder(b.id, { prequal_status: 'Suspended' }))
-              }
-              onReinstate={() =>
-                run(() => updateBidder(b.id, { prequal_status: 'Approved' }))
-              }
-              onDelete={() => run(() => deleteBidder(b.id))}
+        <>
+          <div className="fxrow">
+            <input
+              className="input"
+              aria-label="Search bidders"
+              placeholder="Search by name, trade category or manufacturer"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
             />
-          ))}
-        </div>
+            <select
+              className="input"
+              aria-label="Approved by"
+              value={approver}
+              onChange={(e) => setApprover(e.target.value)}
+            >
+              <option value="">Any approval</option>
+              {approvers.map((org) => (
+                <option key={org} value={org}>
+                  Approved by {org}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <p className="muted">
+            {shown.length === bidders.length
+              ? `${bidders.length} bidders.`
+              : `${shown.length} of ${bidders.length} bidders match.`}
+            {shown.length > RENDER_CAP && (
+              <>
+                {' '}
+                Showing the first {RENDER_CAP} — narrow the search to see the
+                rest.
+              </>
+            )}
+          </p>
+
+          {shown.length === 0 ? (
+            <EmptyState title="Nothing matches that search">
+              Try a product group — the trade categories on an imported ADNOC
+              list are its product group descriptions, like "VALVES - BALL".
+            </EmptyState>
+          ) : (
+            <div className="project-grid">
+              {shown.slice(0, RENDER_CAP).map((b) => (
+                <BidderCard
+                  key={b.id}
+                  bidder={b}
+                  busy={busy}
+                  // Partial by contract: only the field that changed is sent,
+                  // so an edit cannot quietly overwrite something else.
+                  onSuspend={() =>
+                    run(() => updateBidder(b.id, { prequal_status: 'Suspended' }))
+                  }
+                  onReinstate={() =>
+                    run(() => updateBidder(b.id, { prequal_status: 'Approved' }))
+                  }
+                  onDelete={() => run(() => deleteBidder(b.id))}
+                />
+              ))}
+            </div>
+          )}
+        </>
       )}
     </>
   )

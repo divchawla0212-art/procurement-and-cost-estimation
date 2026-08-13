@@ -477,11 +477,13 @@ function ShortlistingStep({ data, run, busy, tick }: StepProps) {
           be offered here with their prequalification checked for you.
         </p>
       ) : (
-        <ul className="candidatelist">
-          {(candidates.data ?? []).map((c) => (
-            <CandidateRow key={c.bidder.id} candidate={c} rfqId={data.rfq.id} run={run} busy={busy} />
-          ))}
-        </ul>
+        <CandidateList
+          candidates={candidates.data ?? []}
+          discipline={data.rfq.discipline}
+          rfqId={data.rfq.id}
+          run={run}
+          busy={busy}
+        />
       )}
 
       <details className="pcard-details">
@@ -540,6 +542,97 @@ function ShortlistingStep({ data, run, busy, tick }: StepProps) {
   )
 }
 
+
+/** How many candidates to render at once.
+ *
+ *  On a registry imported from an ADNOC AVL a common product group has over a
+ *  hundred approved vendors, and rendering all of them is both slow and
+ *  useless — nobody shortlists by scrolling a hundred cards. The list leads
+ *  with those who fit (the server orders it that way), and says plainly how
+ *  many it is holding back rather than truncating in silence.
+ */
+const CANDIDATE_CAP = 25
+
+function CandidateList({
+  candidates,
+  discipline,
+  rfqId,
+  run,
+  busy,
+}: {
+  candidates: Candidate[]
+  discipline: string
+  rfqId: string
+  run: (action: () => Promise<unknown>) => Promise<void>
+  busy: boolean
+}) {
+  const [query, setQuery] = useState('')
+  // Default on: the registry is the client's whole approved list, and the
+  // question in front of the reader is almost always "who of ours can do
+  // this". The toggle is right there when the answer is nobody.
+  const [fittingOnly, setFittingOnly] = useState(true)
+
+  const needle = query.trim().toLowerCase()
+  const shown = candidates.filter((c) => {
+    if (fittingOnly && !c.suitability.scope_fit && !c.shortlisted) return false
+    if (!needle) return true
+    return (
+      c.bidder.name.toLowerCase().includes(needle) ||
+      c.bidder.represented_manufacturers.some((m) =>
+        m.toLowerCase().includes(needle),
+      )
+    )
+  })
+
+  return (
+    <>
+      <div className="fxrow">
+        <input
+          className="input"
+          aria-label="Search candidates"
+          placeholder="Search by vendor or manufacturer"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <label>
+          <input
+            type="checkbox"
+            checked={fittingOnly}
+            onChange={(e) => setFittingOnly(e.target.checked)}
+          />{' '}
+          Only those registered for {discipline}
+        </label>
+      </div>
+
+      <p className="muted">
+        {shown.length} of {candidates.length} in the registry.
+        {shown.length > CANDIDATE_CAP && (
+          <> Showing the first {CANDIDATE_CAP} — search to narrow it.</>
+        )}
+      </p>
+
+      {shown.length === 0 ? (
+        <p className="muted">
+          Nobody in the registry is listed for {discipline}. Untick the filter
+          to invite somebody anyway — it will be recorded as a scope mismatch.
+        </p>
+      ) : (
+        <ul className="candidatelist">
+          {shown.slice(0, CANDIDATE_CAP).map((c) => (
+            <CandidateRow
+              key={c.bidder.id}
+              candidate={c}
+              rfqId={rfqId}
+              run={run}
+              busy={busy}
+            />
+          ))}
+        </ul>
+      )}
+    </>
+  )
+}
+
 function CandidateRow({
   candidate,
   rfqId,
@@ -566,6 +659,14 @@ function CandidateRow({
         >
           {suitability.effective_prequal}
         </span>
+        {/* Whose list they are on. On a client's imported AVL every candidate
+            is approved, so this is the distinction that actually separates
+            them. */}
+        {bidder.approved_by.map((org) => (
+          <span key={org} className="approval-badge">
+            {org}
+          </span>
+        ))}
         {candidate.shortlisted ? (
           <span className="muted">Invited</span>
         ) : (
@@ -590,9 +691,15 @@ function CandidateRow({
       </div>
 
       <p className="muted">
-        {bidder.trade_categories.join(' · ') || 'No trade categories recorded'}
-        {' · '}
-        {bidder.country}
+        {bidder.trade_categories.length === 0
+          ? 'No trade categories recorded'
+          : bidder.trade_categories.slice(0, 2).join(' · ') +
+            (bidder.trade_categories.length > 2
+              ? ` · +${bidder.trade_categories.length - 2} more`
+              : '')}
+        {bidder.represented_manufacturers.length > 0 && (
+          <> — represents {bidder.represented_manufacturers.slice(0, 3).join(', ')}</>
+        )}
       </p>
 
       {suitability.blockers.map((b) => (

@@ -375,8 +375,15 @@ export type PrequalStatus =
 export interface Bidder {
   id: string
   name: string
-  country: string
+  /** Null for bidders imported from an ADNOC AVL export: the only country in
+   *  that sheet is the manufacturer's, and copying it across would record a
+   *  UAE supplier as Indian because their principal is. */
+  country: string | null
   currency: string
+  /** The organisations that have approved this bidder — "ADNOC", "Astra", or
+   *  both. A list, because the same company is commonly on several and which
+   *  one matters depends on whose project the RFQ is for. */
+  approved_by: string[]
   trade_categories: string[]
   prequal_status: PrequalStatus
   prequal_expires_on: string | null
@@ -385,6 +392,9 @@ export interface Bidder {
   turnover_band: string | null
   performance_rating: number | null
   past_awards: number
+  /** The OEMs this vendor is listed as representing — often the real
+   *  difference between two suppliers of the same product group. */
+  represented_manufacturers: string[]
   notes: string | null
 }
 

@@ -197,6 +197,31 @@ def test_candidates_evaluate_every_bidder_against_this_rfq(tmp_path, monkeypatch
     assert by_id[misfits["id"]]["suitability"]["cautions"]
 
 
+def test_candidates_lead_with_who_can_be_invited_without_an_argument(tmp_path, monkeypatch):
+    """Ordered by how easy the invitation is to justify, then by name.
+
+    Sorted server-side so the ordering rule has one definition, and because a
+    registry of any size makes an unordered list useless: the reader is looking
+    for who they *can* invite, not for who was registered first.
+    """
+    client = _client(tmp_path, monkeypatch)
+    rfq_id = create_rfq(client)
+    create_bidder(client, name="Zephyr Switchgear Co.")          # eligible, fits
+    create_bidder(client, name="Blue Harbour Marine Services",
+                  trade_categories=["Marine"])                    # eligible, misfits
+    create_bidder(client, name="Aurora Steelworks", prequal_status="Suspended")  # blocked
+
+    order = [
+        c["bidder"]["name"]
+        for c in client.get(f"/api/workflow/rfqs/{rfq_id}/candidates").json()["candidates"]
+    ]
+    assert order == [
+        "Zephyr Switchgear Co.",
+        "Blue Harbour Marine Services",
+        "Aurora Steelworks",
+    ]
+
+
 def test_candidates_flag_who_is_already_shortlisted(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     rfq_id = create_rfq(client)

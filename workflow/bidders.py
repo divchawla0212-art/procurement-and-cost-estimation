@@ -30,6 +30,23 @@ from workflow.models.rfq import RfqRecord
 # realistically be chased before the RFQ issues.
 EXPIRY_CAUTION_DAYS = 30
 
+# One sentence per state rather than one template with the status dropped into
+# it. A template produced "Prequalification for X is not qualified, not
+# approved", which reads as a stutter and buries what the reader has to do
+# about it. Each of these says what is true and what would change it.
+_STATUS_BLOCKERS = {
+    "Under review": (
+        "Prequalification for {name} is still under review, so they have not "
+        "been approved to bid yet."
+    ),
+    "Suspended": (
+        "{name} is suspended and cannot be invited until the suspension is lifted."
+    ),
+    "Not qualified": (
+        "{name} was declined at prequalification and is not approved to bid."
+    ),
+}
+
 
 class Suitability(BaseModel):
     """`eligible` is `not blockers`, spelled out so a caller does not have to
@@ -89,9 +106,7 @@ def evaluate(bidder: Bidder, rfq: RfqRecord, as_of: date) -> Suitability:
             f"and must be renewed before {bidder.name} can be invited."
         )
     elif status != "Approved":
-        blockers.append(
-            f"Prequalification for {bidder.name} is {status.lower()}, not approved."
-        )
+        blockers.append(_STATUS_BLOCKERS[status].format(name=bidder.name))
     elif bidder.prequal_expires_on is not None:
         # Only worth saying while it is still true. An already-lapsed approval
         # has a blocker saying so; repeating it as a caution is noise.
@@ -104,10 +119,12 @@ def evaluate(bidder: Bidder, rfq: RfqRecord, as_of: date) -> Suitability:
 
     scope_fit = _matches_scope(bidder, rfq)
     if not scope_fit:
+        # Short on purpose: on a registry of any size this sentence appears
+        # against most candidates, and a paragraph repeated twelve times is
+        # what stops the blockers being read at all.
         cautions.append(
-            f"{bidder.name} is not registered for {rfq.discipline} "
-            f"({rfq.package}). Inviting them anyway is recorded as a scope "
-            f"mismatch on the shortlist."
+            f"Not registered for {rfq.discipline} — inviting them records a "
+            f"scope mismatch."
         )
 
     return Suitability(

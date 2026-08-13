@@ -37,8 +37,17 @@ class Bidder(BaseModel):
 
     id: str = Field(default_factory=new_bidder_id)
     name: str
-    country: str
+    # Optional because the one bulk source of bidders — an ADNOC Approved
+    # Vendor List export — does not carry it. The only country in that sheet
+    # is the *manufacturer's*, and copying it across would record a UAE
+    # supplier as Indian because their principal is. Unknown is unknown.
+    country: str | None = None
     currency: str = "AED"
+    # Which organisations have approved this bidder: an ADNOC AVL listing, an
+    # internal one, or both. A list rather than a flag because the same
+    # company is commonly on several, and which one matters depends on whose
+    # project the RFQ is for.
+    approved_by: list[str] = Field(default_factory=list)
     # Matched against an RFQ's `discipline` and `package`, whole-string and
     # case-folded. See `workflow.bidders.evaluate` for why not substrings.
     trade_categories: list[str] = Field(default_factory=list)
@@ -49,4 +58,7 @@ class Bidder(BaseModel):
     turnover_band: str | None = None
     performance_rating: float | None = None
     past_awards: int = 0
+    # The OEMs this vendor is listed as representing. Often the real
+    # differentiator between two suppliers of the same product group.
+    represented_manufacturers: list[str] = Field(default_factory=list)
     notes: str | None = None

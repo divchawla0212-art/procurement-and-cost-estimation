@@ -11,9 +11,13 @@ The second thing asserted here is that the seed cannot eat real work: it
 refuses a store holding any entity unless `--force`.
 """
 import json
+import os
 from datetime import date, timedelta
 
+import pytest
+
 from workflow import persistence, seed_demo
+from workflow.avl_import import ADNOC, ASTRA, parse_avl
 from workflow.gates import check_gate
 from workflow.stages import Stage, is_backward
 
@@ -197,3 +201,110 @@ def test_a_seeded_store_round_trips_unchanged(tmp_path):
     loaded = persistence.load(str(tmp_path))
 
     assert persistence.to_document(loaded) == persistence.to_document(built)
+
+
+# -- the same demo, built on an imported AVL ----------------------------------
+#
+# Guarded on the export, which is untracked: these pass on a workstation that
+# has it and skip in CI, the same shape as the other fixture-backed tests here.
+
+REAL_AVL = os.path.join(
+    "data", "bidders_details", "ADNOC Approved Vendor List as of 10.12.2025.xlsx"
+)
+needs_real_avl = pytest.mark.skipif(
+    not os.path.exists(REAL_AVL),
+    reason="the ADNOC export is untracked; present on a workstation, absent in CI",
+)
+
+
+@needs_real_avl
+def test_an_imported_registry_still_earns_every_stage_it_shows():
+    """The gate replay again, against a registry of 1 300 real companies. The
+    seed picks its shortlists dynamically here, so a package with no matching
+    vendor would leave an RFQ unable to have reached the stage it claims."""
+    store = seed_demo.build_demo_store(AS_OF, bidders=parse_avl(REAL_AVL, astra_subset=True))
+    for rfq in store.list_rfqs():
+        for entry in rfq.history:
+            if entry.from_stage is None or is_backward(entry.from_stage, entry.to_stage):
+                continue
+            gate = check_gate(store, rfq.id, entry.from_stage, entry.to_stage)
+            assert gate.passed, f"{rfq.reference}: {gate.reason}"
+
+
+@needs_real_avl
+def test_every_demo_rfq_finds_real_vendors_for_its_product_group():
+    """The demo disciplines are real ADNOC product group descriptions for
+    exactly this reason. A made-up discipline would match nothing, and the
+    whole candidate list would read as a scope mismatch."""
+    store = seed_demo.build_demo_store(AS_OF, bidders=parse_avl(REAL_AVL, astra_subset=True))
+    for rfq in store.list_rfqs():
+        if rfq.stage is Stage.SCOPING:
+            continue  # not shortlisted yet, by design
+        entries = store.shortlist_for(rfq.id)
+        assert entries, rfq.reference
+        assert all(e.scope_code_fit for e in entries), rfq.reference
+
+
+@needs_real_avl
+def test_an_imported_registry_invents_nothing_about_a_real_company():
+    """No expiry, no hold, no rating, no override. Every one of those would be
+    a fabricated fact attached to a named business."""
+    bidders = seed_demo.build_demo_store(
+        AS_OF, bidders=parse_avl(REAL_AVL, astra_subset=True)
+    ).list_bidders()
+    assert all(b.prequal_expires_on is None for b in bidders)
+    assert not any(b.on_hold for b in bidders)
+    assert all(b.performance_rating is None for b in bidders)
+    assert all(b.turnover_band is None for b in bidders)
+
+
+@needs_real_avl
+def test_no_shortlist_entry_on_an_imported_registry_carries_an_override():
+    """`INVENTED_OVERRIDES` is keyed on the invented cast's ids, and `_invite`
+    skips a blocked bidder rather than generating a justification for one. An
+    imported registry is entirely approved, so nothing should be overridden."""
+    store = seed_demo.build_demo_store(AS_OF, bidders=parse_avl(REAL_AVL, astra_subset=True))
+    for rfq in store.list_rfqs():
+        for entry in store.shortlist_for(rfq.id):
+            assert entry.override_reason is None, entry.vendor_name
+
+
+@needs_real_avl
+def test_the_astra_subset_reaches_the_seeded_registry():
+    store = seed_demo.build_demo_store(AS_OF, bidders=parse_avl(REAL_AVL, astra_subset=True))
+    bidders = store.list_bidders()
+    astra = [b for b in bidders if ASTRA in b.approved_by]
+    assert all(ADNOC in b.approved_by for b in bidders)
+    assert 0 < len(astra) < len(bidders)
+
+
+@needs_real_avl
+def test_shortlists_are_drawn_from_the_astra_subset_first():
+    """The pick order is Astra-approved, then alphabetical — both so the demo
+    is reproducible and because drawing from your own list before the client's
+    wider one is the habit being demonstrated."""
+    store = seed_demo.build_demo_store(AS_OF, bidders=parse_avl(REAL_AVL, astra_subset=True))
+    invited = [
+        store.get_bidder(e.vendor_id)
+        for rfq in store.list_rfqs()
+        for e in store.shortlist_for(rfq.id)
+    ]
+    assert invited
+    assert all(ASTRA in b.approved_by for b in invited)
+
+
+@needs_real_avl
+def test_main_accepts_the_export_and_the_result_reloads(tmp_path):
+    assert seed_demo.main(
+        ["--root", str(tmp_path), "--as-of", "2026-08-13", "--avl", REAL_AVL]
+    ) == 0
+    reloaded = persistence.load(str(tmp_path))
+    assert len(reloaded.list_bidders()) > 1000
+    assert len(reloaded.list_rfqs()) == 6
+
+
+def test_main_refuses_an_avl_path_that_does_not_exist(tmp_path):
+    assert seed_demo.main(["--root", str(tmp_path), "--avl", "nope.xlsx"]) != 0
+    # And wrote nothing, rather than falling back to the invented cast and
+    # leaving the operator thinking the import worked.
+    assert persistence.load(str(tmp_path)).list_bidders() == []

@@ -77,11 +77,21 @@ def test_a_hold_with_no_recorded_reason_still_says_so():
     assert any("no reason recorded" in b for b in result.blockers)
 
 
-def test_an_unapproved_prequalification_blocks_and_names_the_status():
-    for status in ("Under review", "Suspended", "Not qualified"):
+def test_an_unapproved_prequalification_blocks_with_a_sentence_of_its_own():
+    """One sentence per state rather than one template with the status dropped
+    in. The template read "is not qualified, not approved", which stutters and
+    buries what the reader would have to do about it."""
+    expected = {
+        "Under review": "still under review",
+        "Suspended": "suspended and cannot be invited",
+        "Not qualified": "declined at prequalification",
+    }
+    for status, phrase in expected.items():
         result = evaluate(a_bidder(prequal_status=status), an_rfq(), TODAY)
         assert not result.eligible, status
-        assert any(status.lower() in b.lower() for b in result.blockers), status
+        assert any(phrase in b for b in result.blockers), status
+        # And every one of them names who it is about.
+        assert all("Al Munara Switchgear LLC" in b for b in result.blockers), status
 
 
 def test_an_expired_prequalification_blocks_and_names_the_date():
