@@ -552,10 +552,37 @@ class WorkflowStore:
         return entry
 
     def remove_shortlist_entry(self, rfq_id: str, entry_id: str) -> None:
+        """Refused while the entry has raised any clarification.
+
+        Instance four of the rule `delete_item`, `delete_project` and
+        `delete_bidder` each state, and the reason is identical:
+        `persistence.save` replaces the document wholesale, so a query left
+        pointing at a removed entry is not merely wrong in memory — it survives
+        the restart as a dangling reference.
+
+        Answered and withdrawn queries hold it too, not only open ones. A bidder
+        who took part in the clarification round is part of its record; if they
+        decline to bid they stay on the shortlist as a non-bidder, which is the
+        true fact. Erasing them would make the register read as though they had
+        never asked.
+        """
         entries = self._shortlists.get(rfq_id, [])
         remaining = [e for e in entries if e.id != entry_id]
         if len(remaining) == len(entries):
             raise KeyError(f"Unknown shortlist entry: {entry_id}")
+
+        raised = sorted(
+            q.number for q in self._queries.get(rfq_id, [])
+            if q.raised_by_entry_id == entry_id
+        )
+        if raised:
+            vendor = next(e.vendor_name for e in entries if e.id == entry_id)
+            raise ValueError(
+                f"{vendor} cannot be removed from the shortlist: they raised "
+                f"{', '.join(raised)}. The clarification register is the record "
+                f"of who took part."
+            )
+
         self._shortlists[rfq_id] = remaining
         self._revoke_shortlist_approval(rfq_id)
 

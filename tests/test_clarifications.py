@@ -266,3 +266,59 @@ def test_a_withdrawn_number_is_never_handed_out_again():
     numbers = [q.number for q in store.queries_for(rfq_id)]
     assert second.number == "TQ-002"
     assert len(numbers) == len(set(numbers))
+
+
+# -- nothing deleted out from under a live reference, instance four -----------
+
+
+def test_a_bidder_who_raised_a_query_cannot_be_removed_from_the_shortlist():
+    store, rfq_id, entry_id = store_with_a_shortlisted_rfq()
+    q = store.raise_query(rfq_id, entry_id, question="Which revision?",
+                          category="Technical", raised_on=date(2026, 8, 13))
+    with pytest.raises(ValueError, match=q.number):
+        store.remove_shortlist_entry(rfq_id, entry_id)
+    assert len(store.shortlist_for(rfq_id)) == 1
+
+
+def test_the_guard_holds_for_answered_and_withdrawn_queries_too():
+    """A bidder who took part in the round is part of its record. Erasing them
+    would make the register read as though they had never asked."""
+    store, rfq_id, entry_id = store_with_a_shortlisted_rfq()
+    answered = store.raise_query(rfq_id, entry_id, question="a", category="Technical",
+                                 raised_on=date(2026, 8, 13))
+    store.answer_query(rfq_id, answered.id, answer="Rev. A.", by="buyer@example.com")
+    withdrawn = store.raise_query(rfq_id, entry_id, question="b", category="Commercial",
+                                  raised_on=date(2026, 8, 13))
+    store.withdraw_query(rfq_id, withdrawn.id, reason="Duplicate.", by="buyer@example.com")
+
+    with pytest.raises(ValueError) as exc:
+        store.remove_shortlist_entry(rfq_id, entry_id)
+    assert "TQ-001" in str(exc.value) and "CQ-001" in str(exc.value)
+
+
+def test_a_bidder_who_raised_nothing_is_still_removable():
+    """The guard has to release as well as hold."""
+    store, rfq_id, entry_id = store_with_a_shortlisted_rfq()
+    quiet = store.add_shortlist_entry(
+        rfq_id, vendor_name="Northwind Valve Works", prequal_status="Approved",
+        scope_code_fit=True, included=True,
+    )
+    store.raise_query(rfq_id, entry_id, question="a", category="Technical",
+                      raised_on=date(2026, 8, 13))
+    store.remove_shortlist_entry(rfq_id, quiet.id)
+    assert [e.id for e in store.shortlist_for(rfq_id)] == [entry_id]
+
+
+def test_no_query_ever_points_at_an_entry_that_is_gone():
+    """The invariant this task owns, asserted over the whole store."""
+    store, rfq_id, entry_id = store_with_a_shortlisted_rfq()
+    quiet = store.add_shortlist_entry(
+        rfq_id, vendor_name="Northwind Valve Works", prequal_status="Approved",
+        scope_code_fit=True, included=True,
+    )
+    store.raise_query(rfq_id, entry_id, question="a", category="Technical",
+                      raised_on=date(2026, 8, 13))
+    store.remove_shortlist_entry(rfq_id, quiet.id)
+
+    live = {e.id for e in store.shortlist_for(rfq_id)}
+    assert all(q.raised_by_entry_id in live for q in store.queries_for(rfq_id))
