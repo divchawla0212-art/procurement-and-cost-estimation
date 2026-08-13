@@ -1,6 +1,8 @@
 from datetime import date, datetime, timezone
 
+from workflow.bidders import evaluate
 from workflow.models.bid import Bid, BidShortlist, ReceiptState, VdrlReceipt
+from workflow.models.bidder import Bidder, PrequalStatus
 from workflow.models.project import Item, Project
 from workflow.models.rfq import (
     Attachment,
@@ -22,6 +24,7 @@ from workflow.stages import Stage, is_allowed
 # request model, so a caller that bypasses the route cannot do it either.
 _PROJECT_IMMUTABLE = frozenset({"id"})
 _ITEM_IMMUTABLE = frozenset({"id", "project_id"})
+_BIDDER_IMMUTABLE = frozenset({"id"})
 
 
 def _reject_immutable(changes: dict, immutable: frozenset[str]) -> None:
@@ -45,6 +48,7 @@ class WorkflowStore:
     def __init__(self) -> None:
         self._projects: dict[str, Project] = {}
         self._items: dict[str, Item] = {}
+        self._bidders: dict[str, Bidder] = {}
         self._rfqs: dict[str, RfqRecord] = {}
         self._packages: dict[str, TechnicalPackage] = {}
         self._shortlists: dict[str, list[ShortlistEntry]] = {}
@@ -204,6 +208,102 @@ class WorkflowStore:
             )
         return None
 
+    # -- bidders ----------------------------------------------------------
+    #
+    # The registry is organisation-wide, not per project: a prequalification is
+    # a fact about a company, and holding it per project would mean re-entering
+    # and re-approving the same company for every one of them.
+
+    def create_bidder(
+        self,
+        name: str,
+        country: str,
+        currency: str = "AED",
+        trade_categories: list[str] | None = None,
+        prequal_status: PrequalStatus = "Under review",
+        prequal_expires_on: date | None = None,
+        on_hold: bool = False,
+        hold_reason: str | None = None,
+        turnover_band: str | None = None,
+        performance_rating: float | None = None,
+        past_awards: int = 0,
+        notes: str | None = None,
+    ) -> Bidder:
+        bidder = Bidder(
+            name=name,
+            country=country,
+            currency=currency,
+            trade_categories=list(trade_categories or []),
+            prequal_status=prequal_status,
+            prequal_expires_on=prequal_expires_on,
+            on_hold=on_hold,
+            hold_reason=hold_reason,
+            turnover_band=turnover_band,
+            performance_rating=performance_rating,
+            past_awards=past_awards,
+            notes=notes,
+        )
+        self._bidders[bidder.id] = bidder
+        return bidder
+
+    def get_bidder(self, bidder_id: str) -> Bidder | None:
+        return self._bidders.get(bidder_id)
+
+    def list_bidders(self) -> list[Bidder]:
+        return list(self._bidders.values())
+
+    def update_bidder(self, bidder_id: str, changes: dict) -> Bidder:
+        """Partial, and validating, for the same two reasons as
+        `update_project`: an absent field is left alone rather than cleared,
+        and rebuilding through the model rather than `model_copy(update=...)`
+        is what stops a `prequal_status` no `PrequalStatus` allows reaching
+        the store."""
+        bidder = self._bidders.get(bidder_id)
+        if bidder is None:
+            raise KeyError(f"Unknown bidder: {bidder_id}")
+        _reject_immutable(changes, _BIDDER_IMMUTABLE)
+        updated = Bidder(**{**bidder.model_dump(), **changes})
+        self._bidders[bidder_id] = updated
+        return updated
+
+    def rfqs_inviting(self, bidder_id: str) -> list[str]:
+        """The references of every RFQ whose shortlist names this bidder.
+
+        By `vendor_id`, never by name: a name is user-supplied text and two
+        companies can share one, so matching on it would both hold the wrong
+        bidder and release the right one.
+        """
+        references = {
+            rfq.reference
+            for rfq_id, entries in self._shortlists.items()
+            for entry in entries
+            if entry.vendor_id == bidder_id
+            for rfq in [self._rfqs.get(rfq_id)]
+            if rfq is not None
+        }
+        return sorted(references)
+
+    def delete_bidder(self, bidder_id: str) -> None:
+        """Refused while any shortlist references the bidder.
+
+        The third place this repository has needed the rule, and the reason is
+        the same as for `delete_item` and `delete_project`:
+        `persistence.save` replaces the document wholesale, so an entry left
+        pointing at a deleted bidder is not merely wrong in memory — it
+        survives the restart as a dangling reference. The refusal names the
+        RFQs, because one that does not say what would unblock it leaves the
+        reader nothing to act on.
+        """
+        if bidder_id not in self._bidders:
+            raise KeyError(f"Unknown bidder: {bidder_id}")
+        inviting = self.rfqs_inviting(bidder_id)
+        if inviting:
+            raise ValueError(
+                f"This bidder cannot be deleted: they are shortlisted on "
+                f"{', '.join(inviting)}. Remove them from those shortlists first."
+            )
+        del self._bidders[bidder_id]
+
     # -- rfqs -------------------------------------------------------------
 
     def create_rfq(
@@ -335,17 +435,65 @@ class WorkflowStore:
     def add_shortlist_entry(
         self,
         rfq_id: str,
-        vendor_name: str,
-        prequal_status: str,
-        scope_code_fit: bool,
-        included: bool,
+        vendor_name: str | None = None,
+        prequal_status: str | None = None,
+        scope_code_fit: bool | None = None,
+        included: bool = True,
         override_by: str | None = None,
         override_reason: str | None = None,
+        vendor_id: str | None = None,
+        as_of: date | None = None,
     ) -> ShortlistEntry:
+        """Invite a vendor, either from the registry (`vendor_id`) or by name.
+
+        **A linked entry's snapshot comes from the registry, never from the
+        caller.** With a `vendor_id`, `vendor_name`, `prequal_status` and
+        `scope_code_fit` are derived here and any contradicting values in the
+        call are ignored. Otherwise the registry would be decoration: a caller
+        could link a suspended bidder and label the entry "Qualified".
+
+        **Inviting a blocked bidder requires an override reason** — the
+        positive, attributed act `ShortlistEntry`'s docstring has always
+        claimed and nothing previously enforced. A caution (a scope mismatch,
+        an approaching expiry) is not a refusal and needs no override; it is
+        recorded in `scope_code_fit` and shown on the screen.
+
+        Both of those are reads that gate this write, which is why they are
+        here rather than in the route: the route runs this whole method inside
+        `locked_update`, so they are one critical section with the write.
+
+        The free-text path — no `vendor_id` — is unchanged. Eligibility can
+        only be judged against a registry record, so the rules attach to the
+        link rather than to the call.
+        """
         if rfq_id not in self._rfqs:
             raise KeyError(f"Unknown RFQ: {rfq_id}")
+
+        if vendor_id is not None:
+            bidder = self._bidders.get(vendor_id)
+            if bidder is None:
+                raise KeyError(f"Unknown bidder: {vendor_id}")
+            suitability = evaluate(bidder, self._rfqs[rfq_id], as_of or date.today())
+            if suitability.blockers and not (override_reason or "").strip():
+                raise ValueError(
+                    " ".join(suitability.blockers)
+                    + " Record a reason to invite them anyway."
+                )
+            vendor_name = bidder.name
+            prequal_status = suitability.effective_prequal
+            scope_code_fit = suitability.scope_fit
+        elif vendor_name is None or prequal_status is None or scope_code_fit is None:
+            # Not coerced to a passing default: an unnamed vendor with an
+            # assumed "Qualified" is exactly the record this feature exists to
+            # stop being created.
+            raise ValueError(
+                "A shortlist entry needs either a vendor_id from the registry, "
+                "or a vendor_name with its prequal_status and scope_code_fit."
+            )
+
         entry = ShortlistEntry(
             rfq_id=rfq_id,
+            vendor_id=vendor_id,
             vendor_name=vendor_name,
             prequal_status=prequal_status,
             scope_code_fit=scope_code_fit,

@@ -63,10 +63,18 @@ class ShortlistEntry(BaseModel):
 
     `id` exists so removal can address a member by identity. List order is not
     a contract — the same rule the procurement store states as "by id, never
-    by index" — and a vendor name is user-supplied text, not a key."""
+    by index" — and a vendor name is user-supplied text, not a key.
+
+    `vendor_id` links to the registry when the vendor came from it, and is
+    `None` for a genuine one-off typed in by hand. The three fields beside it
+    are a **snapshot**, not a mirror: they record what the registry said at the
+    moment somebody decided to invite this vendor, which is a different fact
+    from what the registry says today and is the one an audit needs. That is
+    why a later rename or suspension does not rewrite them."""
 
     id: str = Field(default_factory=new_shortlist_entry_id)
     rfq_id: str
+    vendor_id: str | None = None
     vendor_name: str
     prequal_status: str
     scope_code_fit: bool
