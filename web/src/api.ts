@@ -28,6 +28,8 @@ import type {
   WorkflowProjectInput,
   WorkflowProjectSummary,
   ItemVendorEntry,
+  ItemVendorInput,
+  SuggestedVendor,
   VendorListSource,
   VendorListSummary,
 } from './types'
@@ -358,6 +360,55 @@ export function uploadItemVendorList(
     `/api/workflow/projects/${encodeURIComponent(projectId)}/items/` +
       `${encodeURIComponent(itemId)}/vendor-list?source=${encodeURIComponent(source)}`,
     file,
+  )
+}
+
+function itemVendorsPath(projectId: string, itemId: string): string {
+  return (
+    `/api/workflow/projects/${encodeURIComponent(projectId)}/items/` +
+    `${encodeURIComponent(itemId)}/vendors`
+  )
+}
+
+/** Put one vendor on this item's list, by hand or off the suggestion card.
+ *
+ *  One call per vendor, deliberately. There is no bulk accept: taking twenty
+ *  unverified companies in a single click is precisely the act that needs
+ *  friction, and every row lands attributed to whoever added it. */
+export function addItemVendor(
+  projectId: string,
+  itemId: string,
+  body: ItemVendorInput,
+): Promise<ItemVendorEntry> {
+  return sendJson(itemVendorsPath(projectId, itemId), 'POST', body)
+}
+
+/** Take one curated vendor off, **by id**. The server refuses an uploaded row:
+ *  it is part of a document, so correcting it means re-uploading the corrected
+ *  export. The screen does not offer the control there either. */
+export function removeItemVendor(
+  projectId: string,
+  itemId: string,
+  entryId: string,
+): Promise<void> {
+  return fetch(
+    `${itemVendorsPath(projectId, itemId)}/${encodeURIComponent(entryId)}`,
+    { method: 'DELETE' },
+  ).then(expectNoContent)
+}
+
+/** Companies a model believes supply this item. **Stores nothing** — this is
+ *  the same shape as `extractRfqDoc`: the answer goes to the screen, and only
+ *  an explicit `addItemVendor` records one. */
+export function suggestItemVendors(
+  projectId: string,
+  itemId: string,
+): Promise<{ vendors: SuggestedVendor[] }> {
+  return sendJson(
+    `/api/workflow/projects/${encodeURIComponent(projectId)}/items/` +
+      `${encodeURIComponent(itemId)}/vendor-suggestions`,
+    'POST',
+    {},
   )
 }
 

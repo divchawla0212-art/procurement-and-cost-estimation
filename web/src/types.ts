@@ -592,9 +592,23 @@ export interface WorkflowItemSaved extends WorkflowItem {
 /** One project with everything the detail screen renders. One response rather
  *  than three, so the three lists cannot come from three generations of the
  *  document. */
-/** Which of the two uploads an entry came from: the client's Approved Vendor
- *  List, or Astra's subset of it. */
-export type VendorListSource = 'Client' | 'Astra'
+/** Where an entry on an item's vendor list came from.
+ *
+ *  `Client` and `Astra` are the two uploads — the client's Approved Vendor List
+ *  and Astra's subset of it. They arrive as whole documents and are corrected
+ *  by re-uploading them, so the server refuses to add or remove one row of
+ *  either. `Manual` is a company somebody typed in and `Suggested` is one a
+ *  model named; both are built a vendor at a time and both can be removed.
+ *
+ *  A `Suggested` row stays labelled one even after a person accepts it: that
+ *  the name originated with a model is the thing a later reader would most want
+ *  to know. */
+export type VendorListSource = 'Client' | 'Astra' | 'Manual' | 'Suggested'
+
+/** The two sources built a vendor at a time. Used to decide which cards carry
+ *  add and remove controls, so the screen matches the server's refusal rather
+ *  than relying on it to explain itself after the click. */
+export const CURATED_SOURCES: VendorListSource[] = ['Manual', 'Suggested']
 
 /** One vendor on one item's list.
  *
@@ -612,6 +626,32 @@ export interface ItemVendorEntry {
   uploaded_by: string
   uploaded_at: string
   source_document: string
+}
+
+/** One vendor a person is putting on an item's list.
+ *
+ *  There is no `vendor_id` here and the server never derives one: a name match
+ *  would silently attach a real company's approvals to whatever somebody typed.
+ *  `note` rides on the stored `source_document` rather than a field of its own,
+ *  because a note here is *why this row exists*. */
+export interface ItemVendorInput {
+  vendor_name: string
+  source: VendorListSource
+  trade_categories?: string[]
+  note?: string
+}
+
+/** One company a model named. Never a registry row and never a bidder — no
+ *  approvals, no link, no prequalification, because it is precisely the
+ *  companies the registry does not hold that are worth suggesting.
+ *
+ *  `basis` is the model's own reason, carried through unedited so the reader
+ *  can judge it. It is evidence to weigh, not a verdict to act on. */
+export interface SuggestedVendor {
+  name: string
+  country: string | null
+  supplies: string | null
+  basis: string | null
 }
 
 export interface VendorListSummary {

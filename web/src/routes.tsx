@@ -9,7 +9,6 @@ import { ErrorState, LoadingState } from './components/primitives'
 import { Projects } from './pages/Projects'
 import { ProjectDetail } from './pages/ProjectDetail'
 import { ItemDetail } from './pages/ItemDetail'
-import { Bidders } from './pages/Bidders'
 import { RfqWorkflow } from './pages/RfqWorkflow'
 import { RfqWizard } from './pages/RfqWizard'
 import { RfqDetail } from './pages/RfqDetail'
@@ -57,7 +56,6 @@ export function AppRoutes(props: AppRoutesProps): JSX.Element {
       <Route path="/projects" element={<Projects />} />
       <Route path="/projects/:projectId" element={<ProjectDetailRoute />} />
       <Route path="/projects/:projectId/items/:itemId" element={<ItemDetailRoute />} />
-      <Route path="/bidders" element={<Bidders />} />
       <Route path="/rfqs" element={<RfqWorkflow />} />
       <Route path="/rfqs/:rfqId" element={<RfqRoute />} />
 
@@ -211,6 +209,10 @@ function ItemDetailRoute() {
       itemId={itemId}
       onBack={() => navigate(`/projects/${projectId}`)}
       onHome={() => navigate('/projects')}
+      // No new route: `/rfqs/:rfqId` already exists and already picks the
+      // wizard or the read-only screen by stage, so an RFQ opened from an item
+      // lands wherever it would have from the roster.
+      onOpenRfq={(rfqId) => navigate(`/rfqs/${rfqId}`)}
     />
   )
 }

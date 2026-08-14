@@ -10,7 +10,9 @@ import {
   detail,
   rfq,
   shortlistEntry,
+  suggestion,
   vendorEntry,
+  vendorLists,
 } from './workflow-fixtures'
 import type { AvailableBidders } from '../types'
 
@@ -28,16 +30,22 @@ vi.mock('../api', async (importOriginal) => {
     fetchRfq: vi.fn(),
     inviteRegisteredBidder: vi.fn(),
     uploadItemVendorList: vi.fn(),
+    addItemVendor: vi.fn(),
+    removeItemVendor: vi.fn(),
+    suggestItemVendors: vi.fn(),
   }
 })
 
 import {
+  addItemVendor,
   createRfq,
   fetchAvailableBidders,
   fetchDisciplines,
   fetchRfq,
   fetchWorkflowProject,
   inviteRegisteredBidder,
+  removeItemVendor,
+  suggestItemVendors,
   updateWorkflowItem,
   uploadItemVendorList,
 } from '../api'
@@ -87,9 +95,7 @@ describe('ItemDetail', () => {
     vi.mocked(fetchWorkflowProject).mockResolvedValue(
       detail({
         items: [GENERATOR],
-        item_vendor_lists: {
-          itm_1: { Client: [vendorEntry()], Astra: [] },
-        },
+        item_vendor_lists: { itm_1: vendorLists({ Client: [vendorEntry()] }) },
       }),
     )
 
@@ -106,10 +112,9 @@ describe('ItemDetail', () => {
       detail({
         items: [GENERATOR],
         item_vendor_lists: {
-          itm_1: {
+          itm_1: vendorLists({
             Client: [vendorEntry({ vendor_id: null, vendor_name: 'STRANGER LLC' })],
-            Astra: [],
-          },
+          }),
         },
       }),
     )
@@ -122,13 +127,15 @@ describe('ItemDetail', () => {
 
   it('says when a list has not been uploaded', async () => {
     vi.mocked(fetchWorkflowProject).mockResolvedValue(
-      detail({ items: [GENERATOR], item_vendor_lists: { itm_1: { Client: [], Astra: [] } } }),
+      detail({ items: [GENERATOR], item_vendor_lists: { itm_1: vendorLists() } }),
     )
 
     renderItem()
 
     const card = await screen.findByRole('region', { name: /astra list/i })
-    expect(within(card).getByText(/no astra list uploaded/i)).toBeInTheDocument()
+    expect(
+      within(card).getByText(/nothing on the astra list yet/i),
+    ).toBeInTheDocument()
   })
 
   it('offers both vendor list uploads when editing an item', async () => {
@@ -469,24 +476,6 @@ describe('ItemDetail', () => {
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'ADNOC' })).toBeDisabled(),
     )
-  })
-
-  it('offers the internet source as not built yet', async () => {
-    vi.mocked(fetchWorkflowProject).mockResolvedValue(detail({ items: [GENERATOR] }))
-    vi.mocked(fetchAvailableBidders).mockResolvedValue(
-      availableList({ bidders: [APPROVED_BIDDER] }),
-    )
-
-    renderItem()
-
-    const chip = await screen.findByRole('button', { name: /from the internet/i })
-    expect(chip).toBeDisabled()
-    // The caption names its own subject: sitting between the chips and the RFQ
-    // chooser, a bare "Not built yet." read as though it described the chooser
-    // below it — which is built and works.
-    expect(
-      screen.getByText(/searching the web for vendors is not built yet/i),
-    ).toBeInTheDocument()
   })
 
   it('shows an approval pill against each available vendor', async () => {
@@ -1192,6 +1181,319 @@ describe('ItemDetail', () => {
           screen.queryByRole('button', { name: /create rfq/i }),
         ).not.toBeInTheDocument(),
       )
+    })
+  })
+
+  /* ------------------------------------------------- adding one by hand */
+  //
+  // The two curated lists carry add and remove controls; the two uploads carry
+  // neither. That mirrors the server's refusal rather than relying on it: an
+  // uploaded row is part of a document, so a control that produced a 422 every
+  // time would read as broken rather than as deliberate.
+
+  describe('a vendor added by hand', () => {
+    function openManual() {
+      return screen.findByRole('region', { name: /added by hand/i })
+    }
+
+    it('sends the name typed into its own card', async () => {
+      vi.mocked(fetchWorkflowProject).mockResolvedValue(
+        detail({ items: [GENERATOR], item_vendor_lists: { itm_1: vendorLists() } }),
+      )
+      vi.mocked(addItemVendor).mockResolvedValue(
+        vendorEntry({ source: 'Manual', vendor_name: 'Gulf Cable Works LLC' }),
+      )
+
+      renderItem()
+      const card = await openManual()
+      fireEvent.change(within(card).getByLabelText(/vendor name/i), {
+        target: { value: 'Gulf Cable Works LLC' },
+      })
+      fireEvent.click(within(card).getByRole('button', { name: /^add vendor$/i }))
+
+      await waitFor(() =>
+        expect(addItemVendor).toHaveBeenCalledWith('prj_1', 'itm_1', {
+          vendor_name: 'Gulf Cable Works LLC',
+          source: 'Manual',
+        }),
+      )
+    })
+
+    it('refuses a blank name without asking the server', async () => {
+      // Guarded here as well as on the server. A round trip to be told the
+      // obvious is a worse answer than not making it, and the server's refusal
+      // still stands for anything that reaches it another way.
+      vi.mocked(fetchWorkflowProject).mockResolvedValue(
+        detail({ items: [GENERATOR], item_vendor_lists: { itm_1: vendorLists() } }),
+      )
+
+      renderItem()
+      const card = await openManual()
+      fireEvent.change(within(card).getByLabelText(/vendor name/i), {
+        target: { value: '   ' },
+      })
+      fireEvent.click(within(card).getByRole('button', { name: /^add vendor$/i }))
+
+      expect(addItemVendor).not.toHaveBeenCalled()
+      expect(await within(card).findByRole('alert')).toHaveTextContent(/name/i)
+    })
+
+    it('shows the server sentence when the add is refused', async () => {
+      vi.mocked(fetchWorkflowProject).mockResolvedValue(
+        detail({ items: [GENERATOR], item_vendor_lists: { itm_1: vendorLists() } }),
+      )
+      vi.mocked(addItemVendor).mockRejectedValue(
+        new Error('Client is an uploaded list - re-upload the corrected export.'),
+      )
+
+      renderItem()
+      const card = await openManual()
+      fireEvent.change(within(card).getByLabelText(/vendor name/i), {
+        target: { value: 'Gulf Cable Works LLC' },
+      })
+      fireEvent.click(within(card).getByRole('button', { name: /^add vendor$/i }))
+
+      expect(await within(card).findByRole('alert')).toHaveTextContent(
+        /re-upload the corrected export/i,
+      )
+    })
+
+    it('removes one by id and re-reads the screen', async () => {
+      const kept = vendorEntry({ id: 'ive_keep', source: 'Manual', vendor_name: 'Same Name' })
+      const going = vendorEntry({ id: 'ive_go', source: 'Manual', vendor_name: 'Same Name' })
+      vi.mocked(fetchWorkflowProject)
+        .mockResolvedValueOnce(
+          detail({
+            items: [GENERATOR],
+            item_vendor_lists: { itm_1: vendorLists({ Manual: [going, kept] }) },
+          }),
+        )
+        .mockResolvedValue(
+          detail({
+            items: [GENERATOR],
+            item_vendor_lists: { itm_1: vendorLists({ Manual: [kept] }) },
+          }),
+        )
+      vi.mocked(removeItemVendor).mockResolvedValue(undefined)
+
+      renderItem()
+      const card = await openManual()
+      // By id, never by name or position - two suppliers can share a trading
+      // name, which is why both fixture rows carry the same one.
+      fireEvent.click(
+        (await within(card).findAllByRole('button', { name: /^remove Same Name$/i }))[0],
+      )
+
+      await waitFor(() =>
+        expect(removeItemVendor).toHaveBeenCalledWith('prj_1', 'itm_1', 'ive_go'),
+      )
+      await waitFor(() =>
+        expect(within(card).getAllByText('Same Name')).toHaveLength(1),
+      )
+    })
+
+    it('shows a refused removal beside the row it refused', async () => {
+      vi.mocked(fetchWorkflowProject).mockResolvedValue(
+        detail({
+          items: [GENERATOR],
+          item_vendor_lists: {
+            itm_1: vendorLists({
+              Manual: [vendorEntry({ id: 'ive_1', source: 'Manual', vendor_name: 'Kept Co' })],
+            }),
+          },
+        }),
+      )
+      vi.mocked(removeItemVendor).mockRejectedValue(new Error('Nope, still here.'))
+
+      renderItem()
+      const card = await openManual()
+      fireEvent.click(within(card).getByRole('button', { name: /^remove Kept Co$/i }))
+
+      const row = (await within(card).findByText('Kept Co')).closest('tr')!
+      expect(within(row).getByRole('alert')).toHaveTextContent('Nope, still here.')
+      // The row is still there: a refused removal removes nothing.
+      expect(within(card).getByText('Kept Co')).toBeInTheDocument()
+    })
+  })
+
+  describe('the uploaded cards', () => {
+    it('carry no add or remove control', async () => {
+      // Matching the store's refusal rather than relying on it. Both uploads,
+      // because the guard is per source and a card that only got it right for
+      // the client's list would look identical on screen.
+      vi.mocked(fetchWorkflowProject).mockResolvedValue(
+        detail({
+          items: [GENERATOR],
+          item_vendor_lists: {
+            itm_1: vendorLists({
+              Client: [vendorEntry({ vendor_name: 'CLIENT CO' })],
+              Astra: [vendorEntry({ id: 'ive_2', source: 'Astra', vendor_name: 'ASTRA CO' })],
+            }),
+          },
+        }),
+      )
+
+      renderItem()
+
+      for (const name of [/client list/i, /astra list/i]) {
+        const card = await screen.findByRole('region', { name })
+        expect(
+          within(card).queryByRole('button', { name: /^remove /i }),
+        ).not.toBeInTheDocument()
+        expect(
+          within(card).queryByRole('button', { name: /^add vendor$/i }),
+        ).not.toBeInTheDocument()
+      }
+    })
+  })
+
+  /* ------------------------------------------------- the suggestion card */
+
+  describe('the suggested vendors card', () => {
+    function openSuggested() {
+      return screen.findByRole('region', { name: /suggested vendors/i })
+    }
+
+    beforeEach(() => {
+      vi.mocked(fetchWorkflowProject).mockResolvedValue(
+        detail({ items: [GENERATOR], item_vendor_lists: { itm_1: vendorLists() } }),
+      )
+    })
+
+    it('says it is the model and not a web search', async () => {
+      // The honest-label rule. These providers cannot browse, so a caption
+      // claiming a search would put a synthesised fact where a recorded one is
+      // expected - the failure the AVL import, the mock rounds and the RFQ
+      // extractor all guard against.
+      renderItem()
+
+      const card = await openSuggested()
+      expect(within(card).getByText(/training data/i)).toBeInTheDocument()
+      expect(within(card).getByText(/not a web search/i)).toBeInTheDocument()
+      expect(within(card).getByText(/verify each company/i)).toBeInTheDocument()
+    })
+
+    it('has no "From the internet" chip left anywhere on the screen', async () => {
+      // Replaced rather than enabled. It promised a search nothing performs.
+      renderItem()
+      await openSuggested()
+
+      expect(screen.queryByText(/from the internet/i)).not.toBeInTheDocument()
+      expect(
+        screen.queryByText(/searching the web for vendors is not built yet/i),
+      ).not.toBeInTheDocument()
+    })
+
+    it('lists what the model named, with its reason', async () => {
+      vi.mocked(suggestItemVendors).mockResolvedValue({
+        vendors: [suggestion({ name: 'DUCAB HV CABLE', basis: 'A UAE cable maker.' })],
+      })
+
+      renderItem()
+      const card = await openSuggested()
+      fireEvent.click(within(card).getByRole('button', { name: /suggest vendors/i }))
+
+      expect(await within(card).findByText('DUCAB HV CABLE')).toBeInTheDocument()
+      expect(within(card).getByText(/A UAE cable maker\./)).toBeInTheDocument()
+    })
+
+    it('adds one at a time and offers no bulk accept', async () => {
+      // Accepting twenty unverified companies in one click is precisely the
+      // act that needs friction, so each row has its own Add and there is no
+      // control that takes them all.
+      vi.mocked(suggestItemVendors).mockResolvedValue({
+        vendors: [
+          suggestion({ name: 'DUCAB HV CABLE', basis: 'A UAE cable maker.' }),
+          suggestion({ name: 'JEDDAH CABLES', basis: 'A Saudi cable maker.' }),
+        ],
+      })
+      vi.mocked(addItemVendor).mockResolvedValue(
+        vendorEntry({ source: 'Suggested', vendor_name: 'DUCAB HV CABLE' }),
+      )
+
+      renderItem()
+      const card = await openSuggested()
+      fireEvent.click(within(card).getByRole('button', { name: /suggest vendors/i }))
+
+      expect(
+        await within(card).findAllByRole('button', { name: /^add /i }),
+      ).toHaveLength(2)
+      expect(
+        within(card).queryByRole('button', { name: /add all|add selected|add these/i }),
+      ).not.toBeInTheDocument()
+
+      fireEvent.click(within(card).getByRole('button', { name: /^add DUCAB HV CABLE$/i }))
+
+      await waitFor(() =>
+        expect(addItemVendor).toHaveBeenCalledWith('prj_1', 'itm_1', {
+          vendor_name: 'DUCAB HV CABLE',
+          source: 'Suggested',
+          note: 'A UAE cable maker.',
+        }),
+      )
+    })
+
+    it('shows a failed ask rather than an empty list', async () => {
+      // An outage and "no such companies exist" must not look the same - the
+      // distinction the covering-RFQ summary keeps between a dash and "Nobody
+      // invited yet".
+      vi.mocked(suggestItemVendors).mockRejectedValue(
+        new Error('The model could not be asked for vendors: provider is down'),
+      )
+
+      renderItem()
+      const card = await openSuggested()
+      fireEvent.click(within(card).getByRole('button', { name: /suggest vendors/i }))
+
+      expect(await within(card).findByRole('alert')).toHaveTextContent(
+        /provider is down/i,
+      )
+      expect(within(card).queryByText(/named nobody/i)).not.toBeInTheDocument()
+    })
+
+    it('says so plainly when the model names nobody', async () => {
+      vi.mocked(suggestItemVendors).mockResolvedValue({ vendors: [] })
+
+      renderItem()
+      const card = await openSuggested()
+      fireEvent.click(within(card).getByRole('button', { name: /suggest vendors/i }))
+
+      expect(await within(card).findByText(/named nobody/i)).toBeInTheDocument()
+      expect(within(card).queryByRole('alert')).not.toBeInTheDocument()
+    })
+  })
+
+  /* ------------------------------------------------- opening a covering RFQ */
+
+  describe('the covering RFQ table', () => {
+    it('opens a covering RFQ from its row', async () => {
+      // The accessible name is the reference, not the glyph - the same rule the
+      // vendor row button follows: the glyph is the visible label and the name
+      // is what a screen reader and a test read.
+      const onOpenRfq = vi.fn()
+      vi.mocked(fetchWorkflowProject).mockResolvedValue(
+        detail({
+          items: [GENERATOR],
+          rfqs: [rfq('rfq_1', 'ADP-RFQ-2026-014', ['itm_1'])],
+          item_vendor_lists: { itm_1: vendorLists() },
+        }),
+      )
+
+      render(
+        <ItemDetail
+          projectId="prj_1"
+          itemId="itm_1"
+          onBack={vi.fn()}
+          onHome={vi.fn()}
+          onOpenRfq={onOpenRfq}
+        />,
+      )
+
+      fireEvent.click(
+        await screen.findByRole('button', { name: /open ADP-RFQ-2026-014/i }),
+      )
+
+      expect(onOpenRfq).toHaveBeenCalledWith('rfq_1')
     })
   })
 })

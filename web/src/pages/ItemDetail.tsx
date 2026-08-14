@@ -1,11 +1,14 @@
 import { useState } from 'react'
 import type { JSX } from 'react'
 import {
+  addItemVendor,
   createRfq,
   extractRfqDoc,
   fetchAvailableBidders,
   fetchWorkflowProject,
   inviteRegisteredBidder,
+  removeItemVendor,
+  suggestItemVendors,
   updateWorkflowItem,
 } from '../api'
 import { useAsync } from '../useAsync'
@@ -14,7 +17,9 @@ import { summarise, useCoveringShortlists } from './covering-shortlists'
 import { ItemForm, RaiseRfqForm } from './forms'
 import type {
   ItemVendorEntry,
+  ItemVendorInput,
   Rfq,
+  SuggestedVendor,
   VendorListSource,
   WorkflowItem,
   WorkflowItemInput,
@@ -316,18 +321,11 @@ function AvailableVendorList({
                 {org}
               </button>
             ))}
-            {/* Nothing sources a vendor from the web yet, so this is disabled
-                rather than tickable — a tickable chip could only ever produce
-                an empty table, which reads as broken rather than unbuilt. Same
-                treatment as the RFQ wizard's search button. */}
-            <button type="button" className="chip chip--asis" disabled>
-              From the internet
-            </button>
+            {/* The disabled "From the internet" chip that used to sit here is
+                gone rather than enabled. Nothing browses, so the chip promised
+                a search no code performs; what replaced it is the Suggested
+                vendors card, which says what it actually does. */}
           </div>
-          {/* Names its own subject. Sitting between the chips and the RFQ
-              chooser below, a bare "Not built yet." read as though it
-              described the chooser — which is built and works. */}
-          <p className="muted">Searching the web for vendors is not built yet.</p>
 
           {/* Which RFQ an invitation lands on. Only asked when the answer is
               not obvious — one covering RFQ needs no question, and none means
@@ -504,38 +502,103 @@ function AvailableVendorList({
   )
 }
 
-/**
- * One uploaded vendor list, as a card.
+/** What each card is called, and what its empty state should say.
  *
- * The two lists answer different questions — who the client will accept, and
- * who we have qualified — so they are two cards rather than one table with a
- * source column: a reader looking at "the client's list" should not have to
- * filter the contractor's out of it by eye.
+ *  Four cards rather than one table with a source column, for the reason the
+ *  first two were split: the lists answer different questions — who the client
+ *  will accept, who we have qualified, who a buyer knows, who a model named —
+ *  and a reader looking at one should not have to filter the others out by eye.
+ *  Which of those a row belongs to is the thing that decides what may be done
+ *  to it, so it is the heading rather than a column. */
+const SOURCE_LABEL: Record<VendorListSource, string> = {
+  Client: 'Client list',
+  Astra: 'Astra list',
+  Manual: 'Added by hand',
+  Suggested: 'Suggested vendors',
+}
+
+/**
+ * One of an item's vendor lists, as a card.
  *
  * Approvals come from the registry through `vendor_id`, never from the entry,
  * which is why an unlinked row shows a mark rather than empty pills: no
- * registry row means no finding either way, not "approved by nobody".
+ * registry row means no finding either way, not "approved by nobody". Every
+ * curated row is unlinked by construction — the server never looks a typed name
+ * up, because a match would attach a real company's approvals to whatever
+ * somebody typed.
+ *
+ * `onRemove` is passed only for the curated sources. The uploaded cards render
+ * no remove control at all rather than one that always fails: an uploaded row
+ * is part of a document, so correcting it means re-uploading the corrected
+ * export, and a control that produced a 422 every time would read as broken
+ * rather than as deliberate. The server refuses it either way — this matches
+ * that refusal, it does not stand in for it.
  */
 function VendorListCard({
   source,
   entries,
   discipline,
+  onRemove,
+  children,
 }: {
   source: VendorListSource
   entries: ItemVendorEntry[]
   discipline: string
+  /** Absent for `Client` and `Astra`. */
+  onRemove?: (entryId: string) => Promise<void>
+  /** How this list is added to, rendered inside the card so the control and
+   *  the rows it appends to share one heading — and, because a card is a
+   *  landmark, one accessible name for a reader navigating by region. Absent
+   *  for the uploads, which are added to by re-uploading the export. */
+  children?: JSX.Element
 }): JSX.Element {
-  const label = source === 'Client' ? 'Client list' : 'Astra list'
+  const label = SOURCE_LABEL[source]
   const linked = entries.filter((e) => e.vendor_id !== null).length
+  // Keyed by entry id, never by row index: the list re-renders after every
+  // write, and a stale index would attach a refusal to a different company.
+  // The same rule the available-vendor card keeps.
+  const [rowError, setRowError] = useState<Record<string, string>>({})
+
+  async function remove(entryId: string) {
+    setRowError((prev) => {
+      const { [entryId]: _gone, ...rest } = prev
+      return rest
+    })
+    try {
+      await onRemove!(entryId)
+    } catch (err) {
+      setRowError((prev) => ({ ...prev, [entryId]: (err as Error).message }))
+    }
+  }
 
   return (
     <Card title={label}>
+      {/* Above the list, because on the two curated cards it is the thing the
+          reader came here to do — and on an empty one it is the only thing
+          there is to do. */}
+      {children}
       {entries.length === 0 ? (
-        <EmptyState title={`No ${label.toLowerCase()} uploaded`}>
-          Edit the item and add the {source === 'Client' ? 'client' : 'Astra'}{' '}
-          Approved Vendor List. It is narrowed to this item's discipline on the
-          way in, so only the vendors registered for {discipline || 'it'} are
-          kept.
+        <EmptyState title={`Nothing on the ${label.toLowerCase()} yet`}>
+          {source === 'Client' || source === 'Astra' ? (
+            <>
+              Edit the item and add the{' '}
+              {source === 'Client' ? 'client' : 'Astra'} Approved Vendor List.
+              It is narrowed to this item's discipline on the way in, so only
+              the vendors registered for {discipline || 'it'} are kept.
+            </>
+          ) : source === 'Manual' ? (
+            <>
+              Add a company below. Use this for a supplier who is on neither
+              uploaded list — nothing here is checked against the registry, so
+              the name is recorded exactly as you type it.
+            </>
+          ) : (
+            <>
+              Ask for suggestions below, then add the ones you want to keep.
+              Each stays labelled as the model's, so a later reader can see
+              where the name came from.
+            </>
+          )}
         </EmptyState>
       ) : (
         <>
@@ -545,14 +608,28 @@ function VendorListCard({
                 <th scope="col">Vendor</th>
                 <th scope="col">Registry</th>
                 <th scope="col">Product groups</th>
+                <th scope="col">How it arrived</th>
+                {onRemove && (
+                  <th scope="col">
+                    <span className="sr-only">Remove</span>
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody>
               {entries.map((e) => (
                 <tr key={e.id}>
-                  {/* The name as the export wrote it, so a row can be read
-                      back against its source document. */}
-                  <td>{e.vendor_name}</td>
+                  {/* The name as the export wrote it, or as the buyer typed
+                      it, so a row can be read back against its source. */}
+                  <td>
+                    {e.vendor_name}
+                    {/* The refusal lives in the row that caused it. */}
+                    {rowError[e.id] && (
+                      <div className="banner banner--error" role="alert">
+                        {rowError[e.id]}
+                      </div>
+                    )}
+                  </td>
                   <td>
                     {e.vendor_id === null ? (
                       <span className="warn">Not in the registry</span>
@@ -561,6 +638,27 @@ function VendorListCard({
                     )}
                   </td>
                   <td className="muted">{e.trade_categories.join(' · ') || '—'}</td>
+                  {/* `source_document` names the export for an upload and the
+                      act for a curated row, so every row says how it got here
+                      whichever door it came through. */}
+                  <td className="muted">{e.source_document}</td>
+                  {onRemove && (
+                    <td>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-ghost"
+                        // The name goes in the accessible name, not the
+                        // visible label — the rule the shortlist button
+                        // follows, and here it is also what makes removal
+                        // addressable in a list where two rows can share a
+                        // trading name.
+                        aria-label={`Remove ${e.vendor_name}`}
+                        onClick={() => void remove(e.id)}
+                      >
+                        Remove
+                      </button>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -573,6 +671,248 @@ function VendorListCard({
         </>
       )}
     </Card>
+  )
+}
+
+/**
+ * Typing in a company nobody's list holds.
+ *
+ * Its own card rather than a row on the Manual list, because it is the only
+ * control on this screen that creates a vendor record from nothing: the name is
+ * stored exactly as typed and **never looked up in the registry**, since a
+ * match would silently attach a real company's approvals to it.
+ *
+ * The blank guard is here as well as on the server. A round trip to be told the
+ * obvious is a worse answer than not making it — and the server's refusal still
+ * stands for anything that reaches it another way.
+ */
+function AddVendorByHand({
+  onAdd,
+}: {
+  onAdd: (body: ItemVendorInput) => Promise<void>
+}): JSX.Element {
+  const [name, setName] = useState('')
+  const [note, setNote] = useState('')
+  const [error, setError] = useState<string | null>(null)
+
+  async function submit() {
+    const trimmed = name.trim()
+    if (!trimmed) {
+      setError('A vendor needs a name.')
+      return
+    }
+    setError(null)
+    try {
+      await onAdd({
+        vendor_name: trimmed,
+        source: 'Manual',
+        // Sent only when written. An empty note is not a note, and the server
+        // would otherwise store a provenance sentence ending in a colon.
+        ...(note.trim() ? { note: note.trim() } : {}),
+      })
+      setName('')
+      setNote('')
+    } catch (err) {
+      setError((err as Error).message)
+    }
+  }
+
+  return (
+    <>
+      {/* Plain labels beside controls carrying `.input`, never a
+          `<label className="field">` wrapping one: `.field` is the input
+          class, and on a label it renders as a box inside a box. */}
+      <div className="fxrow">
+        <label htmlFor="hand-vendor-name">Vendor name</label>
+        <input
+          id="hand-vendor-name"
+          className="input"
+          value={name}
+          placeholder="As you would write it on an enquiry"
+          onChange={(e) => setName(e.target.value)}
+        />
+        <label htmlFor="hand-vendor-note">Note</label>
+        <input
+          id="hand-vendor-note"
+          className="input"
+          value={note}
+          placeholder="Why this company (optional)"
+          onChange={(e) => setNote(e.target.value)}
+        />
+        <button type="button" className="btn btn-sm" onClick={() => void submit()}>
+          Add vendor
+        </button>
+      </div>
+      {error && (
+        <div className="banner banner--error" role="alert">
+          {error}
+        </div>
+      )}
+    </>
+  )
+}
+
+/**
+ * Companies a model believes supply this item.
+ *
+ * **Not a web search, and the caption says so.** `shared/llm/` wraps providers
+ * that cannot browse, so what comes back is what the model recalls from
+ * training: undated, unsourced, and capable of being confidently wrong by
+ * inventing a plausible company name. Calling this a search on screen would put
+ * a synthesised fact where a recorded one is expected — the rule this
+ * repository keeps for the AVL import, the mock rounds and the RFQ extractor.
+ *
+ * **Nothing here is stored until a person adds it, one row at a time.** There
+ * is deliberately no bulk accept: taking twenty unverified companies in one
+ * click is precisely the act that needs friction. An accepted row keeps the
+ * `Suggested` label rather than being promoted to `Manual`, because that the
+ * name originated with a model is what a later reader would most want to know.
+ *
+ * A failed ask shows the failure. An outage and "no such companies exist" must
+ * not look the same, which is the distinction the covering-RFQ summary already
+ * keeps between `—` and `Nobody invited yet`.
+ */
+function SuggestVendors({
+  discipline,
+  onAsk,
+  onAdd,
+}: {
+  discipline: string
+  onAsk: () => Promise<SuggestedVendor[]>
+  onAdd: (body: ItemVendorInput) => Promise<void>
+}): JSX.Element {
+  const [found, setFound] = useState<SuggestedVendor[] | null>(null)
+  const [asking, setAsking] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  // Keyed by name, which is what identifies an unstored candidate — these have
+  // no id, precisely because nothing has recorded them.
+  const [rowError, setRowError] = useState<Record<string, string>>({})
+  const [added, setAdded] = useState<Set<string>>(new Set())
+
+  async function ask() {
+    setAsking(true)
+    setError(null)
+    try {
+      setFound(await onAsk())
+    } catch (err) {
+      // The list is cleared, so a stale answer cannot sit under a failure
+      // message and read as though it were this ask's result.
+      setFound(null)
+      setError((err as Error).message)
+    } finally {
+      setAsking(false)
+    }
+  }
+
+  async function add(vendor: SuggestedVendor) {
+    setRowError((prev) => {
+      const { [vendor.name]: _gone, ...rest } = prev
+      return rest
+    })
+    try {
+      await onAdd({
+        vendor_name: vendor.name,
+        // Stays `Suggested` after a person accepts it — see the card's note.
+        source: 'Suggested',
+        // The model's own reason, carried onto the stored row's provenance so
+        // a later reader sees why this name was put forward at all.
+        ...(vendor.basis ? { note: vendor.basis } : {}),
+      })
+      setAdded((prev) => new Set(prev).add(vendor.name))
+    } catch (err) {
+      setRowError((prev) => ({ ...prev, [vendor.name]: (err as Error).message }))
+    }
+  }
+
+  return (
+    <>
+      {/* Leads with what it is, before anything it produced. */}
+      <p className="muted">
+        Suggested by the model from its training data. Not a web search — verify
+        each company before inviting them.
+      </p>
+
+      <div className="fxrow">
+        <button
+          type="button"
+          className="btn btn-sm"
+          disabled={asking}
+          onClick={() => void ask()}
+        >
+          {asking ? 'Asking…' : 'Suggest vendors'}
+        </button>
+        <span className="muted">
+          {discipline.trim()
+            ? `For ${discipline}, excluding the companies already on this item's lists.`
+            : "This item has no discipline, so the ask is only as good as its description."}
+        </span>
+      </div>
+
+      {error && (
+        <div className="banner banner--error" role="alert">
+          {error}
+        </div>
+      )}
+
+      {found !== null && found.length === 0 && !error && (
+        <p className="muted">
+          The model named nobody it was confident about. That is an answer, not
+          a failure — it was asked to leave out any company it could not vouch
+          for.
+        </p>
+      )}
+
+      {found !== null && found.length > 0 && (
+        <table className="table">
+          <thead>
+            <tr>
+              <th scope="col">Company</th>
+              <th scope="col">Country</th>
+              <th scope="col">Supplies</th>
+              <th scope="col">Why the model says so</th>
+              <th scope="col">
+                <span className="sr-only">Add</span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {found.map((v) => (
+              <tr key={v.name}>
+                <td>
+                  {v.name}
+                  {rowError[v.name] && (
+                    <div className="banner banner--error" role="alert">
+                      {rowError[v.name]}
+                    </div>
+                  )}
+                </td>
+                <td className="muted">{v.country ?? '—'}</td>
+                <td className="muted">{v.supplies ?? '—'}</td>
+                {/* Shown, not hidden behind a tooltip: it is the only thing
+                    the reader has to judge an unverified name by. */}
+                <td className="muted">{v.basis ?? '—'}</td>
+                <td>
+                  {added.has(v.name) ? (
+                    <span className="muted">Added</span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      // One per row and no control that takes them all: see the
+                      // card's note on friction.
+                      aria-label={`Add ${v.name}`}
+                      onClick={() => void add(v)}
+                    >
+                      Add
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </>
   )
 }
 
@@ -599,6 +939,7 @@ export function ItemDetail({
   itemId,
   onBack,
   onHome,
+  onOpenRfq,
 }: {
   projectId: string
   itemId: string
@@ -606,6 +947,12 @@ export function ItemDetail({
   onBack: () => void
   /** Up two levels, to the project roster. */
   onHome: () => void
+  /** Sideways, into one of the RFQs covering this item. A prop rather than a
+   *  `useNavigate` here, so this screen stays renderable without a router —
+   *  `ItemRoute` already holds one and passes it down. Optional because the
+   *  control is the only thing that depends on it, and a caller with nowhere
+   *  to send the reader should render no control rather than a dead one. */
+  onOpenRfq?: (rfqId: string) => void
 }): JSX.Element {
   const [tick, setTick] = useState(0)
   const [editing, setEditing] = useState(false)
@@ -636,6 +983,21 @@ export function ItemDetail({
   // find — and it matches by id, never by name.
   const covering = (data?.rfqs ?? []).filter((r) => r.item_ids.includes(itemId))
   const shortlists = useCoveringShortlists(covering, tick)
+
+  // Both writes re-read the whole project rather than patching local state, so
+  // the four cards, the available-vendor card and the covering-RFQ summary
+  // always agree — the server stays the one authority on what is on this
+  // item's lists. Defined above the early returns for the same reason
+  // `covering` is: they close over `tick`, which the cards below need.
+  async function addVendor(body: ItemVendorInput) {
+    await addItemVendor(projectId, itemId, body)
+    setTick((t) => t + 1)
+  }
+
+  async function removeVendor(entryId: string) {
+    await removeItemVendor(projectId, itemId, entryId)
+    setTick((t) => t + 1)
+  }
 
   // Only the *first* load blanks the screen. `keepPreviousData` keeps `data`
   // across a refresh but `loading` still goes true, so guarding on it alone
@@ -756,7 +1118,10 @@ export function ItemDetail({
 
       {/* Before the registry-wide card: these are the lists somebody actually
           supplied for this package, so they are the narrower and more
-          authoritative answer to "who should bid". */}
+          authoritative answer to "who should bid".
+
+          The two uploads first, then the two curated ones. `onRemove` is passed
+          only to the curated pair — see `VendorListCard`. */}
       <VendorListCard
         source="Client"
         entries={data.item_vendor_lists?.[itemId]?.Client ?? []}
@@ -767,6 +1132,28 @@ export function ItemDetail({
         entries={data.item_vendor_lists?.[itemId]?.Astra ?? []}
         discipline={item.discipline}
       />
+      <VendorListCard
+        source="Manual"
+        entries={data.item_vendor_lists?.[itemId]?.Manual ?? []}
+        discipline={item.discipline}
+        onRemove={removeVendor}
+      >
+        <AddVendorByHand onAdd={addVendor} />
+      </VendorListCard>
+      <VendorListCard
+        source="Suggested"
+        entries={data.item_vendor_lists?.[itemId]?.Suggested ?? []}
+        discipline={item.discipline}
+        onRemove={removeVendor}
+      >
+        <SuggestVendors
+          discipline={item.discipline}
+          onAsk={async () =>
+            (await suggestItemVendors(projectId, itemId)).vendors
+          }
+          onAdd={addVendor}
+        />
+      </VendorListCard>
 
       {/* Above the RFQ list on purpose: who could bid is the question you have
           before an RFQ exists, and after one does the RFQ list is where you
@@ -835,6 +1222,11 @@ export function ItemDetail({
                 <th scope="col">Discipline</th>
                 <th scope="col">Stage</th>
                 <th scope="col">Shortlist</th>
+                {onOpenRfq && (
+                  <th scope="col">
+                    <span className="sr-only">Open</span>
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -859,6 +1251,23 @@ export function ItemDetail({
                         summarise(found.shortlist, found.clientApprover ?? '')
                       )}
                     </td>
+                    {onOpenRfq && (
+                      <td>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-ghost"
+                          // The reference, not the glyph. `›` is the visible
+                          // label because the column is one character wide;
+                          // a screen reader and a test both need to know
+                          // which RFQ this row's control opens, which is the
+                          // same rule the Shortlist button follows.
+                          aria-label={`Open ${r.reference}`}
+                          onClick={() => onOpenRfq(r.id)}
+                        >
+                          ›
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 )
               })}

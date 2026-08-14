@@ -16,6 +16,8 @@ import type {
   Rfq,
   RfqDetail,
   ShortlistEntry,
+  SuggestedVendor,
+  VendorListSource,
   WorkflowItem,
   WorkflowProject,
   WorkflowProjectDetail,
@@ -100,8 +102,34 @@ export function detail(
   }
 }
 
-/** One row of an item's uploaded vendor list. `vendor_id: null` is the
- *  "the registry does not hold them" state, distinct from unapproved. */
+/** An item's four lists, with the ones a test does not care about empty.
+ *
+ *  Spelled out rather than left `Partial`, because the server always sends all
+ *  four keys — a fixture that omitted one would let a screen read `undefined`
+ *  in a test and a real array in the browser. */
+export function vendorLists(
+  over: Partial<Record<VendorListSource, ItemVendorEntry[]>> = {},
+): Record<VendorListSource, ItemVendorEntry[]> {
+  return { Client: [], Astra: [], Manual: [], Suggested: [], ...over }
+}
+
+/** One company a model named. No approvals, no registry link — see
+ *  `SuggestedVendor`. */
+export function suggestion(
+  over: Partial<SuggestedVendor> = {},
+): SuggestedVendor {
+  return {
+    name: 'DUCAB HV CABLE',
+    country: 'United Arab Emirates',
+    supplies: 'HV and MV power cable',
+    basis: 'A long-established cable maker in the UAE.',
+    ...over,
+  }
+}
+
+/** One row of an item's vendor list. `vendor_id: null` is the "the registry
+ *  does not hold them" state, distinct from unapproved — and it is what every
+ *  curated row carries, since the server never looks a typed name up. */
 export function vendorEntry(
   over: Partial<ItemVendorEntry> = {},
 ): ItemVendorEntry {
