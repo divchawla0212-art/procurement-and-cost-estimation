@@ -96,6 +96,86 @@ describe('ItemDetail', () => {
     expect(search.closest('label')).toBeNull()
   })
 
+  it('invites every selected vendor', async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(
+      detail({ items: [GENERATOR], rfqs: [rfq('rfq_1', 'ADP-RFQ-2026-014', ['itm_1'])] }),
+    )
+    vi.mocked(fetchAvailableBidders).mockResolvedValue(
+      availableList({
+        bidders: [
+          APPROVED_BIDDER,
+          { ...APPROVED_BIDDER, id: 'bdr_other', name: 'Gulf Crescent Fabricators' },
+        ],
+      }),
+    )
+    vi.mocked(fetchRfq).mockResolvedValue({ ...RFQ_DETAIL, shortlist: [] })
+    vi.mocked(inviteRegisteredBidder).mockResolvedValue(shortlistEntry())
+
+    renderItem()
+    fireEvent.click(await screen.findByRole('button', { name: /select these 2/i }))
+    fireEvent.click(screen.getByRole('button', { name: /shortlist selected \(2\)/i }))
+
+    // One call per vendor, through the same route the row button uses, so the
+    // server's per-vendor guards still run on each.
+    await waitFor(() => expect(inviteRegisteredBidder).toHaveBeenCalledTimes(2))
+    expect(inviteRegisteredBidder).toHaveBeenCalledWith('rfq_1', {
+      vendor_id: 'bdr_almunara',
+    })
+    expect(inviteRegisteredBidder).toHaveBeenCalledWith('rfq_1', {
+      vendor_id: 'bdr_other',
+    })
+  })
+
+  it('keeps a refused vendor ticked and invites the rest', async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(
+      detail({ items: [GENERATOR], rfqs: [rfq('rfq_1', 'ADP-RFQ-2026-014', ['itm_1'])] }),
+    )
+    vi.mocked(fetchAvailableBidders).mockResolvedValue(
+      availableList({
+        bidders: [
+          APPROVED_BIDDER,
+          { ...APPROVED_BIDDER, id: 'bdr_other', name: 'Gulf Crescent Fabricators' },
+        ],
+      }),
+    )
+    vi.mocked(fetchRfq).mockResolvedValue({ ...RFQ_DETAIL, shortlist: [] })
+    vi.mocked(inviteRegisteredBidder).mockImplementation((_rfqId, body) =>
+      body.vendor_id === 'bdr_other'
+        ? Promise.reject(
+            new Error(
+              'Gulf Crescent Fabricators is on hold — an override reason is required.',
+            ),
+          )
+        : Promise.resolve(shortlistEntry()),
+    )
+
+    renderItem()
+    fireEvent.click(await screen.findByRole('button', { name: /select these 2/i }))
+    fireEvent.click(screen.getByRole('button', { name: /shortlist selected \(2\)/i }))
+
+    // Not all-or-nothing: the successful write has already landed through
+    // `locked_update` and there is nothing to roll it back with.
+    expect(await screen.findByText(/1 invited · 1 refused/i)).toBeInTheDocument()
+    const row = screen.getByText('Gulf Crescent Fabricators').closest('tr')!
+    expect(within(row).getByText(/an override reason is required/i)).toBeInTheDocument()
+    // Still ticked, so the reader retries exactly what failed.
+    expect(screen.getByText(/^1 selected/)).toBeInTheDocument()
+  })
+
+  it('has no bulk control when no RFQ covers the item', async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(
+      detail({ items: [GENERATOR], rfqs: [] }),
+    )
+    vi.mocked(fetchAvailableBidders).mockResolvedValue(
+      availableList({ bidders: [APPROVED_BIDDER] }),
+    )
+
+    renderItem()
+    fireEvent.click(await screen.findByRole('button', { name: /select these 1/i }))
+
+    expect(screen.queryByRole('button', { name: /shortlist selected/i })).toBeNull()
+  })
+
   it('selects the vendors that are actually on screen', async () => {
     vi.mocked(fetchWorkflowProject).mockResolvedValue(detail({ items: [GENERATOR] }))
     vi.mocked(fetchAvailableBidders).mockResolvedValue(

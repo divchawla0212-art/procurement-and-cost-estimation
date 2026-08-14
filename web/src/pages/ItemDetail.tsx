@@ -103,6 +103,9 @@ function AvailableVendorList({
   // re-fetches under a chip, and an index would move a tick onto a different
   // company. Third instance of that rule on this screen.
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  // What the last batch did. Held rather than derived, because it describes an
+  // action that has finished — the rows it refers to have already re-rendered.
+  const [summary, setSummary] = useState<string | null>(null)
   // Which approvals a vendor must carry — AND, never OR, the same rule
   // `bidders.available` states. Null until the first response names them, so
   // the browser never spells an approver for itself; once known, all of them
@@ -142,6 +145,46 @@ function AvailableVendorList({
       .map((e) => e.vendor_id)
       .filter((id): id is string => id !== null),
   )
+
+  /**
+   * Invite everything ticked, one vendor at a time.
+   *
+   * There is no bulk endpoint and this deliberately does not add one: the
+   * server's per-vendor guards — the override reason a blocked bidder demands,
+   * the refusal of a duplicate invitation — are what make an invitation an
+   * attributed act, and a bulk route would have to reimplement or bypass them.
+   *
+   * Sequential rather than `Promise.all`: every one of these is a
+   * read-modify-write on the same document behind `locked_update`, so firing
+   * them together only makes them queue on that lock with their errors
+   * interleaved.
+   *
+   * Not all-or-nothing. One blocked vendor among fifty would otherwise block
+   * the batch, and there is nothing to roll the successful writes back with —
+   * they have already landed.
+   */
+  async function inviteSelected() {
+    const failed = new Map<string, string>()
+    let invited = 0
+    for (const id of selected) {
+      try {
+        await inviteRegisteredBidder(target, { vendor_id: id })
+        invited += 1
+      } catch (err) {
+        failed.set(id, (err as Error).message)
+      }
+    }
+    setRowError((prev) => ({ ...prev, ...Object.fromEntries(failed) }))
+    // Successes leave the selection; refusals stay ticked, so the reader fixes
+    // the reason and retries exactly what failed rather than re-selecting.
+    setSelected(new Set(failed.keys()))
+    setSummary(
+      `${invited} invited` + (failed.size ? ` · ${failed.size} refused` : ''),
+    )
+    // One reload for the whole batch, so the Invited marks and the RFQ summary
+    // below move together instead of the table re-rendering under each call.
+    onInvited()
+  }
 
   async function invite(bidderId: string) {
     setRowError((prev) => {
@@ -322,6 +365,22 @@ function AvailableVendorList({
               <span className="muted">
                 {selected.size} selected
                 {hidden.length > 0 && ` · ${hidden.length} not shown`}
+              </span>
+            )}
+            {/* Absent when there is no RFQ to invite into — the same rule the
+                per-row button follows. */}
+            {target && selected.size > 0 && (
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => void inviteSelected()}
+              >
+                Shortlist selected ({selected.size})
+              </button>
+            )}
+            {summary && (
+              <span className="muted" role="status">
+                {summary}
               </span>
             )}
           </div>
