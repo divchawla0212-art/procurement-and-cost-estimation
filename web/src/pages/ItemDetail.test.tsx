@@ -83,6 +83,54 @@ describe('ItemDetail', () => {
     ])
   })
 
+  it("lists the client's vendors for this item", async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(
+      detail({
+        items: [GENERATOR],
+        item_vendor_lists: {
+          itm_1: { Client: [vendorEntry()], Astra: [] },
+        },
+      }),
+    )
+
+    renderItem()
+
+    const card = await screen.findByRole('region', { name: /client list/i })
+    expect(within(card).getByText('AL MUNARA SWITCHGEAR LLC')).toBeInTheDocument()
+  })
+
+  it('marks a vendor the registry does not hold', async () => {
+    // `null` is "the export named them and we cannot find them", which is not
+    // the same as unapproved — the same three-state rule the shortlist keeps.
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(
+      detail({
+        items: [GENERATOR],
+        item_vendor_lists: {
+          itm_1: {
+            Client: [vendorEntry({ vendor_id: null, vendor_name: 'STRANGER LLC' })],
+            Astra: [],
+          },
+        },
+      }),
+    )
+
+    renderItem()
+
+    const card = await screen.findByRole('region', { name: /client list/i })
+    expect(within(card).getByText(/not in the registry/i)).toBeInTheDocument()
+  })
+
+  it('says when a list has not been uploaded', async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(
+      detail({ items: [GENERATOR], item_vendor_lists: { itm_1: { Client: [], Astra: [] } } }),
+    )
+
+    renderItem()
+
+    const card = await screen.findByRole('region', { name: /astra list/i })
+    expect(within(card).getByText(/no astra list uploaded/i)).toBeInTheDocument()
+  })
+
   it('offers both vendor list uploads when editing an item', async () => {
     vi.mocked(fetchWorkflowProject).mockResolvedValue(detail({ items: [GENERATOR] }))
 

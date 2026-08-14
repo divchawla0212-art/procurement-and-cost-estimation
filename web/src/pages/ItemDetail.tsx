@@ -12,7 +12,13 @@ import { useAsync } from '../useAsync'
 import type { CoveringShortlist } from './covering-shortlists'
 import { summarise, useCoveringShortlists } from './covering-shortlists'
 import { ItemForm, RaiseRfqForm } from './forms'
-import type { Rfq, WorkflowItem, WorkflowItemInput } from '../types'
+import type {
+  ItemVendorEntry,
+  Rfq,
+  VendorListSource,
+  WorkflowItem,
+  WorkflowItemInput,
+} from '../types'
 import {
   ApprovalPills,
   Breadcrumb,
@@ -498,6 +504,78 @@ function AvailableVendorList({
   )
 }
 
+/**
+ * One uploaded vendor list, as a card.
+ *
+ * The two lists answer different questions — who the client will accept, and
+ * who we have qualified — so they are two cards rather than one table with a
+ * source column: a reader looking at "the client's list" should not have to
+ * filter the contractor's out of it by eye.
+ *
+ * Approvals come from the registry through `vendor_id`, never from the entry,
+ * which is why an unlinked row shows a mark rather than empty pills: no
+ * registry row means no finding either way, not "approved by nobody".
+ */
+function VendorListCard({
+  source,
+  entries,
+  discipline,
+}: {
+  source: VendorListSource
+  entries: ItemVendorEntry[]
+  discipline: string
+}): JSX.Element {
+  const label = source === 'Client' ? 'Client list' : 'Astra list'
+  const linked = entries.filter((e) => e.vendor_id !== null).length
+
+  return (
+    <Card title={label}>
+      {entries.length === 0 ? (
+        <EmptyState title={`No ${label.toLowerCase()} uploaded`}>
+          Edit the item and add the {source === 'Client' ? 'client' : 'Astra'}{' '}
+          Approved Vendor List. It is narrowed to this item's discipline on the
+          way in, so only the vendors registered for {discipline || 'it'} are
+          kept.
+        </EmptyState>
+      ) : (
+        <>
+          <table className="table">
+            <thead>
+              <tr>
+                <th scope="col">Vendor</th>
+                <th scope="col">Registry</th>
+                <th scope="col">Product groups</th>
+              </tr>
+            </thead>
+            <tbody>
+              {entries.map((e) => (
+                <tr key={e.id}>
+                  {/* The name as the export wrote it, so a row can be read
+                      back against its source document. */}
+                  <td>{e.vendor_name}</td>
+                  <td>
+                    {e.vendor_id === null ? (
+                      <span className="warn">Not in the registry</span>
+                    ) : (
+                      <span className="muted">Linked</span>
+                    )}
+                  </td>
+                  <td className="muted">{e.trade_categories.join(' · ') || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="muted">
+            {entries.length} on the {label.toLowerCase()} for{' '}
+            {discipline || 'this item'} · {linked} in the registry
+            {linked < entries.length && ` · ${entries.length - linked} not found`}
+          </p>
+        </>
+      )}
+    </Card>
+  )
+}
+
 function toInput(item: WorkflowItem): WorkflowItemInput {
   const { id: _id, project_id: _projectId, ...rest } = item
   return rest
@@ -675,6 +753,20 @@ export function ItemDetail({
           </div>
         </Card>
       )}
+
+      {/* Before the registry-wide card: these are the lists somebody actually
+          supplied for this package, so they are the narrower and more
+          authoritative answer to "who should bid". */}
+      <VendorListCard
+        source="Client"
+        entries={data.item_vendor_lists?.[itemId]?.Client ?? []}
+        discipline={item.discipline}
+      />
+      <VendorListCard
+        source="Astra"
+        entries={data.item_vendor_lists?.[itemId]?.Astra ?? []}
+        discipline={item.discipline}
+      />
 
       {/* Above the RFQ list on purpose: who could bid is the question you have
           before an RFQ exists, and after one does the RFQ list is where you
