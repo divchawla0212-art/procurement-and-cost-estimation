@@ -42,13 +42,30 @@ from workflow.bidders import (
 from workflow.gates import GateResult, check_gate
 from workflow.models.bidder import Bidder, PrequalStatus
 from workflow.models.clarification import Addendum, ClarificationQuery, QueryCategory
-from workflow.models.project import Item, ProjectStatus, VendorListSource
+from workflow.models.project import (
+    ItemVendorEntry,
+    Item,
+    ProjectStatus,
+    VendorListSource,
+)
 
-#: Both sources, derived from the literal rather than restated, so the payload
-#: cannot drift from what the store will accept.
+#: All four sources, derived from the literal rather than restated, so the
+#: payload cannot drift from what the store will accept.
 VENDOR_LIST_SOURCES: tuple[str, ...] = get_args(VendorListSource)
+
+#: How a curated row says it arrived. `source_document` on an uploaded row names
+#: the export; on these it names the act, so every row on the item screen is
+#: traceable however it got there. The `Suggested` sentence is the honest-label
+#: rule again: these providers cannot browse, so a row a model named says so on
+#: its face rather than posing as something found.
+CURATED_PROVENANCE: dict[str, str] = {
+    "Manual": "added by hand",
+    "Suggested": "suggested by the model",
+}
 from workflow.models.rfq import Attachment, ShortlistEntry
 from workflow.rfq_extractor import extract_rfq_info
+from workflow.vendor_suggestions import suggest as suggest_vendors
+from shared.llm.factory import get_client
 from workflow.stages import STAGE_ORDER, Stage
 from workflow.store import IncompleteShortlistEntry, WorkflowStore
 
@@ -483,6 +500,148 @@ def upload_item_vendor_list(
             "linked": sum(1 for e in stored if e.vendor_id is not None),
         },
     }
+
+
+class ItemVendorIn(BaseModel):
+    """One vendor a person is putting on an item's list.
+
+    There is no `vendor_id` on this body, and the route never derives one. See
+    `add_item_vendor`.
+
+    `source` defaults to `Manual` because typing a name is the common case; a
+    row accepted off the suggestion card sends `Suggested` so it stays labelled
+    as one. The uploaded sources are refused, by the store rather than here.
+    """
+
+    vendor_name: str
+    source: VendorListSource = "Manual"
+    trade_categories: list[str] | None = None
+    note: str | None = None
+
+
+@router.post("/projects/{project_id}/items/{item_id}/vendors", status_code=201)
+def add_item_vendor(
+    project_id: str,
+    item_id: str,
+    body: ItemVendorIn,
+    user: User = Depends(current_user),
+) -> dict:
+    """Put one vendor on this item's list, by hand or off the suggestion card.
+
+    **`vendor_id` is always `None`, and the name is never looked up in the
+    registry.** Not an omission: a match here would silently attach a real
+    company's approvals to whatever somebody typed, and this repository has
+    twice recorded name matching as a shipped defect. If the vendor really is in
+    the registry, the available-vendor card is where to find them — and that
+    card links by id, which is a fact rather than a guess.
+
+    **Nothing here creates a bidder or grants an approval.** The registry is
+    organisation-wide and arrives whole from its own import; a write attached to
+    one line of equipment must not enrol a company across every project.
+
+    `note` rides on `source_document` rather than on a new field, because a note
+    here is *why this row exists*, which is what `source_document` already
+    means. `ItemVendorEntry` gains nothing this phase — a hand-added company is
+    already exactly what that record describes.
+    """
+    name = body.vendor_name.strip()
+    if not name:
+        # A vendor with no name cannot be invited later, so storing one would
+        # put a row on screen that no action can be taken on.
+        raise HTTPException(status_code=422, detail="A vendor needs a name.")
+
+    try:
+        with persistence.locked_update(_root()) as store:
+            item = _owned_item(store, project_id, item_id)
+            # Falls back to the source's own name for an uploaded source, which
+            # never lands: `add_item_vendor_entry` refuses it below, and the
+            # refusal is defined there once rather than restated here.
+            provenance = CURATED_PROVENANCE.get(body.source, body.source)
+            note = (body.note or "").strip()
+            stored = store.add_item_vendor_entry(item_id, ItemVendorEntry(
+                item_id=item_id,
+                source=body.source,
+                vendor_id=None,
+                vendor_name=name,
+                # The item's own scope, so a curated row sits in the same shape
+                # as an uploaded one: "on this item's list, for this trade".
+                trade_categories=(
+                    body.trade_categories
+                    if body.trade_categories is not None
+                    else list(disciplines.product_groups(item.discipline))
+                ),
+                uploaded_by=user.email,
+                uploaded_at=datetime.now(timezone.utc),
+                source_document=f"{provenance}: {note}" if note else provenance,
+            ))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc).strip("'")) from exc
+    except ValueError as exc:
+        # The store's sentence, which names the source and says what would work
+        # instead — re-uploading the corrected export.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return stored.model_dump(mode="json")
+
+
+@router.delete(
+    "/projects/{project_id}/items/{item_id}/vendors/{entry_id}", status_code=204
+)
+def remove_item_vendor(project_id: str, item_id: str, entry_id: str) -> None:
+    """Take one curated vendor off this item's list, **by id**.
+
+    An uploaded row is refused, by the store: it is part of a document, and
+    correcting it means re-uploading the corrected export rather than editing
+    the copy. By id and never by name, because two suppliers can share a
+    trading name.
+    """
+    try:
+        with persistence.locked_update(_root()) as store:
+            _owned_item(store, project_id, item_id)
+            store.remove_item_vendor_entry(item_id, entry_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc).strip("'")) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/projects/{project_id}/items/{item_id}/vendor-suggestions")
+def suggest_item_vendors(project_id: str, item_id: str) -> dict:
+    """Companies a model believes supply this item. **Stores nothing.**
+
+    Same shape as `/rfqs/extract`, and for the same reason: a suggestion the
+    reader rejects should leave nothing behind, and one they accept should be
+    recorded as *their* act through `add_item_vendor` — one vendor at a time,
+    with their name on it. There is deliberately no bulk accept.
+
+    **This is not a web search.** `shared/llm/` has no crawler and no provider
+    search tool, so what comes back is what the model recalls from training.
+    `workflow/vendor_suggestions.py` says so at length; the screen says so to
+    the reader; and nothing in the response is dressed up as a lookup.
+
+    Read-only, so `_owned_item` runs against a loaded store rather than inside
+    `locked_update` — there is no write for it to gate.
+
+    A provider failure is a 502 and never an empty list: an outage and "no such
+    companies exist" must not look the same on screen.
+    """
+    store = _read()
+    item = _owned_item(store, project_id, item_id)
+    # Every source, uploaded and curated alike. The reader's question is "who
+    # else", not "who else that I did not upload".
+    exclude = [e.vendor_name for e in store.item_vendor_list(item_id)]
+    try:
+        found = suggest_vendors(
+            get_client(),
+            discipline=item.discipline,
+            description=f"{item.item_type} — {item.description}",
+            exclude=exclude,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"The model could not be asked for vendors: {exc}",
+        ) from exc
+    return {"vendors": [v.model_dump(mode="json") for v in found]}
 
 
 @router.post("/projects/{project_id}/items", status_code=201)
