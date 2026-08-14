@@ -137,6 +137,102 @@ def test_a_product_group_matches_whole_string_never_as_a_substring():
     assert kept == []
 
 
+# -- the two curated sources --------------------------------------------------
+#
+# The uploaded sources are documents and are replaced by re-uploading them. The
+# curated ones are built a vendor at a time by a person. Each set refuses the
+# other's operations, which is not defensive noise: an upload that wiped a
+# buyer's hand-added companies would destroy work with no undo, and a hand-add
+# appended to an uploaded list would leave that list no longer matching the
+# export it came from.
+
+
+def _store_with_item():
+    from datetime import date
+
+    from workflow.store import WorkflowStore
+
+    store = WorkflowStore()
+    project = store.create_project(
+        name="Haliba", code="HAL", client="Al Dhafra Petroleum", location="UAE",
+        live_period_start=date(2026, 1, 1), live_period_end=date(2029, 12, 31),
+    )
+    item = store.create_item(
+        project_id=project.id, item_type="HV cable", description="11 kV",
+        qty=1, uom="m", discipline="Cables", estimated_value_aed=1,
+    )
+    return store, item
+
+
+def _stored(item_id: str, source: str, name: str) -> ItemVendorEntry:
+    return ItemVendorEntry(
+        item_id=item_id, source=source, vendor_id=None, vendor_name=name,
+        trade_categories=[LV_CABLE], uploaded_by="buyer@example.com",
+        uploaded_at=NOW, source_document="added by hand",
+    )
+
+
+def test_hand_added_vendors_accumulate_rather_than_replace():
+    store, item = _store_with_item()
+    store.add_item_vendor_entry(item.id, _stored(item.id, "Manual", "First Co"))
+    store.add_item_vendor_entry(item.id, _stored(item.id, "Manual", "Second Co"))
+
+    names = [e.vendor_name for e in store.item_vendor_list(item.id, "Manual")]
+    assert names == ["First Co", "Second Co"]
+
+
+def test_an_upload_cannot_replace_the_hand_added_list():
+    """It would destroy a buyer's work with no undo."""
+    store, item = _store_with_item()
+    store.add_item_vendor_entry(item.id, _stored(item.id, "Manual", "First Co"))
+
+    with pytest.raises(ValueError, match="Manual"):
+        store.set_item_vendor_list(item.id, "Manual", [])
+
+
+def test_a_hand_add_cannot_append_to_an_uploaded_list():
+    """It would leave the export no longer matching its source document."""
+    store, item = _store_with_item()
+
+    with pytest.raises(ValueError, match="Client"):
+        store.add_item_vendor_entry(item.id, _stored(item.id, "Client", "X"))
+
+
+def test_a_vendor_is_removed_by_id_never_by_name():
+    """Two suppliers can share a trading name."""
+    store, item = _store_with_item()
+    first = store.add_item_vendor_entry(item.id, _stored(item.id, "Manual", "Same Name"))
+    store.add_item_vendor_entry(item.id, _stored(item.id, "Manual", "Same Name"))
+
+    store.remove_item_vendor_entry(item.id, first.id)
+
+    remaining = store.item_vendor_list(item.id, "Manual")
+    assert len(remaining) == 1
+    assert remaining[0].id != first.id
+
+
+def test_an_uploaded_row_cannot_be_removed_one_at_a_time():
+    """Correcting an export means re-uploading the corrected export."""
+    store, item = _store_with_item()
+    store.set_item_vendor_list(item.id, "Client", [_stored(item.id, "Client", "X")])
+    stored = store.item_vendor_list(item.id, "Client")[0]
+
+    with pytest.raises(ValueError, match="Client"):
+        store.remove_item_vendor_entry(item.id, stored.id)
+
+
+def test_a_suggestion_is_curated_too():
+    """Model-suggested vendors are accepted one at a time, like hand-added
+    ones — there is deliberately no bulk accept."""
+    store, item = _store_with_item()
+
+    store.add_item_vendor_entry(item.id, _stored(item.id, "Suggested", "Model Co"))
+
+    assert [e.vendor_name for e in store.item_vendor_list(item.id, "Suggested")] == [
+        "Model Co"
+    ]
+
+
 def test_the_source_and_the_document_ride_on_every_entry():
     """A row has to be traceable back to the upload that produced it."""
     kept = _entries([_bidder("bdr_1", "Cable Co", LV_CABLE)], source="Astra")

@@ -446,6 +446,44 @@ def test_deleting_an_item_takes_its_vendor_lists(tmp_path):
     assert [e for e in doc["item_vendor_lists"] if e["item_id"] == item.id] == []
 
 
+def test_deleting_an_item_takes_its_hand_added_vendors_too(tmp_path):
+    """The cascade is per item, not per source.
+
+    `delete_item` pops the whole `_item_vendor_lists` entry, so a source added
+    later must not need the cascade extending to cover it. Written the moment
+    `Manual` and `Suggested` arrived, because the failure it guards is silent:
+    an entry pointing at an item that is gone, surviving the restart.
+    """
+    store, _ = populated_store()
+    item = _uncovered_item(store)
+    store.set_item_vendor_list(item.id, "Client", [an_entry(item.id, "Client", "A")])
+    store.add_item_vendor_entry(item.id, an_entry(item.id, "Manual", "By hand"))
+    store.add_item_vendor_entry(item.id, an_entry(item.id, "Suggested", "By model"))
+    persistence.save(str(tmp_path), store)
+
+    store.delete_item(item.id)
+    persistence.save(str(tmp_path), store)
+
+    doc = json.loads((tmp_path / "workflow.json").read_text(encoding="utf-8"))
+    assert [e for e in doc["item_vendor_lists"] if e["item_id"] == item.id] == []
+
+
+def test_a_curated_entry_survives_a_round_trip(tmp_path):
+    """`source` is what decides which operations are legal on a row, so it has
+    to come back off disk as it went on. A `Manual` row reloading as `Client`
+    would make itself unremovable."""
+    store, _ = populated_store()
+    item = _uncovered_item(store)
+    store.add_item_vendor_entry(item.id, an_entry(item.id, "Suggested", "Model Co"))
+    persistence.save(str(tmp_path), store)
+
+    loaded = persistence.load(str(tmp_path))
+
+    entries = loaded.item_vendor_list(item.id, "Suggested")
+    assert [e.vendor_name for e in entries] == ["Model Co"]
+    assert entries[0].source == "Suggested"
+
+
 def test_deleting_a_project_takes_every_items_vendor_lists(tmp_path):
     """The cascade reaches through the item cascade. An entry left behind is an
     entry pointing at an item that is gone, and it survives the restart."""

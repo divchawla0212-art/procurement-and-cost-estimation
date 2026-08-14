@@ -50,24 +50,42 @@ def new_item_vendor_entry_id() -> str:
     return f"ive_{uuid4().hex[:8]}"
 
 
-#: Which of the two uploads an entry came from. The client's Approved Vendor
-#: List, and Astra's subset of it. A literal rather than free text because the
-#: source decides which list a re-upload replaces, and a typo would quietly
-#: create a third one.
-VendorListSource = Literal["Client", "Astra"]
+#: Where an entry on an item's vendor list came from. A literal rather than free
+#: text because the source decides which operations are legal on it, and a typo
+#: would quietly create a fifth list nothing knows how to replace.
+#:
+#: `Client` and `Astra` are the two uploads — the client's Approved Vendor List
+#: and Astra's subset of it. `Manual` is a company somebody typed in. `Suggested`
+#: is one a model named, and is kept distinct from `Manual` even after a person
+#: accepts it: that the name originated with a model is the thing a later reader
+#: would most want to know.
+VendorListSource = Literal["Client", "Astra", "Manual", "Suggested"]
+
+#: Sources that arrive as a whole document and are replaced by re-uploading it.
+UPLOADED_SOURCES: tuple[VendorListSource, ...] = ("Client", "Astra")
+#: Sources built up one vendor at a time by a person.
+CURATED_SOURCES: tuple[VendorListSource, ...] = ("Manual", "Suggested")
 
 
 class ItemVendorEntry(BaseModel):
-    """One vendor on one item's list, from one of the two uploads.
+    """One vendor on one item's list, from any of the four sources.
+
+    A hand-added company and a model-suggested one need nothing extra: they
+    are already exactly what this record describes — a vendor name, no registry
+    link, and the item-relevant trade categories. `source` is the only thing
+    that tells them apart, and it is what decides which operations are legal.
 
     `vendor_id` is the export's own vendor number as `bdr_<number>` — the key
     `avl_import` already assigns, and the same one the registry was built with
     — so matching is an exact lookup rather than a name comparison. `None`
-    means the export named a vendor the registry does not hold: a real,
-    reportable state, and not the same as "unapproved".
+    means the export named a vendor the registry does not hold, or that nobody
+    looked one up because a person typed the name: a real, reportable state,
+    and not the same as "unapproved". **The curated sources always carry
+    `None`** — a name lookup here would silently attach a real company's
+    approvals to whatever somebody typed.
 
-    `vendor_name` is stored as the export wrote it, so a row can be read back
-    against its source document.
+    `vendor_name` is stored as the export wrote it, or as the buyer typed it,
+    so a row can be read back against its source document.
 
     There is deliberately **no** `approved_by` and no copy of the linked
     bidder's prequalification: those are read live through `vendor_id`, the

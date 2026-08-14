@@ -11,6 +11,8 @@ from workflow.models.clarification import (
 )
 from workflow.models.bidder import Bidder, PrequalStatus
 from workflow.models.project import (
+    CURATED_SOURCES,
+    UPLOADED_SOURCES,
     Item,
     ItemVendorEntry,
     Project,
@@ -248,9 +250,52 @@ class WorkflowStore:
         """
         if item_id not in self._items:
             raise KeyError(f"Unknown item: {item_id}")
+        if source not in UPLOADED_SOURCES:
+            # Replacing a curated list wholesale would throw away work somebody
+            # did a vendor at a time, with nothing to undo it.
+            raise ValueError(
+                f"{source} is built one vendor at a time — add and remove its "
+                "vendors individually rather than replacing the whole list."
+            )
         kept = [e for e in self._item_vendor_lists.get(item_id, []) if e.source != source]
         self._item_vendor_lists[item_id] = kept + list(entries)
         return self.item_vendor_list(item_id, source)
+
+    def add_item_vendor_entry(
+        self, item_id: str, entry: ItemVendorEntry
+    ) -> ItemVendorEntry:
+        """Append one vendor, for the curated sources only.
+
+        `Client` and `Astra` are refused because they are documents: appending
+        to one would leave it no longer matching the export it came from, so
+        the screen would show a list that no re-upload reproduces.
+        """
+        if item_id not in self._items:
+            raise KeyError(f"Unknown item: {item_id}")
+        if entry.source not in CURATED_SOURCES:
+            raise ValueError(
+                f"{entry.source} is an uploaded list — re-upload the corrected "
+                "export rather than adding vendors to it one at a time."
+            )
+        self._item_vendor_lists.setdefault(item_id, []).append(entry)
+        return entry
+
+    def remove_item_vendor_entry(self, item_id: str, entry_id: str) -> None:
+        """Remove one vendor **by id**, for the curated sources only.
+
+        By id and never by name, because two suppliers can share a trading
+        name — the same rule `remove_shortlist_entry` keeps.
+        """
+        entries = self._item_vendor_lists.get(item_id, [])
+        found = next((e for e in entries if e.id == entry_id), None)
+        if found is None:
+            raise KeyError(f"Unknown vendor list entry: {entry_id}")
+        if found.source not in CURATED_SOURCES:
+            raise ValueError(
+                f"{found.source} is an uploaded list — re-upload the corrected "
+                "export rather than removing vendors from it one at a time."
+            )
+        self._item_vendor_lists[item_id] = [e for e in entries if e.id != entry_id]
 
     def item_vendor_list(
         self, item_id: str, source: VendorListSource | None = None
