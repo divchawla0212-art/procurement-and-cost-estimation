@@ -13,6 +13,8 @@
 import type {
   BidderSummary,
   Rfq,
+  RfqDetail,
+  ShortlistEntry,
   WorkflowItem,
   WorkflowProject,
   WorkflowProjectDetail,
@@ -89,6 +91,49 @@ export function detail(
   over: Partial<WorkflowProjectDetail> = {},
 ): WorkflowProjectDetail {
   return { project: HALIBA_PROJECT, items: [GENERATOR], rfqs: [], ...over }
+}
+
+/* ------------------------------------------------------------ RFQ detail */
+
+/** One shortlist row. `approved_by` and `client_approved` are both derived
+ *  server-side from the same registry row, so a fixture that sets one should
+ *  set the other to match — an ADNOC pill beside "not on the ADNOC list" is a
+ *  state the server cannot produce. */
+export function shortlistEntry(
+  over: Partial<ShortlistEntry> = {},
+): ShortlistEntry {
+  return {
+    id: 'sle_1',
+    rfq_id: 'rfq_1',
+    vendor_id: 'bdr_almunara',
+    vendor_name: 'Al Munara Switchgear LLC',
+    prequal_status: 'Approved',
+    scope_code_fit: true,
+    included: true,
+    client_approved: true,
+    approved_by: ['ADNOC', 'Astra'],
+    override_by: null,
+    override_reason: null,
+    ...over,
+  }
+}
+
+/** The RFQ payload as the item screen reads it — only `shortlist` and
+ *  `client_approver` matter there, but the whole shape is required. */
+export const RFQ_DETAIL: RfqDetail = {
+  rfq: rfq('rfq_1', 'ADP-RFQ-2026-014', ['itm_1']),
+  gate: { passed: true, reason: null },
+  technical_package: null,
+  shortlist: [],
+  shortlist_approved: false,
+  client_approver: 'ADNOC',
+  tbe_template: null,
+  vdrl: [],
+  bids: [],
+  bid_selection: null,
+  queries: [],
+  addenda: [],
+  bid_due_date: null,
 }
 
 /* --------------------------------------------------------------- bidders */
