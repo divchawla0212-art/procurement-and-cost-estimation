@@ -79,6 +79,22 @@ describe('ItemDetail', () => {
     ])
   })
 
+  it('renders the vendor search as one field, not a box inside a box', async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(detail({ items: [GENERATOR] }))
+    vi.mocked(fetchAvailableBidders).mockResolvedValue(
+      availableList({ bidders: [APPROVED_BIDDER] }),
+    )
+
+    renderItem()
+
+    // `.field` and `.input` are input classes. Put on the wrapping label it
+    // gave the label an input's border and padding and left the real input
+    // with the browser's raw user-agent chrome — two nested boxes.
+    const search = await screen.findByLabelText('Search vendors')
+    expect(search).toHaveClass('input')
+    expect(search.closest('label')).toBeNull()
+  })
+
   it('shows an approval pill against each available vendor', async () => {
     vi.mocked(fetchWorkflowProject).mockResolvedValue(detail({ items: [GENERATOR] }))
     vi.mocked(fetchAvailableBidders).mockResolvedValue(
@@ -662,7 +678,7 @@ describe('ItemDetail', () => {
 
       const card = await screen.findByRole('region', { name: /available vendor/i })
       await within(card).findByText('Al Munara Switchgear LLC')
-      fireEvent.change(within(card).getByLabelText('Search'), {
+      fireEvent.change(within(card).getByLabelText('Search vendors'), {
         target: { value: 'rosemount' },
       })
 

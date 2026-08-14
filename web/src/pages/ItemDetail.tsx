@@ -187,15 +187,22 @@ function AvailableVendorList({
             </p>
           )}
 
-          <label className="field">
-            <span>Search</span>
+          {/* One field, not a label wearing an input's clothes. `.field` is
+              the input class; on the wrapping label it gave the label a
+              border and padding and left the real input with the browser's
+              raw user-agent chrome, so the control read as two nested boxes.
+              `.input` is the inline variant the wizard's filter rows use, and
+              this is now a filter row. */}
+          <div className="fxrow">
             <input
+              className="input"
               type="search"
+              aria-label="Search vendors"
               value={query}
               placeholder="Vendor, product group or manufacturer"
               onChange={(e) => setQuery(e.target.value)}
             />
-          </label>
+          </div>
 
           {/* Which RFQ an invitation lands on. Only asked when the answer is
               not obvious — one covering RFQ needs no question, and none means
