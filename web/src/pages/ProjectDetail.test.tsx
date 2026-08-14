@@ -19,11 +19,16 @@ vi.mock('../api', async (importOriginal) => {
     deleteWorkflowProject: vi.fn(),
     createWorkflowItem: vi.fn(),
     deleteWorkflowItem: vi.fn(),
+    // ItemForm's Discipline field is a picker over the served vocabulary.
+    fetchDisciplines: vi.fn(),
+    extractRfqDoc: vi.fn(),
   }
 })
 
 import {
   createRfq,
+  extractRfqDoc,
+  fetchDisciplines,
   createWorkflowItem,
   deleteWorkflowItem,
   deleteWorkflowProject,
@@ -38,20 +43,30 @@ function renderDetail(onOpenItem = vi.fn(), onBack = vi.fn()) {
   return { onOpenItem, onBack }
 }
 
-function fillItemForm() {
+async function fillItemForm() {
   const type = (label: string, value: string) =>
     fireEvent.change(screen.getByLabelText(label), { target: { value } })
+  // Discipline is a select over the served vocabulary. Changing it before the
+  // options land silently leaves it empty — a `<select>` ignores a value it
+  // has no option for — so wait for the option itself, not just the field.
+  await screen.findByRole('option', { name: 'Generators' })
   type('Item type', 'Gas generator')
   type('Description', '2 x 5 MW containerised')
   type('Quantity', '2')
   type('Unit of measure', 'no')
-  type('Discipline', 'Electrical')
+  // A select, not a text box: free text never matched the export's product
+  // groups, so the discipline is chosen from the served vocabulary.
+  type('Discipline', 'Generators')
   type('Estimated value (AED)', '18000000')
 }
 
 describe('ProjectDetail', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(fetchDisciplines).mockResolvedValue([
+      { name: 'Cables', product_groups: ['CABLES - LV POWER DISTRIBUTION'] },
+      { name: 'Generators', product_groups: ['GENERATOR POWER-OTHERS'] },
+    ])
   })
 
   it("lists the project's items", async () => {
@@ -94,7 +109,7 @@ describe('ProjectDetail', () => {
 
     renderDetail()
     fireEvent.click(await screen.findByRole('button', { name: /add item/i }))
-    fillItemForm()
+    await fillItemForm()
     fireEvent.click(screen.getByRole('button', { name: /save item/i }))
 
     await waitFor(() =>
@@ -117,7 +132,7 @@ describe('ProjectDetail', () => {
 
     renderDetail()
     fireEvent.click(await screen.findByRole('button', { name: /add item/i }))
-    fillItemForm()
+    await fillItemForm()
     fireEvent.click(screen.getByRole('button', { name: /save item/i }))
 
     // Advisory, so the item was still saved — the caution is shown, not raised.
@@ -251,10 +266,13 @@ describe('ProjectDetail', () => {
 
     const type = (label: string, value: string) =>
       fireEvent.change(screen.getByLabelText(label), { target: { value } })
+    // The Discipline select is populated from the served vocabulary; a
+    // `<select>` ignores a value it has no option for, so wait for the option.
+    await screen.findByRole('option', { name: /^Cables/ })
     type('Reference', 'ADP-RFQ-2026-014')
     type('Package', 'Power generation')
-    type('Discipline', 'Electrical')
-    type('Value estimate (AED)', '18000000')
+    type('Discipline', 'Cables')
+    type('Estimated budget (AED)', '18000000')
     fireEvent.click(screen.getByRole('button', { name: /create rfq/i }))
 
     await waitFor(() =>
@@ -263,10 +281,119 @@ describe('ProjectDetail', () => {
         item_ids: ['itm_1'],
         reference: 'ADP-RFQ-2026-014',
         package: 'Power generation',
-        discipline: 'Electrical',
+        // The RFQ form's Discipline is still free text — it is the RFQ's own
+        // scope line, not an item's, and nothing matches vendors on it.
+        discipline: 'Cables',
         value_estimate_aed: 18000000,
       }),
     )
+  })
+
+  it('takes the estimated budget as text, so the scroll wheel cannot alter it', async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(detail())
+
+    renderDetail()
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select Gas generator' }))
+    fireEvent.click(screen.getByRole('button', { name: /raise rfq/i }))
+
+    // A focused number input steps on wheel scroll in Chrome and Edge, so
+    // scrolling a long form past a filled-in budget silently rewrote it. A
+    // text input has no stepping behaviour to suppress.
+    expect(screen.getByLabelText('Estimated budget (AED)')).toHaveAttribute('type', 'text')
+  })
+
+  it('takes the estimated value as text too', async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(detail())
+
+    renderDetail()
+    fireEvent.click(await screen.findByRole('button', { name: /add item/i }))
+
+    expect(screen.getByLabelText('Estimated value (AED)')).toHaveAttribute('type', 'text')
+  })
+
+  it('refuses a budget that is not a number rather than sending NaN', async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(detail())
+
+    renderDetail()
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select Gas generator' }))
+    fireEvent.click(screen.getByRole('button', { name: /raise rfq/i }))
+
+    const type = (label: string, value: string) =>
+      fireEvent.change(screen.getByLabelText(label), { target: { value } })
+    await screen.findByRole('option', { name: /^Cables/ })
+    type('Reference', 'ADP-RFQ-2026-014')
+    type('Package', 'Power generation')
+    type('Discipline', 'Cables')
+    // Grouping separators are what a reader types into a money field, and
+    // `Number('1,800,000')` is NaN — which serialises to null and comes back
+    // as a validation error naming a field they did not think they touched.
+    type('Estimated budget (AED)', '1,800,000')
+    fireEvent.click(screen.getByRole('button', { name: /create rfq/i }))
+
+    expect(
+      await screen.findByText('Estimated budget must be a number.'),
+    ).toBeInTheDocument()
+    expect(createRfq).not.toHaveBeenCalled()
+  })
+
+  it('fills the RFQ form in from an uploaded enquiry document', async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(
+      detail({ items: [GENERATOR, CABLE] }),
+    )
+    vi.mocked(extractRfqDoc).mockResolvedValue({
+      reference: 'MOCK-RFQ-1234',
+      package: 'Gas genset package',
+      // A product group the served vocabulary actually offers. A value outside
+      // it lands in the picker marked "not a listed discipline", which is what
+      // the extractor's own test exists to stop.
+      discipline: 'GENERATOR POWER-OTHERS',
+      value_estimate_aed: 500000,
+    })
+
+    renderDetail()
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select Gas generator' }))
+    fireEvent.click(screen.getByRole('button', { name: /raise rfq/i }))
+
+    await screen.findByRole('option', { name: /^Cables/ })
+    const file = new File(['%PDF-1.4'], 'enquiry.pdf', { type: 'application/pdf' })
+    fireEvent.change(screen.getByLabelText(/fill in from the enquiry document/i), {
+      target: { files: [file] },
+    })
+
+    await waitFor(() =>
+      expect(screen.getByLabelText('Reference')).toHaveValue('MOCK-RFQ-1234'),
+    )
+    expect(extractRfqDoc).toHaveBeenCalledWith(file)
+    expect(screen.getByLabelText('Package')).toHaveValue('Gas genset package')
+    expect(screen.getByLabelText('Discipline')).toHaveValue('GENERATOR POWER-OTHERS')
+    // A string, because the field is a text input — see the scroll-wheel test
+    // above. This is a real behaviour change, stated rather than loosened to
+    // accept either.
+    expect(screen.getByLabelText('Estimated budget (AED)')).toHaveValue('500000')
+  })
+
+  it('leaves the fields alone when the document cannot be read', async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(
+      detail({ items: [GENERATOR, CABLE] }),
+    )
+    vi.mocked(extractRfqDoc).mockRejectedValue(new Error('The upload has no file name.'))
+
+    renderDetail()
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select Gas generator' }))
+    fireEvent.click(screen.getByRole('button', { name: /raise rfq/i }))
+
+    await screen.findByRole('option', { name: /^Cables/ })
+    fireEvent.change(screen.getByLabelText('Reference'), {
+      target: { value: 'ADP-RFQ-2026-014' },
+    })
+    fireEvent.change(screen.getByLabelText(/fill in from the enquiry document/i), {
+      target: { files: [new File([''], 'enquiry.pdf')] },
+    })
+
+    // The server's own sentence, and the reference the reader had already
+    // typed still there to submit.
+    expect(await screen.findByText(/has no file name/i)).toBeInTheDocument()
+    expect(screen.getByLabelText('Reference')).toHaveValue('ADP-RFQ-2026-014')
   })
 
   it('can raise one RFQ spanning several items', async () => {
@@ -303,10 +430,13 @@ describe('ProjectDetail', () => {
 
     const type = (label: string, value: string) =>
       fireEvent.change(screen.getByLabelText(label), { target: { value } })
+    // The Discipline select is populated from the served vocabulary; a
+    // `<select>` ignores a value it has no option for, so wait for the option.
+    await screen.findByRole('option', { name: /^Cables/ })
     type('Reference', 'ADP-RFQ-2026-014')
     type('Package', 'Power generation')
-    type('Discipline', 'Electrical')
-    type('Value estimate (AED)', '18000000')
+    type('Discipline', 'Cables')
+    type('Estimated budget (AED)', '18000000')
     fireEvent.click(screen.getByRole('button', { name: /create rfq/i }))
 
     expect(await screen.findByText(/does not belong to project/i)).toBeInTheDocument()
@@ -327,7 +457,7 @@ describe('ProjectDetail', () => {
 
     renderDetail()
     fireEvent.click(await screen.findByRole('button', { name: /add item/i }))
-    fillItemForm()
+    await fillItemForm()
     fireEvent.click(screen.getByRole('button', { name: /save item/i }))
     await screen.findByText(/falls outside the project live period/i)
 

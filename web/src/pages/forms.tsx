@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import type { FormEvent, JSX, ReactNode } from 'react'
+import { fetchDisciplines } from '../api'
+import { useAsync } from '../useAsync'
 import type {
   RfqInput,
   WorkflowItemInput,
@@ -192,6 +194,80 @@ const BLANK_ITEM: WorkflowItemInput = {
   is_long_lead: false,
 }
 
+/**
+ * The item's discipline, chosen from the served vocabulary.
+ *
+ * A picker rather than a text box because the value is matched whole against
+ * the client's product group descriptions: free text never matched, so every
+ * item read as though no approved vendor covered it.
+ *
+ * An item whose stored discipline is not in the vocabulary keeps it, as an
+ * extra option marked as such. Dropping it would silently rewrite a stored
+ * value the moment somebody opened the form to change the quantity — and the
+ * items that predate the vocabulary are exactly the ones most likely to be
+ * edited.
+ */
+function DisciplineSelect({
+  id,
+  value,
+  onChange,
+  productGroups = false,
+}: {
+  id: string
+  value: string
+  onChange: (value: string) => void
+  /** Also offer the individual product groups behind each discipline, grouped
+   *  under it. An item is scoped to a family; an RFQ is often cut narrower
+   *  than that — one cable type rather than all eleven — so its scope line
+   *  wants both levels to choose from. */
+  productGroups?: boolean
+}): JSX.Element {
+  const { data } = useAsync(() => fetchDisciplines(), [])
+  const families = data ?? []
+  const offered = families.flatMap((d) =>
+    productGroups ? [d.name, ...d.product_groups] : [d.name],
+  )
+  // While the fetch is in flight `offered` is empty, so a stored value would
+  // briefly look unrecognised. Harmless — it is listed either way, and the
+  // label is the only thing that changes when the list lands.
+  const unlisted = value !== '' && !offered.includes(value)
+
+  return (
+    <select
+      id={id}
+      className="field"
+      required
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+    >
+      <option value="">Choose a discipline…</option>
+      {productGroups
+        ? families.map((d) => (
+            <optgroup key={d.name} label={d.name}>
+              {/* The family itself first, so "every cable type" stays one
+                  click rather than eleven separate RFQs. */}
+              <option value={d.name}>
+                {d.name} — all {d.product_groups.length} product groups
+              </option>
+              {d.product_groups.map((group) => (
+                <option key={group} value={group}>
+                  {group}
+                </option>
+              ))}
+            </optgroup>
+          ))
+        : families.map((d) => (
+            <option key={d.name} value={d.name}>
+              {d.name}
+            </option>
+          ))}
+      {unlisted && (
+        <option value={value}>{value} — not a listed discipline</option>
+      )}
+    </select>
+  )
+}
+
 export function ItemForm({
   initial,
   submitLabel,
@@ -204,7 +280,18 @@ export function ItemForm({
   onCancel: () => void
 }): JSX.Element {
   const [f, setF] = useState<WorkflowItemInput>(initial ?? BLANK_ITEM)
-  const { onSubmit: submit, error, busy } = useSubmit(() => onSubmit(f))
+  // The string the reader is typing is the source of truth for the money
+  // field; the number is derived from it once, at submit. Holding only the
+  // number is what forced `Number(e.target.value)` on every keystroke, so a
+  // half-typed value round-tripped through NaN and back.
+  const [valueText, setValueText] = useState(
+    String((initial ?? BLANK_ITEM).estimated_value_aed),
+  )
+  const { onSubmit: submit, error, busy } = useSubmit(async () => {
+    const parsed = Number(valueText.trim())
+    if (!Number.isFinite(parsed)) throw new Error('Estimated value must be a number.')
+    await onSubmit({ ...f, estimated_value_aed: parsed })
+  })
 
   return (
     <form className="form-grid" onSubmit={submit}>
@@ -227,15 +314,19 @@ export function ItemForm({
                onChange={(e) => setF({ ...f, uom: e.target.value })} />
       </Row>
       <Row id="i-disc" label="Discipline">
-        <input id="i-disc" className="field" required value={f.discipline}
-               onChange={(e) => setF({ ...f, discipline: e.target.value })} />
+        <DisciplineSelect
+          id="i-disc"
+          value={f.discipline}
+          onChange={(discipline) => setF({ ...f, discipline })}
+        />
       </Row>
       <Row id="i-value" label="Estimated value (AED)">
-        <input id="i-value" className="field" type="number" required
-               value={f.estimated_value_aed}
-               onChange={(e) =>
-                 setF({ ...f, estimated_value_aed: Number(e.target.value) })
-               } />
+        {/* Text, not number: a focused number input steps on wheel scroll, so
+            scrolling past a filled-in value silently rewrote it. `inputMode`
+            keeps the numeric keypad, which is all `type="number"` bought. */}
+        <input id="i-value" className="field" type="text" inputMode="decimal"
+               required value={valueText}
+               onChange={(e) => setValueText(e.target.value)} />
       </Row>
       <Row id="i-date" label="Required on site">
         {/* Optional, and an empty date field means "not decided yet" — sent as
@@ -265,6 +356,7 @@ export function RaiseRfqForm({
   itemIds,
   onSubmit,
   onCancel,
+  onExtract,
 }: {
   projectId: string
   /** The ticked items. The button that opens this form is disabled while this
@@ -273,43 +365,115 @@ export function RaiseRfqForm({
   itemIds: string[]
   onSubmit: (body: RfqInput) => Promise<void>
   onCancel: () => void
+  /** Reads an enquiry document and hands back whatever of the four fields it
+   *  found. Not optional: both screens that raise an RFQ pass it, and a third
+   *  that forgot would silently lose the feature rather than fail to build. */
+  onExtract: (file: File) => Promise<Partial<RfqInput>>
 }): JSX.Element {
   const [reference, setReference] = useState('')
   const [pkg, setPkg] = useState('')
   const [discipline, setDiscipline] = useState('')
   const [value, setValue] = useState('')
+  const [extracting, setExtracting] = useState(false)
+  const [extractError, setExtractError] = useState<string | null>(null)
 
-  const { onSubmit: submit, error, busy } = useSubmit(() =>
-    onSubmit({
+  const { onSubmit: submit, error, busy } = useSubmit(async () => {
+    // Parsed once, here, rather than on every keystroke: a half-typed value is
+    // not an error, and a value that never parses must not reach the server.
+    // `Number('1,800,000')` is NaN, which serialises to null and comes back as
+    // a validation error naming a field the reader did not think they touched.
+    const parsed = Number(value.trim())
+    if (!Number.isFinite(parsed)) throw new Error('Estimated budget must be a number.')
+    await onSubmit({
       project_id: projectId,
       item_ids: itemIds,
       reference,
       package: pkg,
       discipline,
-      value_estimate_aed: Number(value),
-    }),
-  )
+      value_estimate_aed: parsed,
+    })
+  })
+
+  /** Fills in what came back and leaves the rest alone. A field the reader has
+   *  already typed is overwritten, which is the point — they asked for the
+   *  document's version of it — but a field the document did not yield is
+   *  never blanked, so a partial answer costs nothing that was already there. */
+  async function extract(file: File) {
+    setExtracting(true)
+    setExtractError(null)
+    try {
+      const found = await onExtract(file)
+      if (found.reference) setReference(found.reference)
+      if (found.package) setPkg(found.package)
+      if (found.discipline) setDiscipline(found.discipline)
+      if (found.value_estimate_aed) setValue(String(found.value_estimate_aed))
+    } catch (err) {
+      setExtractError((err as Error).message)
+    } finally {
+      setExtracting(false)
+    }
+  }
 
   return (
     <form className="form-grid" onSubmit={submit}>
       <FormError message={error} />
+      <FormError message={extractError} />
       <p className="muted" style={{ margin: 0 }}>
         Covering {itemIds.length} {itemIds.length === 1 ? 'item' : 'items'}.
       </p>
+      <Row id="r-doc" label="Fill in from the enquiry document">
+        {/* Every field below stays editable afterwards. Nothing is stored by
+            the read — the RFQ is created by the submit button, out of whatever
+            the reader is looking at by then, so a bad extraction is corrected
+            rather than undone. */}
+        <input
+          id="r-doc"
+          className="field"
+          type="file"
+          accept=".pdf,.docx,.xlsx"
+          disabled={extracting}
+          onChange={(e) => {
+            const file = e.target.files?.[0]
+            // Cleared so that picking the same file twice reads it twice —
+            // the second attempt after a failure is the case that needs it.
+            e.target.value = ''
+            if (file) void extract(file)
+          }}
+        />
+        <span className="muted">
+          {extracting ? 'Reading the document…' : 'Optional. PDF, Word or Excel.'}
+        </span>
+      </Row>
       <Row id="r-ref" label="Reference">
         <input id="r-ref" className="field" required value={reference}
                onChange={(e) => setReference(e.target.value)} />
       </Row>
       <Row id="r-pkg" label="Package">
+        {/* A placeholder rather than help text under the field: it is the one
+            field whose *shape* is not obvious from its name, and an example
+            says more than a sentence would. It disappears the moment anything
+            is typed, so it costs nothing once the habit is formed. */}
         <input id="r-pkg" className="field" required value={pkg}
+               placeholder={'Wellhead tie-in ball valves, 11 kV ring main cable…'}
                onChange={(e) => setPkg(e.target.value)} />
       </Row>
       <Row id="r-disc" label="Discipline">
-        <input id="r-disc" className="field" required value={discipline}
-               onChange={(e) => setDiscipline(e.target.value)} />
+        {/* Product groups offered as well as the families: an RFQ is commonly
+            cut narrower than an item's discipline — one cable type, not all
+            eleven — and this is the field vendor scope is matched on. */}
+        <DisciplineSelect
+          id="r-disc"
+          value={discipline}
+          onChange={setDiscipline}
+          productGroups
+        />
       </Row>
-      <Row id="r-value" label="Value estimate (AED)">
-        <input id="r-value" className="field" type="number" required value={value}
+      <Row id="r-value" label="Estimated budget (AED)">
+        {/* Text, not number — see `ItemForm`'s field for why. The two messages
+            differ because both forms can be open on one screen, and a shared
+            sentence would not say which field to go and fix. */}
+        <input id="r-value" className="field" type="text" inputMode="decimal"
+               required value={value}
                onChange={(e) => setValue(e.target.value)} />
       </Row>
       <Actions submitLabel="Create RFQ" busy={busy} onCancel={onCancel} />
