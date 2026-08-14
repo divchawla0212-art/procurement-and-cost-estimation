@@ -25,8 +25,8 @@ untracked fixture directories are present, never in pass/fail:
 
 | where | baseline |
 |---|---|
-| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1521 passed, 3 skipped, 0 failed** |
-| CI, and any clean checkout | **1503 passed, 21 skipped, 0 failed** |
+| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1625 passed, 3 skipped, 0 failed** |
+| CI, and any clean checkout | **1605 passed, 23 skipped, 0 failed** |
 
 Anything else is a real regression.
 
@@ -43,10 +43,11 @@ apart than the sentence above describes. Two tests in
 from poppler-utils; `.github/workflows/tests.yml` does not install it, so they
 pass on a workstation that has it and skip in CI.
 
-And now a **fourth**, the largest of them: **nine** tests guarded on
+And now a **fourth**, the largest of them: **eleven** tests guarded on
 `data/bidders_details/ADNOC Approved Vendor List as of 10.12.2025.xlsx` — two
-in `test_avl_import.py` and seven in `test_seed_demo.py`, all carrying the
-`needs_real_avl` marker. That export is untracked and will not be committed;
+in `test_avl_import.py`, seven in `test_seed_demo.py` and two in
+`test_disciplines.py`, all carrying the `needs_real_avl` marker. That export is
+untracked and will not be committed;
 it is a real client document, and the point of the import is that it is not
 reproducible from anything in this repository. The other twenty-one tests in
 `test_avl_import.py` build a small workbook in memory with `openpyxl`, so the
@@ -54,20 +55,23 @@ parser itself is covered in CI — only the tests that assert against the *real*
 1 346-vendor export skip.
 
 So the CI row is the workstation row with the four corpus-coverage passes, the
-three `data/` passes, the two `pdftotext` passes and the nine AVL passes turned
-into skips — `1503 = 1521 - 4 - 3 - 2 - 9`, `21 = 3 + 4 + 3 + 2 + 9`; 1524
-tests either way. When the counts move, measure the workstation row and derive
+three `data/` passes, the two `pdftotext` passes and the eleven AVL passes
+turned into skips — `1605 = 1625 - 4 - 3 - 2 - 11`, `23 = 3 + 4 + 3 + 2 + 11`;
+1628 tests either way. When the counts move, measure the workstation row and derive
 the CI row from it; editing the two rows independently is how they drift
 apart.
 
-**The workstation row is measured, not derived**: **1521 passed, 3 skipped**,
-taken on 2026-08-13 on the `rfq-platform-phase-1` branch, in an environment
+**The workstation row is measured, not derived**: **1625 passed, 3 skipped**,
+taken on 2026-08-14 on the `rfq-platform-phase-1` branch, in an environment
 with `pdftotext`, `data/` (including the ADNOC export) and an ingested
-multi-vendor `projects/` all present. The nine-skip figure that the fourth gate
-contributes is measured too — by moving `data/bidders_details/` aside and
-re-running the two affected files, not by counting decorators. It was measured
-that way again when the client-approval gap added tests to both of those files,
-and it is still nine.
+multi-vendor `projects/` all present. The **eleven**-skip figure that the
+fourth gate contributes is measured too — by moving `data/bidders_details/`
+aside and re-running the affected files, not by counting decorators. It has
+been measured that way every time a change touched those files: nine when the
+client-approval gap added tests to two of them, eleven now that
+`test_disciplines.py` is a third. Measure it again rather than adjusting it
+arithmetically — the paragraphs below record which phase contributed what, and
+they are a history, not a running total.
 That matters, because a row this file once carried was not. While the auth
 branch was in flight the workstation figure was *derived backwards* — measured
 on a checkout that had neither fixture directory, then extrapolated upward —
@@ -113,11 +117,126 @@ analogue in a subsystem that stores nothing and calls no model; the other five
 are deliberately absent rather than fabricated, and `test_workflow_persistence.py`
 says so above the rows.
 
+The **13** after that are the approved vendor list: 7 in
+`test_bidder_suitability.py` for `client_approved` and 6 in
+`test_bidder_endpoints.py` for `/bidders/approved`. Neither file's new tests
+touch a fixture directory, so all 13 land in both rows.
+
+The **14** after *that* are the item-discipline vocabulary: 11 in
+`test_disciplines.py` and 3 more in `test_bidder_endpoints.py`. **This is the
+change that moved the AVL gate off nine**, where it had sat since the registry
+shipped: two of the eleven read the real export, because the failure worth
+catching is a product group name in `workflow/disciplines.py` that the sheet
+does not actually contain — a typo there silently shrinks a discipline and
+nothing else notices, since the family still expands, just to a label no vendor
+carries. The gate was re-measured at **eleven** by moving
+`data/bidders_details/` aside and re-running the three files, not by counting
+decorators.
+
+The **5** after that are client approval on the shortlist: all in
+`test_bidder_endpoints.py`, none touching a fixture directory, so the gate is
+still eleven and all 5 land in both rows. Four of them are the three states the
+column can show — approved, off the list, and *not checked* for a vendor typed
+in by hand — plus the one that matters most: patch a shortlisted bidder's
+`approved_by` and re-read the RFQ, and the answer flips with nothing having
+rewritten the shortlist entry. That test is the invariant below stated as an
+assertion, and it is the one that fails if anyone ever adds the field to
+`ShortlistEntry`.
+
+The **29** after that are the registry's move into SQLite: 16 in
+`test_bidder_db.py`, 4 in `test_workflow_persistence.py` (the document no
+longer carries a `bidders` key, no derived value reaches a column, an empty
+database reads as an empty registry, and a pre-move document still migrates),
+2 in `test_disciplines.py` for the shared label folding, and the rest spread
+across the suites that already covered the store. The gate was re-measured at
+**eleven** again: nothing new reads the export.
+
+The **7** after that are the available list — both approvals at once: 6 in
+`test_bidder_db.py` for `approved_by_all` and `add_approval`, and the rest
+folded into `test_bidder_endpoints.py`'s rewritten `/bidders/available` cases.
+None reads the export; the gate is still eleven.
+
+The **7** after *that* are reading an enquiry document into the raise-an-RFQ
+form, all in `test_rfq_extractor.py`. The gate is **still eleven and was not
+re-measured**, because none of this change touched the three files that carry
+the marker — which is the condition the paragraph above sets for measuring it
+again, not a general licence to derive it.
+
+The **29** after that are the mock clarification-round fixtures and the one
+decision behind `--resume`, all in `test_mock_round_fixtures.py`. `tools/mock_clarification_round.py` itself is an
+infrastructure check played over HTTP against a running app and is deliberately
+not unit tested; its fixtures are JSON on disk and answerable for free. The
+load-bearing ones are two. One asserts that a fixture vendor's
+`trade_categories` cover the RFQ's own discipline through
+`disciplines.covering` — whole-string, so a plausible near-miss shortlists
+vendors who do not do the work and looks identical on screen to a list that
+matches. The other refuses `CLIENT_APPROVER` in an invented vendor's
+`approved_by`, and was written after that defect shipped; it was verified by
+reinstating it, not by reading it. Same gate, same reason: none of these files
+reads the export. The last ten cover `_already_done`, the one judgement in
+`--resume`, imported rather than reimplemented because a copy in the test would
+agree with a wrong original. Its defect is the third verified by reinstatement:
+the check read state `"Answered"`, but the query this fixture answers *and then
+withdraws* reads **Withdrawn**, so a resume re-sent an answer the server
+refuses. That is the withdrawal-beats-an-answer invariant surfacing in a
+caller — the kind of thing only a second run finds.
+
+The **5** after that are both approvals on a shortlist row: four in
+`test_bidder_endpoints.py` for `approved_by` and one in
+`test_workflow_persistence.py`. The gate is **still eleven and was not
+re-measured** — none of this change touched the three files carrying the
+marker, which is the condition set above.
+
+That single persistence test is the only one in this file that asserts an
+**absence**, so it passed the moment it was written. It was verified the way
+the reinstatement cases above were: by adding `approved_by` to `ShortlistEntry`
+and watching it go red. An absence-assertion nobody has watched fail is not
+known to be wired to anything, and this one guards the rule that
+`client_approved` and `approved_by` are derived on read and stored nowhere —
+the assertion that fails if either is ever "optimised" into the document.
+
 The web suite is separate and not part of either row above — both rows are
 `python -m pytest` counts. Run it with `npm test` under `web/` (vitest,
 non-watching, exits non-zero on failure); `npm run build` also type-checks the
 test files, since `web/tsconfig.app.json` includes `src`. CI runs both, in the
-`web` job of the same workflow. It stands at **224 passed** across 19 files.
+`web` job of the same workflow. It stands at **249 passed** across 20 files.
+
+The last **24**, across two new files and three existing ones, are the RFQ
+form fixes and the approval pills. Six in `ProjectDetail.test.tsx`: three that
+both money fields are `type="text"` and that a budget of `1,800,000` is refused
+rather than sent as `NaN`, and three for the enquiry document the form used to
+deny holding. Three in the new `primitives.test.tsx` for `ApprovalPills`, four
+in the new `ShortlistingStep.test.tsx` — that step had no test file at all —
+one in `RfqWizard.test.tsx` for the disabled web-search button, and ten in
+`ItemDetail.test.tsx` for the pills, the Shortlist control and the per-RFQ
+approval summary.
+
+**One of those ten is worth knowing about before you write another test in that
+file.** `keeps the chosen RFQ after an invitation reloads the screen` stubs
+`fetchWorkflowProject` to resolve its *second* call on a macrotask, on purpose.
+Resolved immediately the loading state and the resolution batch into one
+commit, `ItemDetail`'s `if (loading)` branch never renders, the vendor card
+never unmounts, and the test passes with the target held in the card — which is
+the defect it exists to catch. It was verified by reinstating that card-local
+state and watching the second invitation go to the wrong RFQ. The same trap
+applies to any test asserting that state survives a reload on this screen.
+
+The 2 before those are the enquiry-document auto-fill, both in
+`ProjectDetail.test.tsx` — that the four fields arrive filled in, and that a
+refused read shows the server's sentence without blanking what the reader had
+already typed.
+The 4 before those are the item screen's own door into the RFQ process — 2 in
+`ItemDetail.test.tsx` for raising an RFQ that covers this item alone, and 2 in
+`RfqWizard.test.tsx` for the shortlist's client-approval column.
+It was 224 across 19 until the standalone Bidders screen was removed, taking
+`Bidders.test.tsx`'s 16 tests with it. The registry itself is untouched — it is
+read by the wizard's Shortlisting step and by nothing else in the browser, so
+`api.ts` keeps `fetchBidders` and no longer carries the single-bidder read or
+the create/update/delete calls. Their routes in `api/workflow_routes.py` are
+still served and still tested by `test_bidder_endpoints.py`; nothing in the
+front end calls them. The 5 that came back are `ItemDetail.test.tsx`'s, for the
+approved-bidder card on the item screen — which is where the registry is now
+read from outside an RFQ.
 
 The RFQ wizard's steps live one-per-file under `web/src/pages/wizard/`;
 `RfqWizard.tsx` is only the shell — stepper, banners, stage history, gate card.
@@ -368,6 +487,70 @@ them, so keeping them apart stops a reader assuming one set covers both.
   neither `_bidder_payload` nor the browser reconstructs it. That last part is
   why `ADNOC` / `ASTRA` live in `workflow/models/bidder.py`: naming the client
   approver from the pure module must not drag `openpyxl` in behind it.
+  **"Available" is both approvals at once, and it is what the item screen
+  shows.** `AVAILABLE_APPROVERS` is `(CLIENT_APPROVER, ASTRA)`: the client's
+  list says a vendor may be used on their project, ours says procurement has
+  qualified them, and neither alone is enough to put one in front of a buyer.
+  The filter is AND, never OR — one approval is the common case and precisely
+  what is being excluded, since the client's list runs to 1 346 and ours to
+  111. In SQL that is a `GROUP BY … HAVING count(DISTINCT approver_key) = ?`,
+  and the `DISTINCT` matters: the product-group join multiplies approval rows,
+  so a plain count lets one approval satisfy a two-approval test.
+  **Astra approval is now real, and `avl_import.astra_approves` is not how it
+  gets set.** That function derived the flag from a hash so a demo had
+  something to show; a fabricated approval and a recorded one are
+  indistinguishable on screen, which is why `python -m workflow.avl_db --astra
+  <xlsx>` reads a supplied vendor list instead. It records the approval against
+  bidders the registry already holds and **creates nobody** — that file says
+  who approved whom, not who exists.
+  **There is one approved vendor list, and `client_approved` is it.** It
+  filters on `CLIENT_APPROVER` — the same constant `missing_client_approval`
+  reads — and returns registry rows, never a `Suitability`: its callers may
+  have no RFQ, so nothing there is eligible or blocked. `GET
+  /bidders/approved` serves it, and must stay declared **above**
+  `/bidders/{bidder_id}` or FastAPI reads "approved" as an id and the route
+  404s; `test_the_approved_path_is_not_read_as_a_bidder_id` is what holds that.
+  It sends `approver` and `total` alongside, so the browser neither spells
+  "ADNOC" itself nor infers the size of the list from a capped table.
+  **Its `discipline` filter is optional, and absent means the whole list, never
+  none of it.** Narrowing matches whole-string through `_registered_for`, the
+  same rule the candidate list uses. That rule is why the filter was inert
+  until the vocabulary existed: items carried free text (`Electrical`, `1`)
+  while the export's product groups are a controlled vocabulary, so narrowing
+  emptied the card for every real item. `workflow/disciplines.py` is the join
+  that fixed it, and the item form now picks from it rather than accepting
+  prose. **The item screen still falls back to the whole list**, and decides
+  that on the narrowed answer being *empty* rather than on how the discipline
+  is spelled — the browser does not hold the vocabulary, and testing it there
+  would be a second definition of what a discipline is. Items predating the
+  picker keep their stored value, so the fallback is a live path, not a
+  transitional one; an empty table would report the item as uncoverable when
+  the truth is that it is unscoped.
+- **Client approval on a shortlist row is derived on read, and has three
+  states.** `_shortlist_payload` re-reads the registry for every entry, so
+  correcting a vendor's `approved_by` is the only edit needed and nothing
+  rewrites the shortlist. There is no `approved_by` on `ShortlistEntry` and no
+  key for it in `workflow.json` — the same rule as `approval_caution` on
+  `Bidder`, for the same reason. The three snapshot fields on that row
+  (`vendor_name`, `prequal_status`, `scope_code_fit`) are frozen at invitation
+  on purpose, and living beside a derived one is not an inconsistency: they
+  record what was known then, and this records who is approved now. `None` is
+  the third state and must stay distinct from `False` — a vendor typed in by
+  hand has no registry row, so there is no finding either way, and rendering
+  them as "not on the list" would report a check nobody ran. A `vendor_id`
+  pointing at a deleted bidder lands there too. `client_approver` rides on the
+  RFQ payload so the table does not spell the client's name itself.
+  **`approved_by` rides on that row too, and is sent as well as the boolean,
+  never instead of it.** The boolean carries the *rule* —
+  `missing_client_approval` is its one definition — and the list carries
+  *identity*, which the boolean cannot yield: Astra approval is not a function
+  of whether ADNOC approved somebody, so a screen wanting both has to be sent
+  both. Rebuilding the client-approval predicate in the browser from the list
+  would be the second definition this file forbids everywhere else. Both keys
+  are derived from the same `bidder is None`, so their three states line up:
+  `null`/`null` is no registry row, `[]` with `false` is a row nobody approved.
+  Neither is stored, and `test_no_shortlist_entry_stores_the_approvals_it_reports`
+  is the assertion that fails if either ever is.
 - **A registry-linked shortlist entry's snapshot comes from the registry, not
   the request.** With a `vendor_id`, `add_shortlist_entry` derives
   `vendor_name`, `prequal_status` and `scope_code_fit` itself and ignores what
@@ -389,10 +572,70 @@ them, so keeping them apart stops a reader assuming one set covers both.
   demo seed's RFQ disciplines are real product group descriptions, quoted
   exactly, so scope matching resolves against an imported registry instead of
   never matching.
+  **And the converse: an invented vendor never claims the client's approval.**
+  A mock may invent a company, and may give it `Astra` — an internal
+  qualification of a company that is invented in the same direction. It may not
+  give it `ADNOC`, because that is a fact about a row in the client's export,
+  and a shortlist reading *approved by ADNOC* for a company ADNOC has never
+  heard of is indistinguishable on screen from one that is genuinely on the
+  list. This is the same rule as the paragraph above, pointing the other way,
+  and it shipped broken: two of `mock_clarification_round_genset.json`'s cast
+  carried `["ADNOC", "Astra"]` so that the shortlist would show an approved row
+  beside an unapproved one. The fix is `also_invited` — real vendors quoted
+  from the export, invited and raising nothing, because a shortlist row records
+  that somebody was *asked* to bid while a query records what somebody *said*,
+  and only the first is a fact a mock may make up about a real company.
+  `test_no_invented_vendor_claims_the_clients_approval` is what holds it now.
 - **`WorkflowStore` knows nothing about disk.** Serialization lives in
   `workflow/persistence.py`, the one module allowed to touch the store's dicts
-  directly, so replacing the JSON file with a database is a change to that
-  module alone.
+  directly. That is what made moving one collection to a database a change to
+  that module and a new one beside it, with `store.py` untouched.
+- **The registry is in SQLite; everything else is in the JSON document.**
+  `<ROOT>/bidders.db` holds the bidders, `<ROOT>/workflow.json` holds the rest,
+  and the document has **no `bidders` key** — a key there would be a second
+  copy for the first edit to disagree with. `persistence.load` hydrates the
+  store from both and hands back the same plain-dict object it always did, so
+  every guard on the store (`delete_bidder` refusing while a shortlist
+  references a vendor; the snapshot read at invitation) is unchanged. The split
+  is on a real difference: the registry is reference data, arrives whole from a
+  client export, is ~1 300 rows against tens everywhere else, and is queried by
+  attribute rather than read whole.
+  A document that still carries a `bidders` key predates the move; its registry
+  **wins on load**, and the next write drops the key. `python -m
+  workflow.avl_db --from-document` does that migration explicitly, and also
+  strips the key — leaving it would mean the command appeared to work and
+  changed nothing.
+  `locked_update` rewrites the registry only when it changed, comparing against
+  a shallow copy taken at load. That works *because* `update_bidder` rebuilds
+  through the model rather than mutating in place; an in-place edit to a stored
+  `Bidder` would silently fail to persist.
+  **Three list-valued fields are child tables, not JSON columns**, because they
+  are filtered *on* — and a list in a text column can only be filtered with
+  `LIKE '%…%'`, which is the substring matching this repository has twice
+  recorded as a defect.
+- **One function folds a product group label, and it lives in
+  `workflow/disciplines.py`.** `bidder_db.fold` is that function re-exported,
+  not a second implementation, and the key columns are written with it. It
+  collapses *internal* whitespace as well as trimming, because the client's own
+  exports disagree with themselves — the full list spells it `CABLES - LV POWER
+  DISTRIBUTION` and a subset from the same system uses two spaces. When the SQL
+  and Python rules drift, the symptom is silent: a vendor invisible to the very
+  filter its own row satisfies.
+- **Reading an enquiry document stores nothing, and there is no model behind it
+  yet.** `POST /rfqs/extract` hands `workflow/rfq_extractor.py`'s answer back to
+  the browser and returns; the RFQ is created when the reader submits the form,
+  out of whatever they are looking at by then, so a bad extraction is corrected
+  rather than undone and an abandoned upload leaves nothing. The extractor is a
+  fixture — it ignores the filename and the bytes — and it says so rather than
+  posing as an extractor that is bad at its job: the reference is prefixed
+  `MOCK-` because a synthesised fact must not be indistinguishable on screen
+  from a recorded one, the same rule the AVL import keeps. **Its discipline is
+  quoted from `workflow/disciplines.py`**, because the form's field is a
+  controlled vocabulary and a plausible `Mechanical` would arrive marked "not a
+  listed discipline" — the auto-fill looking broken in the one demonstration it
+  exists for. The route is declared **above** `/rfqs/{rfq_id}` for the reason
+  `/bidders/approved` is, and `test_the_extract_path_is_not_read_as_an_rfq_id`
+  holds it.
 
 ## Planning convention
 
