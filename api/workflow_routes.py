@@ -19,8 +19,10 @@ Status mapping, kept consistent across the module:
   409  it exists, but the workflow says no — a closed gate or a refused freeze
   422  the request is self-inconsistent, e.g. an item from another project
 """
-from datetime import date
-from typing import Annotated
+import os
+import tempfile
+from datetime import date, datetime, timezone
+from typing import Annotated, get_args
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
@@ -28,7 +30,8 @@ from pydantic import BaseModel
 from api.auth.deps import current_user
 from api.auth.models import User
 from workflow import clarifications, persistence
-from workflow import bidder_db, disciplines
+from workflow import bidder_db, disciplines, item_vendor_lists
+from workflow.avl_import import parse_avl
 from workflow.bidders import (
     AVAILABLE_APPROVERS,
     CLIENT_APPROVER,
@@ -39,7 +42,11 @@ from workflow.bidders import (
 from workflow.gates import GateResult, check_gate
 from workflow.models.bidder import Bidder, PrequalStatus
 from workflow.models.clarification import Addendum, ClarificationQuery, QueryCategory
-from workflow.models.project import Item, ProjectStatus
+from workflow.models.project import Item, ProjectStatus, VendorListSource
+
+#: Both sources, derived from the literal rather than restated, so the payload
+#: cannot drift from what the store will accept.
+VENDOR_LIST_SOURCES: tuple[str, ...] = get_args(VendorListSource)
 from workflow.models.rfq import Attachment, ShortlistEntry
 from workflow.rfq_extractor import extract_rfq_info
 from workflow.stages import STAGE_ORDER, Stage
@@ -340,10 +347,26 @@ def get_project(project_id: str) -> dict:
     project = store.get_project(project_id)
     if project is None:
         raise HTTPException(status_code=404, detail=f"Unknown project: {project_id}")
+    items = store.items_for_project(project_id)
     return {
         "project": project.model_dump(mode="json"),
-        "items": [i.model_dump(mode="json") for i in store.items_for_project(project_id)],
+        "items": [i.model_dump(mode="json") for i in items],
         "rfqs": [r.model_dump(mode="json") for r in store.list_rfqs(project_id=project_id)],
+        # Grouped by item and then by source, so the item screen draws a card
+        # per source without regrouping a flat list itself. Sent with the
+        # project rather than behind a route of its own: the item screen
+        # already reads this payload, and a second fetch could disagree with
+        # the items rendered beside it.
+        "item_vendor_lists": {
+            item.id: {
+                source: [
+                    e.model_dump(mode="json")
+                    for e in store.item_vendor_list(item.id, source)
+                ]
+                for source in VENDOR_LIST_SOURCES
+            }
+            for item in items
+        },
     }
 
 
@@ -382,6 +405,84 @@ def list_items(project_id: str) -> dict:
     if store.get_project(project_id) is None:
         raise HTTPException(status_code=404, detail=f"Unknown project: {project_id}")
     return {"items": [i.model_dump(mode="json") for i in store.items_for_project(project_id)]}
+
+
+@router.post("/projects/{project_id}/items/{item_id}/vendor-list")
+def upload_item_vendor_list(
+    project_id: str,
+    item_id: str,
+    source: VendorListSource,
+    file: UploadFile = File(...),
+    user: User = Depends(current_user),
+) -> dict:
+    """Read an Approved Vendor List export and store it as this item's list.
+
+    **No new parser.** `avl_import.parse_avl` reads both the client export and
+    the Astra subset unmodified: same eight headers, same first sheet, same
+    `bdr_<vendor number>` keys. Which of the two an upload is comes from
+    `source` rather than from the file, because the Astra list is a subset *of*
+    the client's and so carries nothing in it that says whose list it is.
+
+    **Nothing here touches the registry.** These are genuine exports, so the
+    objection is not that the evidence is weak — it is that a write attached to
+    one item would otherwise decide what a company is approved for across every
+    project, from a form whose subject is one line of equipment. `approved_by`
+    moves only through `python -m workflow.avl_db`.
+
+    The parse happens outside the lock (it is pure CPU over a temporary file
+    and can take a second on an 18 000-row export), and everything that reads
+    or writes the store happens inside it.
+    """
+    if not file.filename:
+        raise HTTPException(status_code=422, detail="The upload has no file name.")
+
+    # `parse_avl` takes a path, so the bytes land in a temporary file that is
+    # removed either way. Nothing is kept: the entries are the record, and the
+    # document itself is not stored — the same rule `/rfqs/extract` keeps.
+    suffix = os.path.splitext(file.filename)[1] or ".xlsx"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as scratch:
+        scratch.write(file.file.read())
+        scratch_path = scratch.name
+    try:
+        parsed = parse_avl(scratch_path)
+    except Exception as exc:
+        # The parser's own sentence, which names the missing header. A refusal
+        # that does not say what is wrong with the file leaves the reader
+        # nothing to act on.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        os.unlink(scratch_path)
+
+    try:
+        with persistence.locked_update(_root()) as store:
+            item = store.get_item(item_id)
+            if item is None or item.project_id != project_id:
+                raise KeyError(f"Unknown item: {item_id}")
+            entries = item_vendor_lists.entries_for(
+                parsed,
+                item_id=item_id,
+                discipline=item.discipline,
+                source=source,
+                known_ids={b.id for b in store.list_bidders()},
+                uploaded_by=user.email,
+                uploaded_at=datetime.now(timezone.utc),
+                source_document=file.filename,
+            )
+            stored = store.set_item_vendor_list(item_id, source, entries)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc).strip("'")) from exc
+
+    return {
+        "entries": [e.model_dump(mode="json") for e in stored],
+        # Reported rather than left to be inferred from the table: an empty
+        # list after a 1 346-vendor upload is a narrowing that found nobody,
+        # not a failed read, and only the counts can say which.
+        "summary": {
+            "parsed": len(parsed),
+            "kept": len(stored),
+            "linked": sum(1 for e in stored if e.vendor_id is not None),
+        },
+    }
 
 
 @router.post("/projects/{project_id}/items", status_code=201)

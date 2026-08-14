@@ -107,34 +107,51 @@ def parse_avl(path: str, astra_subset: bool = False) -> list[Bidder]:
     two exports readable. Trade categories and manufacturers are sorted, since
     their order in the sheet carries no meaning.
     """
+    # Closed in `finally`, not left to the garbage collector: `read_only=True`
+    # holds the underlying zip open, so a caller that wants to delete the file
+    # afterwards — the upload route, which parses a temporary copy — cannot, and
+    # on Windows the unlink raises outright. The CLI never noticed because the
+    # process exits.
     workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
-    sheet = workbook.worksheets[0]
-    rows = sheet.iter_rows(values_only=True)
-
+    rows = None
     try:
-        columns = _column_map(next(rows))
-    except StopIteration:
-        raise ValueError(f"{path} is empty — there is not even a header row.") from None
+        sheet = workbook.worksheets[0]
+        rows = sheet.iter_rows(values_only=True)
 
-    collected: dict[str, dict] = {}
-    for row in rows:
-        number = _text(row, columns, _VENDOR_NUMBER)
-        name = _text(row, columns, _VENDOR_NAME)
-        # A row missing either is not a vendor. Skipped rather than guessed at:
-        # a bidder with no name cannot be invited and a bidder with no number
-        # cannot be matched to the next export.
-        if not number or not name:
-            continue
+        try:
+            columns = _column_map(next(rows))
+        except StopIteration:
+            raise ValueError(
+                f"{path} is empty — there is not even a header row."
+            ) from None
 
-        record = collected.setdefault(
-            number, {"name": name, "groups": set(), "manufacturers": set()}
-        )
-        group = _text(row, columns, _PRODUCT_GROUP)
-        if group:
-            record["groups"].add(group)
-        manufacturer = _text(row, columns, _MANUFACTURER)
-        if manufacturer and not _NOT_A_MANUFACTURER.match(manufacturer):
-            record["manufacturers"].add(manufacturer)
+        collected: dict[str, dict] = {}
+        for row in rows:
+            number = _text(row, columns, _VENDOR_NUMBER)
+            name = _text(row, columns, _VENDOR_NAME)
+            # A row missing either is not a vendor. Skipped rather than guessed
+            # at: a bidder with no name cannot be invited and a bidder with no
+            # number cannot be matched to the next export.
+            if not number or not name:
+                continue
+
+            record = collected.setdefault(
+                number, {"name": name, "groups": set(), "manufacturers": set()}
+            )
+            group = _text(row, columns, _PRODUCT_GROUP)
+            if group:
+                record["groups"].add(group)
+            manufacturer = _text(row, columns, _MANUFACTURER)
+            if manufacturer and not _NOT_A_MANUFACTURER.match(manufacturer):
+                record["manufacturers"].add(manufacturer)
+    finally:
+        # The generator too, not just the workbook. A missing header raises
+        # while `rows` is still suspended, and a suspended read-only row
+        # iterator holds its own handle into the archive — so closing only the
+        # workbook leaves the file locked on exactly the error path.
+        if rows is not None:
+            rows.close()
+        workbook.close()
 
     bidders = []
     for number, record in collected.items():
