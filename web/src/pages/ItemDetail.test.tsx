@@ -43,6 +43,7 @@ function availableList(over: Partial<AvailableBidders> = {}): AvailableBidders {
   const bidders = over.bidders ?? []
   return {
     approvers: ['ADNOC', 'Astra'],
+    selectable_approvers: ['ADNOC', 'Astra'],
     discipline: null,
     total: bidders.length,
     ...over,

@@ -1,13 +1,12 @@
 import type {
   Addendum,
   AdminUser,
-  Bidder,
-  BidderDetail,
-  BidderInput,
   BidderSummary,
   Candidate,
   ClarificationQuery,
   ComplianceMatrix,
+  AvailableBidders,
+  Discipline,
   ExtractionStatus,
   ProjectDetail,
   ProjectSetup,
@@ -204,9 +203,14 @@ export function runIngestion(
 
 /* ------------------------------------------------------------- bidders */
 //
-// The registry is organisation-wide, so none of these paths hangs off a
-// project. `effective_prequal` and `invited_count` arrive computed; nothing
-// here recomputes them.
+// The registry is organisation-wide, so this path does not hang off a project.
+// `effective_prequal` and `invited_count` arrive computed; nothing here
+// recomputes them.
+//
+// Reading the registry is all the front end does with it now that the
+// standalone Bidders screen is gone — the single-bidder read and the
+// create/update/delete calls went with it. The endpoints they spoke to are
+// still served by `api/workflow_routes.py`; nothing in the browser calls them.
 
 export function fetchBidders(): Promise<BidderSummary[]> {
   return getJson<{ bidders: BidderSummary[] }>('/api/workflow/bidders').then(
@@ -214,32 +218,33 @@ export function fetchBidders(): Promise<BidderSummary[]> {
   )
 }
 
-export function fetchBidder(bidderId: string): Promise<BidderDetail> {
-  return getJson(`/api/workflow/bidders/${encodeURIComponent(bidderId)}`)
-}
-
-export function createBidder(body: BidderInput): Promise<Bidder> {
-  return sendJson('/api/workflow/bidders', 'POST', body)
-}
-
-/** Partial by contract, like `updateWorkflowProject`: send only what changed. */
-export function updateBidder(
-  bidderId: string,
-  changes: Partial<BidderInput>,
-): Promise<Bidder> {
-  return sendJson(
-    `/api/workflow/bidders/${encodeURIComponent(bidderId)}`,
-    'PATCH',
-    changes,
+/** The disciplines an item may be scoped to, with the export's product groups
+ *  behind each. From the server, so adding a family is an edit to
+ *  `workflow/disciplines.py` alone. */
+export function fetchDisciplines(): Promise<Discipline[]> {
+  return getJson<{ disciplines: Discipline[] }>('/api/workflow/disciplines').then(
+    (body) => body.disciplines,
   )
 }
 
-/** A 409 carries the server's sentence naming the RFQs that block the delete.
- *  `expectNoContent` raises it verbatim for the screen to show. */
-export function deleteBidder(bidderId: string): Promise<void> {
-  return fetch(`/api/workflow/bidders/${encodeURIComponent(bidderId)}`, {
-    method: 'DELETE',
-  }).then(expectNoContent)
+/** The vendors that may actually be invited: on the client's Approved Vendor
+ *  List *and* on ours. `discipline` narrows to one family; omit it for the whole
+ *  list. Filtered and counted by the server — testing `approved_by` here would
+ *  be a second definition of what "available" means. */
+export function fetchAvailableBidders(
+  discipline?: string,
+  /** Which approvals a vendor must carry — AND, never OR. Omitted entirely
+   *  means the server's own default, so the definition of "available" stays in
+   *  one place rather than being something this module has to know. */
+  approvers?: string[],
+): Promise<AvailableBidders> {
+  const q = new URLSearchParams()
+  if (discipline) q.set('discipline', discipline)
+  // Repeated rather than comma-joined: an approver's name could contain a
+  // comma, and FastAPI reads repeats straight into a list.
+  for (const a of approvers ?? []) q.append('approver', a)
+  const s = q.toString()
+  return getJson(`/api/workflow/bidders/available${s ? `?${s}` : ''}`)
 }
 
 export function fetchCandidates(rfqId: string): Promise<Candidate[]> {

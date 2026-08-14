@@ -501,10 +501,15 @@ export interface Discipline {
 
 /** The vendors that may be invited: approved by the client and by us. */
 export interface AvailableBidders {
-  /** The approvals a vendor must carry to be here — the client's and ours.
-   *  From the server, so a second client's AVL does not mean editing the
-   *  screens that render it. */
+  /** The approvals actually **applied** to this answer — a vendor here carries
+   *  every one of them, AND never OR. Follows what the caller asked for, so a
+   *  narrowed list's caption names the narrowing rather than always claiming
+   *  both. */
   approvers: string[]
+  /** Every approval that may be asked for. From the server, so a screen builds
+   *  its filter controls without spelling an approver's name and a second
+   *  client's AVL does not mean editing the screens that render it. */
+  selectable_approvers: string[]
   /** The product group the list was narrowed to, or null for the whole list. */
   discipline: string | null
   /** The size of the answer, which is not `bidders.length` once a screen caps

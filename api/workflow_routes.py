@@ -20,8 +20,9 @@ Status mapping, kept consistent across the module:
   422  the request is self-inconsistent, e.g. an item from another project
 """
 from datetime import date
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
 from api.auth.deps import current_user
@@ -510,7 +511,10 @@ def list_disciplines() -> dict:
 
 
 @router.get("/bidders/available")
-def list_available_bidders(discipline: str | None = None) -> dict:
+def list_available_bidders(
+    discipline: str | None = None,
+    approver: Annotated[list[str] | None, Query()] = None,
+) -> dict:
     """The vendors that may actually be invited: on the client's list *and* on
     ours.
 
@@ -525,7 +529,37 @@ def list_available_bidders(discipline: str | None = None) -> dict:
 
     `discipline` narrows to one family and is optional; absent means the whole
     available list, never none of it.
+
+    `approver` is which approvals a vendor must carry — **AND, never OR**, the
+    same rule `bidders.available` states, and repeatable. Absent means
+    `AVAILABLE_APPROVERS`, so the default stays the server's to decide rather
+    than something the browser has to know and send. Narrowing it to one is how
+    a caller asks for the client's whole list, which is far larger than the
+    intersection and had no route to it before.
     """
+    # Blanks dropped first: `?approver=` arrives as `[""]`, and letting that
+    # reach the unknown check below would answer with a message naming an empty
+    # string instead of the one the caller needs.
+    approvers = (
+        list(AVAILABLE_APPROVERS)
+        if approver is None
+        else [a for a in approver if a.strip()]
+    )
+    if not approvers:
+        raise HTTPException(
+            status_code=422, detail="At least one approver is required."
+        )
+    unknown = [a for a in approvers if a not in AVAILABLE_APPROVERS]
+    if unknown:
+        # Refused, never answered with an empty list. `approved_by_all` on a
+        # typo returns nobody, and an empty table reads on screen as "no vendor
+        # qualifies" — a finding nobody made, which is the same mistake as an
+        # unfound parameter stored as `0`.
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown approver(s): {', '.join(unknown)}.",
+        )
+
     groups = (
         list(disciplines.product_groups(discipline))
         if (discipline or "").strip()
@@ -534,15 +568,18 @@ def list_available_bidders(discipline: str | None = None) -> dict:
     # Straight to the database: this read wants the registry and nothing else,
     # and the indexes on the folded approver and product group are what make it
     # a query rather than a scan of 1 346 objects.
-    rows = bidder_db.approved_by_all(_root(), list(AVAILABLE_APPROVERS), groups)
+    rows = bidder_db.approved_by_all(_root(), approvers, groups)
 
     store = _read()
     today = date.today()
     return {
-        # Which approvals "available" stands for, sent rather than spelled out
-        # in the browser — one constant, so a second client's AVL stays a
-        # one-line change here.
-        "approvers": list(AVAILABLE_APPROVERS),
+        # The approvals actually applied, so the caption follows what was asked
+        # for rather than always naming both.
+        "approvers": approvers,
+        # Every approval that may be asked for, sent rather than spelled out in
+        # the browser — one constant, so a second client's AVL stays a one-line
+        # change here.
+        "selectable_approvers": list(AVAILABLE_APPROVERS),
         "discipline": discipline,
         "total": len(rows),
         "bidders": [_bidder_payload(store, b, today) for b in rows],

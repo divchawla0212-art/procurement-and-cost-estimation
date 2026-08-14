@@ -585,6 +585,59 @@ def test_the_available_list_needs_both_approvals(tmp_path, monkeypatch):
     assert body["approvers"] == ["ADNOC", "Astra"]
 
 
+def test_one_approver_widens_the_list_to_that_one(tmp_path, monkeypatch):
+    """The reason the parameter exists: the client's list is far larger than the
+    intersection, and there was no way to ask this route for it."""
+    client = _client(tmp_path, monkeypatch)
+    create_bidder(client, name="Al Munara Switchgear LLC", approved_by=["ADNOC", "Astra"])
+    create_bidder(client, name="Client Only", approved_by=["ADNOC"])
+    create_bidder(client, name="Ours Only", approved_by=["Astra"])
+
+    body = approved(client, "?approver=ADNOC")
+
+    assert sorted(b["name"] for b in body["bidders"]) == [
+        "Al Munara Switchgear LLC",
+        "Client Only",
+    ]
+    # The *applied* filter, so the caption follows what was asked for.
+    assert body["approvers"] == ["ADNOC"]
+
+
+def test_an_unknown_approver_is_refused_rather_than_answered_with_nobody(
+    tmp_path, monkeypatch
+):
+    """A typo returns nobody from the HAVING query, and an empty table reads on
+    screen as "no vendor qualifies" — a finding nobody made. The same reason
+    `client_approved` keeps None apart from False."""
+    client = _client(tmp_path, monkeypatch)
+    create_bidder(client)
+
+    r = client.get("/api/workflow/bidders/available", params={"approver": "ADNCO"})
+
+    assert r.status_code == 422
+    assert "ADNCO" in r.text
+
+
+def test_no_approver_at_all_is_refused(tmp_path, monkeypatch):
+    """Zero required approvals has no expression in the query: a HAVING count of
+    zero matches nobody, so this would be an empty table with no explanation."""
+    client = _client(tmp_path, monkeypatch)
+    create_bidder(client)
+
+    r = client.get("/api/workflow/bidders/available?approver=")
+
+    assert r.status_code == 422
+    assert "at least one" in r.text.lower()
+
+
+def test_the_payload_names_what_may_be_selected(tmp_path, monkeypatch):
+    """So the browser builds its chips from the server's names and still never
+    spells the client's for itself."""
+    client = _client(tmp_path, monkeypatch)
+
+    assert approved(client)["selectable_approvers"] == ["ADNOC", "Astra"]
+
+
 def test_a_vendor_only_we_approved_is_not_available(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     create_bidder(client, name="Silverdune Process Systems", approved_by=["Astra"])
