@@ -314,26 +314,39 @@ function AvailableVendorList({
                 rather than tickable — a tickable chip could only ever produce
                 an empty table, which reads as broken rather than unbuilt. Same
                 treatment as the RFQ wizard's search button. */}
-            <button type="button" className="chip" disabled>
+            <button type="button" className="chip chip--asis" disabled>
               From the internet
             </button>
           </div>
-          <p className="muted">Not built yet.</p>
+          {/* Names its own subject. Sitting between the chips and the RFQ
+              chooser below, a bare "Not built yet." read as though it
+              described the chooser — which is built and works. */}
+          <p className="muted">Searching the web for vendors is not built yet.</p>
 
           {/* Which RFQ an invitation lands on. Only asked when the answer is
               not obvious — one covering RFQ needs no question, and none means
               there is nothing to invite anybody to. */}
           {covering.length > 1 && (
-            <label className="field">
-              <span>Shortlist into</span>
-              <select value={target} onChange={(e) => onTarget(e.target.value)}>
+            // Not a `<label className="field">` wrapping the select: `.field`
+            // is the input class, so the label took a border and padding of
+            // its own and the select kept its — the nested-box defect the
+            // search row above had. The label is plain text bound by `htmlFor`
+            // and the class lives on the control it belongs to.
+            <div className="fxrow">
+              <label htmlFor="shortlist-target">Shortlist into</label>
+              <select
+                id="shortlist-target"
+                className="input"
+                value={target}
+                onChange={(e) => onTarget(e.target.value)}
+              >
                 {covering.map((r) => (
                   <option key={r.id} value={r.id}>
                     {r.reference}
                   </option>
                 ))}
               </select>
-            </label>
+            </div>
           )}
           {covering.length === 0 && (
             <p className="muted">
@@ -449,9 +462,15 @@ function AvailableVendorList({
                       <button
                         type="button"
                         className="btn btn-sm"
+                        // The vendor's name belongs in the accessible name,
+                        // not the visible label: in the label it wrapped to
+                        // three lines and made every row 89px tall, while a
+                        // screen reader needs it either way to tell one row's
+                        // button from another's.
+                        aria-label={`Shortlist ${b.name}`}
                         onClick={() => void invite(b.id)}
                       >
-                        Shortlist {b.name}
+                        Shortlist
                       </button>
                     ) : null}
                   </td>

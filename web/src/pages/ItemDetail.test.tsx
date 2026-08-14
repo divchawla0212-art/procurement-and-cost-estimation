@@ -80,6 +80,47 @@ describe('ItemDetail', () => {
     ])
   })
 
+  it('renders the RFQ chooser as one field, not a box inside a box', async () => {
+    // The same defect the search row had, in the control added beside it: a
+    // `<label className="field">` takes an input's border and padding and the
+    // control inside it keeps its own, so the pair renders as nested boxes.
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(
+      detail({
+        items: [GENERATOR],
+        rfqs: [
+          rfq('rfq_1', 'ADP-RFQ-2026-014', ['itm_1']),
+          rfq('rfq_2', 'ADP-RFQ-2026-021', ['itm_1']),
+        ],
+      }),
+    )
+    vi.mocked(fetchAvailableBidders).mockResolvedValue(
+      availableList({ bidders: [APPROVED_BIDDER] }),
+    )
+
+    renderItem()
+
+    const chooser = await screen.findByLabelText(/shortlist into/i)
+    expect(chooser.closest('label.field')).toBeNull()
+  })
+
+  it('keeps the row button short while still naming its vendor', async () => {
+    // The vendor name in the visible label made every button wrap to three
+    // lines and every row 89px tall. The name belongs in the accessible name,
+    // which is what a screen reader and these tests read.
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(
+      detail({ items: [GENERATOR], rfqs: [rfq('rfq_1', 'ADP-RFQ-2026-014', ['itm_1'])] }),
+    )
+    vi.mocked(fetchAvailableBidders).mockResolvedValue(
+      availableList({ bidders: [APPROVED_BIDDER] }),
+    )
+    vi.mocked(fetchRfq).mockResolvedValue({ ...RFQ_DETAIL, shortlist: [] })
+
+    renderItem()
+
+    const button = await screen.findByRole('button', { name: /shortlist al munara/i })
+    expect(button).toHaveTextContent(/^Shortlist$/)
+  })
+
   it('renders the vendor search as one field, not a box inside a box', async () => {
     vi.mocked(fetchWorkflowProject).mockResolvedValue(detail({ items: [GENERATOR] }))
     vi.mocked(fetchAvailableBidders).mockResolvedValue(
@@ -342,7 +383,12 @@ describe('ItemDetail', () => {
 
     const chip = await screen.findByRole('button', { name: /from the internet/i })
     expect(chip).toBeDisabled()
-    expect(screen.getByText('Not built yet.')).toBeInTheDocument()
+    // The caption names its own subject: sitting between the chips and the RFQ
+    // chooser, a bare "Not built yet." read as though it described the chooser
+    // below it — which is built and works.
+    expect(
+      screen.getByText(/searching the web for vendors is not built yet/i),
+    ).toBeInTheDocument()
   })
 
   it('shows an approval pill against each available vendor', async () => {

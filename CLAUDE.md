@@ -203,11 +203,23 @@ The web suite is separate and not part of either row above — both rows are
 `python -m pytest` counts. Run it with `npm test` under `web/` (vitest,
 non-watching, exits non-zero on failure); `npm run build` also type-checks the
 test files, since `web/tsconfig.app.json` includes `src`. CI runs both, in the
-`web` job of the same workflow. It stands at **263 passed** across 20 files.
+`web` job of the same workflow. It stands at **265 passed** across 20 files.
 
-The last **14** are the vendor list's filtering and bulk shortlisting: thirteen
+The last **16** are the vendor list's filtering and bulk shortlisting: fifteen
 in `ItemDetail.test.tsx` and one in `ProjectDetail.test.tsx`. They cover the
-search row, the approval chips, selection, and the batch invite.
+search row, the approval chips, selection, the batch invite, and the rendering
+fixes below.
+
+**`.field` on a `<label>` is the recurring rendering defect on this screen, and
+it has appeared twice.** `.field` is the *input* class — `forms.tsx` puts it on
+`<input>` elements — so on a wrapping label it gives the label a border and
+padding of its own while the control inside keeps its, and the pair renders as
+nested boxes. The vendor search had it; the RFQ chooser beside it was then
+written the same way *in the same phase that fixed the search*, and a note here
+claimed the search was "the only place" while a second instance was being added
+a few hundred lines away. Both are now a plain `<label htmlFor>` beside a
+control carrying `.input`. `grep -rn 'label className="field"' web/src` is the
+check, and it should only ever match comments.
 
 **Two of the thirteen stub `fetchWorkflowProject` to resolve its second call on
 a macrotask, and that is load-bearing.** This screen re-reads the project after
@@ -222,12 +234,21 @@ guard — the option keeps `data` across a refresh but `loading` still goes true
 so guarding on it alone unmounts the subtree anyway and undoes the option.
 
 **The search row was a box inside a box, and the measurement is why it was
-found.** Its `<label>` carried `className="field"` — the *input* class, which
-`forms.tsx` puts on `<input>` elements — so the label took an input's border and
-padding while the input inside it carried no class at all and fell back to the
-user agent's `1.6px inset`. That was the only place in the codebase putting
-`.field` on a `<label>`. The test asserts the input carries `.input` **and** has
-no wrapping label, because either alone would pass over the defect.
+found.** Its `<label>` carried `className="field"`, so the label took an input's
+border and padding while the input inside it carried no class at all and fell
+back to the user agent's `1.6px inset`. The test asserts the input carries
+`.input` **and** has no wrapping label, because either alone would pass over the
+defect. Two more of that family live beside it: `.chip`'s
+`text-transform: capitalize` — right for the single-word verdict chips it was
+written for — rendered "From the internet" as "From The Internet", hence
+`.chip--asis`; and a per-row button whose *visible* label carried the vendor
+name wrapped to three lines and made every row 89px tall, so the name moved to
+`aria-label` where a screen reader still gets it. **None of the three is
+visible to jsdom**, which applies no stylesheet and does no layout: they were
+found by measuring `getBoundingClientRect` and `getComputedStyle` in a real
+browser. The tests that now guard them assert structure and accessible names,
+which is the most jsdom can see — the geometry itself is only ever caught by
+running the app.
 
 The last **24** before those, across two new files and three existing ones, are the RFQ
 form fixes and the approval pills. Six in `ProjectDetail.test.tsx`: three that

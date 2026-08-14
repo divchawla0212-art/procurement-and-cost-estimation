@@ -428,6 +428,10 @@ a { color: var(--accent-ink); text-underline-offset: 2px; }
   cursor: pointer;
   text-transform: capitalize;
 }
+/* A chip whose label is a phrase, not a token. The rule above capitalises
+   every word, which suits the single-word verdict chips it was written for
+   and turns "From the internet" into "From The Internet". */
+.chip--asis { text-transform: none; }
 .chip:hover { border-color: var(--accent); color: var(--accent-ink); }
 .chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 /* In flight. `aria-disabled`, not `disabled`, so the chip keeps its place in
