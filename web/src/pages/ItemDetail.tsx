@@ -521,6 +521,13 @@ export function ItemDetail({
   const { data, error, loading } = useAsync(
     () => fetchWorkflowProject(projectId),
     [projectId, tick],
+    // Every re-run here is a *refresh* of the same project, not a switch to a
+    // different one, which is the case `useAsync`'s option exists for. Without
+    // it the screen blanks after every write and unmounts the vendor card
+    // mid-interaction — taking the batch's refusals, its summary and the
+    // selection retained for a retry with it, which is everything the reader
+    // needs in order to act on what just failed.
+    { keepPreviousData: true },
   )
 
   // Both of these sit above the early returns because the second is a hook,
@@ -533,7 +540,10 @@ export function ItemDetail({
   const covering = (data?.rfqs ?? []).filter((r) => r.item_ids.includes(itemId))
   const shortlists = useCoveringShortlists(covering, tick)
 
-  if (loading) return <LoadingState label="Loading item…" />
+  // Only the *first* load blanks the screen. `keepPreviousData` keeps `data`
+  // across a refresh but `loading` still goes true, so guarding on it alone
+  // would unmount the subtree anyway and undo the option above.
+  if (loading && !data) return <LoadingState label="Loading item…" />
   if (error) return <ErrorState message={error} />
   if (!data) return <ErrorState message="No project data was returned." />
 

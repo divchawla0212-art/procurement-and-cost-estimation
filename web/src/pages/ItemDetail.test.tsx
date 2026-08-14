@@ -162,6 +162,53 @@ describe('ItemDetail', () => {
     expect(screen.getByText(/^1 selected/)).toBeInTheDocument()
   })
 
+  it('still shows the refusals after the batch reloads the screen', async () => {
+    // The batch ends with a re-read of the project. If that re-read blanks the
+    // screen, the card unmounts and takes the refusals, the summary and the
+    // retained selection with it — everything the reader needs to act on. The
+    // reload here resolves on a macrotask so the loading state actually
+    // commits; resolved immediately it batches into one render and this passes
+    // whether or not the bug is present.
+    const project = detail({
+      items: [GENERATOR],
+      rfqs: [rfq('rfq_1', 'ADP-RFQ-2026-014', ['itm_1'])],
+    })
+    let calls = 0
+    vi.mocked(fetchWorkflowProject).mockImplementation(() => {
+      calls += 1
+      return calls === 1
+        ? Promise.resolve(project)
+        : new Promise((resolve) => setTimeout(() => resolve(project), 0))
+    })
+    vi.mocked(fetchAvailableBidders).mockResolvedValue(
+      availableList({
+        bidders: [
+          APPROVED_BIDDER,
+          { ...APPROVED_BIDDER, id: 'bdr_other', name: 'Gulf Crescent Fabricators' },
+        ],
+      }),
+    )
+    vi.mocked(fetchRfq).mockResolvedValue({ ...RFQ_DETAIL, shortlist: [] })
+    vi.mocked(inviteRegisteredBidder).mockImplementation((_rfqId, body) =>
+      body.vendor_id === 'bdr_other'
+        ? Promise.reject(new Error('Gulf Crescent Fabricators is on hold.'))
+        : Promise.resolve(shortlistEntry()),
+    )
+
+    renderItem()
+    fireEvent.click(await screen.findByRole('button', { name: /select these 2/i }))
+    fireEvent.click(screen.getByRole('button', { name: /shortlist selected \(2\)/i }))
+
+    await waitFor(() => expect(fetchWorkflowProject).toHaveBeenCalledTimes(2))
+    // After the reload has actually landed.
+    await screen.findByText('Gulf Crescent Fabricators')
+
+    expect(screen.getByText(/1 invited · 1 refused/i)).toBeInTheDocument()
+    const row = screen.getByText('Gulf Crescent Fabricators').closest('tr')!
+    expect(within(row).getByText(/is on hold/i)).toBeInTheDocument()
+    expect(screen.getByText(/^1 selected/)).toBeInTheDocument()
+  })
+
   it('has no bulk control when no RFQ covers the item', async () => {
     vi.mocked(fetchWorkflowProject).mockResolvedValue(
       detail({ items: [GENERATOR], rfqs: [] }),
