@@ -96,6 +96,70 @@ describe('ItemDetail', () => {
     expect(search.closest('label')).toBeNull()
   })
 
+  it('selects the vendors that are actually on screen', async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(detail({ items: [GENERATOR] }))
+    vi.mocked(fetchAvailableBidders).mockResolvedValue(
+      availableList({
+        bidders: [
+          APPROVED_BIDDER,
+          { ...APPROVED_BIDDER, id: 'bdr_other', name: 'Gulf Crescent Fabricators' },
+        ],
+      }),
+    )
+
+    renderItem()
+    fireEvent.click(await screen.findByRole('button', { name: /select these 2/i }))
+
+    expect(screen.getByText(/2 selected/)).toBeInTheDocument()
+  })
+
+  it('ticks a vendor by id, not by row', async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(detail({ items: [GENERATOR] }))
+    vi.mocked(fetchAvailableBidders).mockResolvedValue(
+      availableList({ bidders: [APPROVED_BIDDER] }),
+    )
+
+    renderItem()
+    fireEvent.click(await screen.findByRole('checkbox', { name: /select al munara/i }))
+
+    expect(screen.getByText(/1 selected/)).toBeInTheDocument()
+  })
+
+  it('keeps a selection the search has hidden, and says so', async () => {
+    // Pruning on every keystroke throws away the reader's work; dropping the
+    // count lets them shortlist a vendor they can no longer see.
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(detail({ items: [GENERATOR] }))
+    vi.mocked(fetchAvailableBidders).mockResolvedValue(
+      availableList({
+        bidders: [
+          APPROVED_BIDDER,
+          { ...APPROVED_BIDDER, id: 'bdr_other', name: 'Gulf Crescent Fabricators' },
+        ],
+      }),
+    )
+
+    renderItem()
+    fireEvent.click(await screen.findByRole('button', { name: /select these 2/i }))
+    fireEvent.change(screen.getByLabelText('Search vendors'), {
+      target: { value: 'Gulf' },
+    })
+
+    expect(screen.getByText(/2 selected · 1 not shown/)).toBeInTheDocument()
+  })
+
+  it('clears the selection', async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(detail({ items: [GENERATOR] }))
+    vi.mocked(fetchAvailableBidders).mockResolvedValue(
+      availableList({ bidders: [APPROVED_BIDDER] }),
+    )
+
+    renderItem()
+    fireEvent.click(await screen.findByRole('button', { name: /select these 1/i }))
+    fireEvent.click(screen.getByRole('button', { name: /^clear$/i }))
+
+    expect(screen.queryByText(/selected/)).toBeNull()
+  })
+
   it('opens with every approval required, so the list is unchanged', async () => {
     vi.mocked(fetchWorkflowProject).mockResolvedValue(detail({ items: [GENERATOR] }))
     vi.mocked(fetchAvailableBidders).mockResolvedValue(

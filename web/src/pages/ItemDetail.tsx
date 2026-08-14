@@ -99,6 +99,10 @@ function AvailableVendorList({
   // and a stale index would attach a refusal to a different company. The same
   // rule the project screen keeps for a refused delete.
   const [rowError, setRowError] = useState<Record<string, string>>({})
+  // Bidder ids, never row indices — the table re-sorts under a search and
+  // re-fetches under a chip, and an index would move a tick onto a different
+  // company. Third instance of that rule on this screen.
+  const [selected, setSelected] = useState<Set<string>>(new Set())
   // Which approvals a vendor must carry — AND, never OR, the same rule
   // `bidders.available` states. Null until the first response names them, so
   // the browser never spells an approver for itself; once known, all of them
@@ -192,6 +196,17 @@ function AvailableVendorList({
             ),
         )
 
+  // The rows actually drawn. `Select these N` adds only these, because the
+  // table caps at BIDDER_CAP of up to 1 346 and an invitation has no undo —
+  // what you tick has to be what you can see.
+  const rendered = shown.slice(0, BIDDER_CAP)
+  // Ticked but not currently drawn. Reported rather than pruned: a selection
+  // the reader made is theirs to keep, and a count they cannot see is exactly
+  // the thing worth saying out loud.
+  const hidden = [...selected].filter(
+    (id) => !rendered.some((b) => b.id === id),
+  )
+
   return (
     <Card title={title}>
       {loading ? (
@@ -284,9 +299,39 @@ function AvailableVendorList({
             </p>
           )}
 
+          <div className="fxrow">
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() =>
+                setSelected(
+                  (prev) => new Set([...prev, ...rendered.map((b) => b.id)]),
+                )
+              }
+            >
+              Select these {rendered.length}
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              onClick={() => setSelected(new Set())}
+            >
+              Clear
+            </button>
+            {selected.size > 0 && (
+              <span className="muted">
+                {selected.size} selected
+                {hidden.length > 0 && ` · ${hidden.length} not shown`}
+              </span>
+            )}
+          </div>
+
           <table className="table">
             <thead>
               <tr>
+                <th scope="col">
+                  <span className="sr-only">Select</span>
+                </th>
                 <th scope="col">Vendor</th>
                 <th scope="col">Approvals</th>
                 <th scope="col">Product groups</th>
@@ -298,8 +343,23 @@ function AvailableVendorList({
               </tr>
             </thead>
             <tbody>
-              {shown.slice(0, BIDDER_CAP).map((b) => (
+              {rendered.map((b) => (
                 <tr key={b.id}>
+                  <td>
+                    <input
+                      type="checkbox"
+                      aria-label={`Select ${b.name}`}
+                      checked={selected.has(b.id)}
+                      onChange={(e) =>
+                        setSelected((prev) => {
+                          const next = new Set(prev)
+                          if (e.target.checked) next.add(b.id)
+                          else next.delete(b.id)
+                          return next
+                        })
+                      }
+                    />
+                  </td>
                   <td>
                     {b.name}
                     {/* The refusal lives in the row that caused it. */}
