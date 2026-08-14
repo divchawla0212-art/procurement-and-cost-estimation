@@ -25,8 +25,8 @@ untracked fixture directories are present, never in pass/fail:
 
 | where | baseline |
 |---|---|
-| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1625 passed, 3 skipped, 0 failed** |
-| CI, and any clean checkout | **1605 passed, 23 skipped, 0 failed** |
+| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1629 passed, 3 skipped, 0 failed** |
+| CI, and any clean checkout | **1609 passed, 23 skipped, 0 failed** |
 
 Anything else is a real regression.
 
@@ -56,12 +56,12 @@ parser itself is covered in CI — only the tests that assert against the *real*
 
 So the CI row is the workstation row with the four corpus-coverage passes, the
 three `data/` passes, the two `pdftotext` passes and the eleven AVL passes
-turned into skips — `1605 = 1625 - 4 - 3 - 2 - 11`, `23 = 3 + 4 + 3 + 2 + 11`;
-1628 tests either way. When the counts move, measure the workstation row and derive
+turned into skips — `1609 = 1629 - 4 - 3 - 2 - 11`, `23 = 3 + 4 + 3 + 2 + 11`;
+1632 tests either way. When the counts move, measure the workstation row and derive
 the CI row from it; editing the two rows independently is how they drift
 apart.
 
-**The workstation row is measured, not derived**: **1625 passed, 3 skipped**,
+**The workstation row is measured, not derived**: **1629 passed, 3 skipped**,
 taken on 2026-08-14 on the `rfq-platform-phase-1` branch, in an environment
 with `pdftotext`, `data/` (including the ADNOC export) and an ingested
 multi-vendor `projects/` all present. The **eleven**-skip figure that the
@@ -181,7 +181,11 @@ withdraws* reads **Withdrawn**, so a resume re-sent an answer the server
 refuses. That is the withdrawal-beats-an-answer invariant surfacing in a
 caller — the kind of thing only a second run finds.
 
-The **5** after that are both approvals on a shortlist row: four in
+The **4** after that are the approver filter on `/bidders/available`, all in
+`test_bidder_endpoints.py`: the default, the narrowing, and the two refusals.
+None reads the export, so the gate is still eleven and was not re-measured.
+
+The **5** before that are both approvals on a shortlist row: four in
 `test_bidder_endpoints.py` for `approved_by` and one in
 `test_workflow_persistence.py`. The gate is **still eleven and was not
 re-measured** — none of this change touched the three files carrying the
@@ -199,9 +203,33 @@ The web suite is separate and not part of either row above — both rows are
 `python -m pytest` counts. Run it with `npm test` under `web/` (vitest,
 non-watching, exits non-zero on failure); `npm run build` also type-checks the
 test files, since `web/tsconfig.app.json` includes `src`. CI runs both, in the
-`web` job of the same workflow. It stands at **249 passed** across 20 files.
+`web` job of the same workflow. It stands at **263 passed** across 20 files.
 
-The last **24**, across two new files and three existing ones, are the RFQ
+The last **14** are the vendor list's filtering and bulk shortlisting: thirteen
+in `ItemDetail.test.tsx` and one in `ProjectDetail.test.tsx`. They cover the
+search row, the approval chips, selection, and the batch invite.
+
+**Two of the thirteen stub `fetchWorkflowProject` to resolve its second call on
+a macrotask, and that is load-bearing.** This screen re-reads the project after
+every write; resolved immediately, the loading state and the resolution batch
+into a single commit, the vendor card never unmounts, and a test asserting that
+state survives a reload passes whether or not the bug is present. Both were
+written that way after watching them pass against the defect. They caught two
+real ones: a chosen target RFQ resetting so the next vendor was invited
+somewhere nobody picked, and a batch invite wiping its own refusals. The fix for
+the second is `keepPreviousData` on that `useAsync` **plus** a `loading && !data`
+guard — the option keeps `data` across a refresh but `loading` still goes true,
+so guarding on it alone unmounts the subtree anyway and undoes the option.
+
+**The search row was a box inside a box, and the measurement is why it was
+found.** Its `<label>` carried `className="field"` — the *input* class, which
+`forms.tsx` puts on `<input>` elements — so the label took an input's border and
+padding while the input inside it carried no class at all and fell back to the
+user agent's `1.6px inset`. That was the only place in the codebase putting
+`.field` on a `<label>`. The test asserts the input carries `.input` **and** has
+no wrapping label, because either alone would pass over the defect.
+
+The last **24** before those, across two new files and three existing ones, are the RFQ
 form fixes and the approval pills. Six in `ProjectDetail.test.tsx`: three that
 both money fields are `type="text"` and that a budget of `1,800,000` is refused
 rather than sent as `NaN`, and three for the enquiry document the form used to
@@ -496,6 +524,27 @@ them, so keeping them apart stops a reader assuming one set covers both.
   111. In SQL that is a `GROUP BY … HAVING count(DISTINCT approver_key) = ?`,
   and the `DISTINCT` matters: the product-group join multiplies approval rows,
   so a plain count lets one approval satisfy a two-approval test.
+  **`GET /bidders/available` takes a repeatable `approver`, and an unknown one
+  is a 422.** Absent means `AVAILABLE_APPROVERS`, so the default stays the
+  server's rather than something every caller has to know and send. Narrowing
+  to one is how a screen asks for the client's whole register — measured on the
+  real export, that is 1 346 against the intersection's 111, and there was no
+  route to it before. A typo returns nobody from the `HAVING` query, and an
+  empty table reads on screen as "no vendor qualifies", so it is refused with
+  the bad name in the message; an empty list is refused too, because a count of
+  zero matches nobody. `selectable_approvers` rides alongside so the browser
+  builds its filter controls without spelling an approver's name, and
+  `approvers` is the *applied* filter so a narrowed caption names the
+  narrowing.
+- **There is no bulk invitation endpoint, deliberately.** The item screen's
+  "Shortlist selected" is N calls to `POST /rfqs/{id}/shortlist`, one per
+  vendor and sequential. The per-vendor guards — the `override_reason` a
+  blocked bidder demands, the refusal of a duplicate — are what make an
+  invitation an attributed act, and a bulk route would have to reimplement or
+  bypass them. It is **not** all-or-nothing: one refusal fails alone, renders
+  beside its own row and stays selected for a retry, while the vendors that
+  succeeded stay invited. There is nothing to roll them back with — those
+  writes have already landed through `locked_update`.
   **Astra approval is now real, and `avl_import.astra_approves` is not how it
   gets set.** That function derived the flag from a hash so a demo had
   something to show; a fabricated approval and a recorded one are
