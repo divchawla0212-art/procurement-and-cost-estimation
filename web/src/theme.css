@@ -1354,6 +1354,15 @@ p.warn { margin: 0.5rem 0 0; }
   background: var(--surface-2);
 }
 
+/* Two pills with no gap abut exactly and read as a single word — "ADNOCASTRA"
+   rather than two approvals. Wraps, because a vendor on several lists in a
+   narrow table cell should stack rather than overflow. */
+.approval-pills {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
 /* Approver identity, and deliberately *not* the pass/deviation/fail palette
    the prequalification chips share. That palette's comment says why it is
    shared: those chips answer "can work proceed here". An approver's name is

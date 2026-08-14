@@ -23,8 +23,15 @@ import { VERDICT_LABEL, VERDICTS, pct } from '../constants'
  * we have qualified and the client has not is both of those things at once.
  */
 export function ApprovalPills({ approvers }: { approvers: string[] }) {
+  // Nothing at all for an empty list, rather than an empty wrapper: a table
+  // cell with a stray inline-flex box in it is not the same as an empty one.
+  if (approvers.length === 0) return null
   return (
-    <>
+    // The wrapper owns the gap. Without it two pills abut exactly — measured
+    // in a real browser, where the ADNOC pill's right edge and the Astra
+    // pill's left edge were the same pixel — and two coloured chips touching
+    // read as one blob. jsdom has no layout, so no unit test can catch this.
+    <span className="approval-pills">
       {approvers.map((org) => (
         <span
           key={org}
@@ -35,7 +42,7 @@ export function ApprovalPills({ approvers }: { approvers: string[] }) {
           {org}
         </span>
       ))}
-    </>
+    </span>
   )
 }
 
