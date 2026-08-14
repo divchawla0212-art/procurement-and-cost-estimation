@@ -210,7 +210,7 @@ def test_a_seeded_store_round_trips_unchanged(tmp_path):
 # has it and skip in CI, the same shape as the other fixture-backed tests here.
 
 REAL_AVL = os.path.join(
-    "data", "bidders_details", "ADNOC Approved Vendor List as of 10.12.2025.xlsx"
+    "data", "bidders_details", "ADNOC Approved Vendor List as of 10.12.2025(client).xlsx"
 )
 needs_real_avl = pytest.mark.skipif(
     not os.path.exists(REAL_AVL),

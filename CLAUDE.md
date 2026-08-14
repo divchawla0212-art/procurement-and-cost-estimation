@@ -25,8 +25,8 @@ untracked fixture directories are present, never in pass/fail:
 
 | where | baseline |
 |---|---|
-| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1629 passed, 3 skipped, 0 failed** |
-| CI, and any clean checkout | **1609 passed, 23 skipped, 0 failed** |
+| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1694 passed, 3 skipped, 0 failed** |
+| CI, and any clean checkout | **1674 passed, 23 skipped, 0 failed** |
 
 Anything else is a real regression.
 
@@ -44,10 +44,20 @@ from poppler-utils; `.github/workflows/tests.yml` does not install it, so they
 pass on a workstation that has it and skip in CI.
 
 And now a **fourth**, the largest of them: **eleven** tests guarded on
-`data/bidders_details/ADNOC Approved Vendor List as of 10.12.2025.xlsx` — two
-in `test_avl_import.py`, seven in `test_seed_demo.py` and two in
-`test_disciplines.py`, all carrying the `needs_real_avl` marker. That export is
-untracked and will not be committed;
+`data/bidders_details/ADNOC Approved Vendor List as of 10.12.2025(client).xlsx`
+— two in `test_avl_import.py`, seven in `test_seed_demo.py` and two in
+`test_disciplines.py`, all carrying the `needs_real_avl` marker.
+
+**The `(client)` in that filename is load-bearing, and all three files once
+named it without.** When the Astra subset arrived beside it the export was
+renamed to say which of the two it is, and the three `os.path.exists` guards
+were not. The failure is silent and it is the worst kind this table has: eleven
+tests reported as *skipped for the documented reason* on a workstation that
+holds the file, so the baseline stayed green while the gate measured nothing.
+A skip guard whose path no longer resolves is indistinguishable from CI. If a
+workstation run ever shows 14 skips rather than 3, check these three paths
+before looking anywhere else. That export is untracked and will not be
+committed;
 it is a real client document, and the point of the import is that it is not
 reproducible from anything in this repository. The other twenty-one tests in
 `test_avl_import.py` build a small workbook in memory with `openpyxl`, so the
@@ -56,20 +66,23 @@ parser itself is covered in CI — only the tests that assert against the *real*
 
 So the CI row is the workstation row with the four corpus-coverage passes, the
 three `data/` passes, the two `pdftotext` passes and the eleven AVL passes
-turned into skips — `1609 = 1629 - 4 - 3 - 2 - 11`, `23 = 3 + 4 + 3 + 2 + 11`;
-1632 tests either way. When the counts move, measure the workstation row and derive
+turned into skips — `1674 = 1694 - 4 - 3 - 2 - 11`, `23 = 3 + 4 + 3 + 2 + 11`;
+1697 tests either way. When the counts move, measure the workstation row and derive
 the CI row from it; editing the two rows independently is how they drift
 apart.
 
-**The workstation row is measured, not derived**: **1629 passed, 3 skipped**,
+**The workstation row is measured, not derived**: **1694 passed, 3 skipped**,
 taken on 2026-08-14 on the `rfq-platform-phase-1` branch, in an environment
 with `pdftotext`, `data/` (including the ADNOC export) and an ingested
 multi-vendor `projects/` all present. The **eleven**-skip figure that the
 fourth gate contributes is measured too — by moving `data/bidders_details/`
 aside and re-running the affected files, not by counting decorators. It has
 been measured that way every time a change touched those files: nine when the
-client-approval gap added tests to two of them, eleven now that
-`test_disciplines.py` is a third. Measure it again rather than adjusting it
+client-approval gap added tests to two of them, eleven when
+`test_disciplines.py` became a third, and eleven again when the filename above
+was corrected in all three — which is the one case where the number came back
+unchanged and the measurement was still the whole point, because before it the
+gate was open and nobody could tell. Measure it again rather than adjusting it
 arithmetically — the paragraphs below record which phase contributed what, and
 they are a history, not a running total.
 That matters, because a row this file once carried was not. While the auth
@@ -185,6 +198,24 @@ The **4** after that are the approver filter on `/bidders/available`, all in
 `test_bidder_endpoints.py`: the default, the narrowing, and the two refusals.
 None reads the export, so the gate is still eleven and was not re-measured.
 
+The **42** after that are vendors added by hand and suggested by a model: 6 in
+`test_item_vendor_lists.py` for the two curated sources and their mirrored
+refusals, 2 in `test_workflow_persistence.py`, 13 in the new
+`test_vendor_suggestions.py`, and 21 more in `test_item_vendor_endpoints.py`.
+The gate **was** re-measured this time, because the filename correction above
+touched all three marked files — it came back eleven.
+
+Three of those 42 are the ones to keep. `test_the_model_is_never_asked_for_a_verdict`
+reads the prompt file for the words that would make it ask for one; the item's
+own discipline and description therefore ride in `context_text` rather than
+being appended to the prompt, so a company legitimately trading as *Best
+Cables* arriving in `exclude` cannot fail it. `test_the_suggestion_route_stores_nothing`
+compares `workflow.json` byte for byte across the call, which is the only
+assertion that catches a convenience write nobody meant to add.
+`test_a_hand_added_vendor_never_links_to_the_registry` seeds a registry row
+with the *exact* name being typed in and asserts `vendor_id` stays `None` — a
+lookup added later would pass every other test in the file.
+
 The **5** before that are both approvals on a shortlist row: four in
 `test_bidder_endpoints.py` for `approved_by` and one in
 `test_workflow_persistence.py`. The gate is **still eleven and was not
@@ -203,9 +234,27 @@ The web suite is separate and not part of either row above — both rows are
 `python -m pytest` counts. Run it with `npm test` under `web/` (vitest,
 non-watching, exits non-zero on failure); `npm run build` also type-checks the
 test files, since `web/tsconfig.app.json` includes `src`. CI runs both, in the
-`web` job of the same workflow. It stands at **265 passed** across 20 files.
+`web` job of the same workflow. It stands at **285 passed** across 20 files.
 
-The last **16** are the vendor list's filtering and bulk shortlisting: fifteen
+The last **14** are the item screen's four vendor cards, the suggestion card
+and the way into a covering RFQ — all in `ItemDetail.test.tsx`, net of the one
+that went with the disabled *From the internet* chip.
+
+**Two of those fourteen were written after a browser found the defect, not
+before**, and they are the reason to keep launching the app. Rendering a
+curated row's `trade_categories` in full put all eleven of the Cables
+expansion's product groups in one cell: 595px wide, the vendor name crushed to
+67px, every row 170px tall. That is the third instance of this exact family
+after the `.field`-on-a-label boxes and the 89px shortlist button, and like
+both of them **jsdom cannot see it** — no stylesheet, no layout. What the tests
+assert is the structure that caused it (capped at two plus a `+N more`, the
+shape the available-vendor card beside it already used); the geometry itself is
+only ever caught by running the app. The same pass caught the *Registry* column
+reading "Not in the registry" on a hand-typed row, which reports a check nobody
+ran — the server never looks a curated name up, so the honest rendering of that
+`null` is no column at all, and no "not found" tally under it either.
+
+The **16** before those are the vendor list's filtering and bulk shortlisting: fifteen
 in `ItemDetail.test.tsx` and one in `ProjectDetail.test.tsx`. They cover the
 search row, the approval chips, selection, the batch invite, and the rendering
 fixes below.
@@ -706,6 +755,81 @@ them, so keeping them apart stops a reader assuming one set covers both.
   exists for. The route is declared **above** `/rfqs/{rfq_id}` for the reason
   `/bidders/approved` is, and `test_the_extract_path_is_not_read_as_an_rfq_id`
   holds it.
+- **`VendorListSource` has four members in two sets, and each set refuses the
+  other's operations.** `Client` and `Astra` are **uploaded**: they arrive as
+  whole documents and `set_item_vendor_list` replaces one wholesale, so
+  `add_item_vendor_entry` and `remove_item_vendor_entry` refuse them.
+  `Manual` and `Suggested` are **curated**: built one vendor at a time, so
+  `set_item_vendor_list` refuses *those*. Not defensive noise, and not one
+  method with a flag — an upload that wiped a buyer's hand-added companies
+  would destroy work with no undo, and a hand-add appended to an export would
+  leave that list matching no document any re-upload reproduces. Both refusals
+  name the source and say what would work instead. Removal is by **id**, never
+  by name or position, because two suppliers can share a trading name; that is
+  the same rule `remove_shortlist_entry` keeps. `ItemVendorEntry` gains nothing
+  for either — a hand-added company is already exactly what that record
+  describes, and a `note` rides on `source_document`, which already means *why
+  this row is here*. The cascade needed no extending: `delete_item` pops the
+  whole entry, per item rather than per source, and
+  `test_deleting_an_item_takes_its_hand_added_vendors_too` is what says so.
+- **A curated row never links to the registry, and the route never looks the
+  name up.** `vendor_id` is always `None` there. A match would silently attach
+  a real company's approvals to whatever somebody typed, and this repository
+  has twice recorded name matching as a shipped defect; if the vendor really is
+  in the registry, the available-vendor card is where to find them, and that
+  card links by id. Nothing on these routes creates a bidder or grants an
+  approval — the registry is organisation-wide and arrives whole from its own
+  import, so a write attached to one line of equipment must not enrol a company
+  across every project. On screen this means the curated cards carry **no
+  Registry column and no "not found" tally**: rendering "Not in the registry"
+  for a row nobody looked up would report a check that never ran, which is the
+  `null` vs `false` distinction the shortlist's client-approval column keeps.
+- **`POST /projects/{p}/items/{i}/vendor-suggestions` stores nothing**, the
+  same shape as `/rfqs/extract` and for the same reason: a suggestion the
+  reader rejects should leave nothing behind, and one they accept should be
+  recorded as *their* act. Accepting is a second call to the hand-add route,
+  one vendor at a time; there is deliberately **no bulk accept**, because
+  taking twenty unverified companies in one click is precisely the act that
+  needs friction. A suggestion carries no `approved_by`, no `vendor_id` and no
+  prequalification — a model-named company claiming the client's approval is
+  the failure `test_no_invented_vendor_claims_the_clients_approval` guards,
+  arriving through a new door. A provider failure is a **502 and never an empty
+  list**: an outage and "no such companies exist" must not look the same, the
+  distinction the covering-RFQ summary keeps between `—` and `Nobody invited
+  yet`.
+- **The label matches the mechanism: "suggested by the model", never "found on
+  the internet".** `shared/llm/` wraps Anthropic, OpenAI, Gemini and Bedrock
+  through one `classify_structure` call — no crawler, no search index, no
+  provider web-search tool — so what comes back is what the model recalls from
+  training: undated, unsourced, and capable of being confidently wrong by
+  inventing a plausible company name. The card says so before it says anything
+  else, every stored row's `source_document` reads *suggested by the model*,
+  and the disabled *From the internet* chip was **removed rather than enabled**
+  because it promised a search no code performs. Fourth instance of the
+  honest-labelling rule, beside the AVL import, the mock rounds and the RFQ
+  extractor. Adopting a real server-side web-search tool is a phase of its own —
+  a client method beyond `classify_structure`, a citation field, and somewhere
+  to record which URL a vendor came from — and the label can change when it
+  lands.
+- **The model reads; code decides — and the prompt is where that is enforced.**
+  `shared/llm/prompts/vendor_search_v1.txt` is versioned like every other, so
+  what is asked is a reviewable diff rather than a string literal buried in a
+  request. It asks only which companies supply this kind of equipment, and
+  `test_the_model_is_never_asked_for_a_verdict` reads the file for the words
+  that would make it ask for more. That test is why the item's discipline and
+  description ride in `context_text` rather than being appended to the prompt:
+  a company legitimately trading as *Best Cables* arriving in `exclude` must
+  not be able to fail it. `exclude` is filtered again in Python, folded through
+  `disciplines.fold`, because a prompt instruction is a request and only the
+  filter is a guarantee. The `[]` default on `vendors` is load-bearing —
+  `CLAUDE.md`'s `I5`, an omitted optional array read as a failure rather than
+  as no results — and a model asked about an obscure discipline may
+  legitimately name none.
+- **A `Suggested` row stays labelled one after a person accepts it.** It is not
+  promoted to `Manual` on the grounds that a human vouched for it: that the
+  name originated with a model is the single thing a later reader would most
+  want to know, and promoting it is the only way to lose it. Stated in the
+  design as an open question and decided here rather than silently.
 
 ## Planning convention
 

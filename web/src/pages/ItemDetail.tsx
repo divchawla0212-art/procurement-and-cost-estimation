@@ -554,6 +554,13 @@ function VendorListCard({
 }): JSX.Element {
   const label = SOURCE_LABEL[source]
   const linked = entries.filter((e) => e.vendor_id !== null).length
+  // The registry column and its tally belong to the uploads only. A curated
+  // row is unlinked *by construction* — the server never looks a typed name up
+  // — so "Not in the registry" there would report a check nobody ran, and the
+  // "not found" count would tally the same non-lookup as a miss. That is the
+  // `null` vs `false` distinction the shortlist's client-approval column
+  // keeps, and here the honest rendering of `null` is no column at all.
+  const uploaded = source === 'Client' || source === 'Astra'
   // Keyed by entry id, never by row index: the list re-renders after every
   // write, and a stale index would attach a refusal to a different company.
   // The same rule the available-vendor card keeps.
@@ -606,7 +613,7 @@ function VendorListCard({
             <thead>
               <tr>
                 <th scope="col">Vendor</th>
-                <th scope="col">Registry</th>
+                {uploaded && <th scope="col">Registry</th>}
                 <th scope="col">Product groups</th>
                 <th scope="col">How it arrived</th>
                 {onRemove && (
@@ -630,14 +637,28 @@ function VendorListCard({
                       </div>
                     )}
                   </td>
-                  <td>
-                    {e.vendor_id === null ? (
-                      <span className="warn">Not in the registry</span>
-                    ) : (
-                      <span className="muted">Linked</span>
-                    )}
+                  {uploaded && (
+                    <td>
+                      {e.vendor_id === null ? (
+                        <span className="warn">Not in the registry</span>
+                      ) : (
+                        <span className="muted">Linked</span>
+                      )}
+                    </td>
+                  )}
+                  {/* Capped at two, the same shape the available-vendor card
+                      beside it uses. A curated row carries the item's whole
+                      discipline expansion — eleven groups for Cables — and
+                      rendered in full that cell ran to 595px, crushed the
+                      vendor name to 67px and made every row 170px tall. Only
+                      measurable in a browser: jsdom applies no stylesheet and
+                      does no layout. Second instance on this screen, after the
+                      89px shortlist button. */}
+                  <td className="muted">
+                    {e.trade_categories.slice(0, 2).join(' · ') || '—'}
+                    {e.trade_categories.length > 2 &&
+                      ` · +${e.trade_categories.length - 2} more`}
                   </td>
-                  <td className="muted">{e.trade_categories.join(' · ') || '—'}</td>
                   {/* `source_document` names the export for an upload and the
                       act for a curated row, so every row says how it got here
                       whichever door it came through. */}
@@ -665,8 +686,15 @@ function VendorListCard({
           </table>
           <p className="muted">
             {entries.length} on the {label.toLowerCase()} for{' '}
-            {discipline || 'this item'} · {linked} in the registry
-            {linked < entries.length && ` · ${entries.length - linked} not found`}
+            {discipline || 'this item'}
+            {uploaded && (
+              <>
+                {' '}
+                · {linked} in the registry
+                {linked < entries.length &&
+                  ` · ${entries.length - linked} not found`}
+              </>
+            )}
           </p>
         </>
       )}

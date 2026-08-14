@@ -237,7 +237,7 @@ def test_no_imported_bidder_is_ever_off_the_client_list(tmp_path):
 # -- the real export ---------------------------------------------------------
 
 REAL_AVL = os.path.join(
-    "data", "bidders_details", "ADNOC Approved Vendor List as of 10.12.2025.xlsx"
+    "data", "bidders_details", "ADNOC Approved Vendor List as of 10.12.2025(client).xlsx"
 )
 needs_real_avl = pytest.mark.skipif(
     not os.path.exists(REAL_AVL),

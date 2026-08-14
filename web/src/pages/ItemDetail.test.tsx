@@ -1292,6 +1292,64 @@ describe('ItemDetail', () => {
       )
     })
 
+    it('reports no registry finding, because nobody looked one up', async () => {
+      // A curated row is unlinked *by construction* — the server never looks a
+      // typed name up, because a match would attach a real company's approvals
+      // to it. Rendering "Not in the registry" here would report a check
+      // nobody ran, which is the `null` vs `false` distinction the shortlist's
+      // client-approval column already keeps. The column is absent instead.
+      vi.mocked(fetchWorkflowProject).mockResolvedValue(
+        detail({
+          items: [GENERATOR],
+          item_vendor_lists: {
+            itm_1: vendorLists({
+              Manual: [vendorEntry({ source: 'Manual', vendor_id: null, vendor_name: 'Hand Co' })],
+            }),
+          },
+        }),
+      )
+
+      renderItem()
+      const card = await openManual()
+
+      expect(within(card).queryByText(/not in the registry/i)).not.toBeInTheDocument()
+      expect(
+        within(card).queryByRole('columnheader', { name: /registry/i }),
+      ).not.toBeInTheDocument()
+      // And no tally that counts the same non-lookup as a miss.
+      expect(within(card).queryByText(/not found/i)).not.toBeInTheDocument()
+    })
+
+    it('does not let a discipline expansion take over the row', async () => {
+      // Measured in a real browser, which is the only place this is visible:
+      // eleven cable product groups rendered in full made the cell 595px wide,
+      // crushed the vendor name to 67px and every row to 170px tall. jsdom
+      // applies no stylesheet and does no layout, so what is asserted here is
+      // the structure that caused it — the same shape the available-vendor
+      // card already uses, and the second instance of this defect on this
+      // screen after the 89px shortlist button.
+      const many = Array.from({ length: 11 }, (_, i) => `CABLES - GROUP ${i + 1}`)
+      vi.mocked(fetchWorkflowProject).mockResolvedValue(
+        detail({
+          items: [GENERATOR],
+          item_vendor_lists: {
+            itm_1: vendorLists({
+              Manual: [
+                vendorEntry({ source: 'Manual', vendor_name: 'Hand Co', trade_categories: many }),
+              ],
+            }),
+          },
+        }),
+      )
+
+      renderItem()
+      const card = await openManual()
+      const row = (await within(card).findByText('Hand Co')).closest('tr')!
+
+      expect(within(row).getByText(/\+9 more/)).toBeInTheDocument()
+      expect(within(row).queryByText(/CABLES - GROUP 11/)).not.toBeInTheDocument()
+    })
+
     it('shows a refused removal beside the row it refused', async () => {
       vi.mocked(fetchWorkflowProject).mockResolvedValue(
         detail({
