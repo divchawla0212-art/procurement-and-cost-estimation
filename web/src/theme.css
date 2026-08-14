@@ -1353,3 +1353,25 @@ p.warn { margin: 0.5rem 0 0; }
   color: var(--muted);
   background: var(--surface-2);
 }
+
+/* Approver identity, and deliberately *not* the pass/deviation/fail palette
+   the prequalification chips share. That palette's comment says why it is
+   shared: those chips answer "can work proceed here". An approver's name is
+   not a verdict — a vendor on one list and not the other is not thereby
+   failing anything — so borrowing green and amber would report trouble where
+   the truth is only that two organisations keep different lists.
+
+   An approver with no rule here keeps the neutral base style above, which is
+   why `ApprovalPills` builds the class from a slug rather than a lookup. */
+.approval-badge--adnoc {
+  background: #e8eefb;
+  border-color: #c3d3f0;
+  color: #274a94;
+}
+
+/* Our own list, in the house accent. */
+.approval-badge--astra {
+  background: var(--accent-soft);
+  border-color: #b7dcdf;
+  color: var(--accent-ink);
+}

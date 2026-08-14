@@ -1,7 +1,43 @@
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { Coverage } from '../types'
 import { VERDICT_LABEL, VERDICTS, pct } from '../constants'
+
+/* -------------------------------------------------------------- ApprovalPills */
+
+/**
+ * Who has approved a vendor, as one pill per approver.
+ *
+ * A component rather than a `.map` at each call site because three screens
+ * render this same fact — the wizard's candidate card, its shortlist row, and
+ * the item screen's vendor table — and three copies is three places to fix
+ * when a fourth approver appears.
+ *
+ * The class is a **slug, not a lookup**, so an approver the stylesheet does not
+ * name falls through to the neutral base rule instead of vanishing. A lookup
+ * would have to decide what to do with a name it does not know, and the honest
+ * answer — show it, uncoloured — is what the cascade gives for free.
+ *
+ * It renders identity, never a verdict. Whether an approval is *missing* is
+ * the server's `client_approved`, and callers render that separately: a vendor
+ * we have qualified and the client has not is both of those things at once.
+ */
+export function ApprovalPills({ approvers }: { approvers: string[] }) {
+  return (
+    <>
+      {approvers.map((org) => (
+        <span
+          key={org}
+          className={`approval-badge approval-badge--${org
+            .toLowerCase()
+            .replace(/\s+/g, '-')}`}
+        >
+          {org}
+        </span>
+      ))}
+    </>
+  )
+}
 
 /* -------------------------------------------------------------- PasswordField */
 
@@ -220,11 +256,16 @@ export function Card({
   children: ReactNode
   bodyClass?: string
 }) {
+  // A `<section>` is only a landmark once it has an accessible name, so the
+  // heading is wired to it rather than merely sitting inside it. Without this
+  // every card is an anonymous div to a screen reader — and untargetable by a
+  // test that wants to assert *within* one card rather than the whole page.
+  const headingId = useId()
   return (
-    <section className="card">
+    <section className="card" aria-labelledby={title ? headingId : undefined}>
       {(title || actions) && (
         <header className="card-head">
-          {title ? <h2>{title}</h2> : <span />}
+          {title ? <h2 id={headingId}>{title}</h2> : <span />}
           {actions}
         </header>
       )}
