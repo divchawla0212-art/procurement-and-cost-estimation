@@ -9,6 +9,7 @@ import {
 } from '../../api'
 import type { Candidate } from '../../types'
 import { useAsync } from '../../useAsync'
+import { ApprovalPills } from '../../components/primitives'
 import type { StepProps } from './types'
 
 /**
@@ -40,6 +41,7 @@ export function ShortlistingStep({ data, run, busy, tick }: StepProps) {
           <thead>
             <tr>
               <th scope="col">Vendor</th>
+              <th scope="col">Approvals</th>
               <th scope="col">Prequalification</th>
               <th scope="col">Scope fit</th>
               <th scope="col">Recorded exception</th>
@@ -53,6 +55,35 @@ export function ShortlistingStep({ data, run, busy, tick }: StepProps) {
                   {e.vendor_name}
                   {e.vendor_id ? null : (
                     <span className="muted"> · not in the registry</span>
+                  )}
+                </td>
+                {/* Live, unlike every other column here: the server re-derives
+                    both keys from the registry on each read, so correcting a
+                    vendor's `approved_by` shows up without the shortlist being
+                    touched.
+
+                    Three states — pills, off the list, and not checked. The
+                    last is a vendor typed in by hand, who has no registry row,
+                    and saying "not on the list" for them would report a check
+                    that never happened.
+
+                    The pills and the warning are shown *together* rather than
+                    as alternatives: a vendor we have qualified and the client
+                    has not is both of those things at once, and the pill alone
+                    would let our own approval read as clearance we do not
+                    have. */}
+                <td>
+                  {e.approved_by === null ? (
+                    <span className="muted">Not checked</span>
+                  ) : (
+                    <>
+                      <ApprovalPills approvers={e.approved_by} />
+                      {e.client_approved === false && (
+                        <span className="warn">
+                          Not on the {data.client_approver} list
+                        </span>
+                      )}
+                    </>
                   )}
                 </td>
                 {/* The status as it was when the invitation was issued, not as
@@ -94,8 +125,9 @@ export function ShortlistingStep({ data, run, busy, tick }: StepProps) {
         <p className="warn">{candidates.error}</p>
       ) : (candidates.data ?? []).length === 0 ? (
         <p className="muted">
-          The bidder registry is empty. Add bidders under Bidders, and they will
-          be offered here with their prequalification checked for you.
+          The bidder registry is empty. Import an Approved Vendor List, and its
+          vendors will be offered here with their prequalification checked for
+          you.
         </p>
       ) : (
         <CandidateList
@@ -281,12 +313,8 @@ function CandidateRow({
         </span>
         {/* Whose list they are on. On a client's imported AVL every candidate
             is approved, so this is the distinction that actually separates
-            them. */}
-        {bidder.approved_by.map((org) => (
-          <span key={org} className="approval-badge">
-            {org}
-          </span>
-        ))}
+            them — which is why the pills are coloured rather than uniform. */}
+        <ApprovalPills approvers={bidder.approved_by} />
         {candidate.shortlisted ? (
           <span className="muted">Invited</span>
         ) : (
