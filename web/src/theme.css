@@ -433,6 +433,13 @@ a { color: var(--accent-ink); text-underline-offset: 2px; }
 /* In flight. `aria-disabled`, not `disabled`, so the chip keeps its place in
    the tab order — a real `disabled` mid-request blurs the button the user
    just activated and drops them back to the top of the page. */
+/* A genuinely disabled chip, which `aria-disabled` alone does not cover: that
+   attribute dims the control but still lets it receive clicks, and the
+   approval chips need real suppression. */
+.chip:disabled { opacity: 0.5; cursor: not-allowed; }
+.chip:disabled:hover { border-color: var(--border-strong); color: var(--muted); }
+.chip.on:disabled:hover { border-color: var(--accent); color: #fff; }
+
 .chip[aria-disabled='true'] { opacity: 0.5; cursor: progress; }
 .chip[aria-disabled='true']:hover { border-color: var(--border-strong); color: var(--muted); }
 .chip.on[aria-disabled='true']:hover { border-color: var(--accent); color: #fff; }

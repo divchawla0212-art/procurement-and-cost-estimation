@@ -96,6 +96,64 @@ describe('ItemDetail', () => {
     expect(search.closest('label')).toBeNull()
   })
 
+  it('opens with every approval required, so the list is unchanged', async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(detail({ items: [GENERATOR] }))
+    vi.mocked(fetchAvailableBidders).mockResolvedValue(
+      availableList({ bidders: [APPROVED_BIDDER] }),
+    )
+
+    renderItem()
+
+    expect(await screen.findByRole('button', { name: 'ADNOC' })).toHaveClass('on')
+    expect(screen.getByRole('button', { name: 'Astra' })).toHaveClass('on')
+  })
+
+  it('asks the server again with one approval when a chip is unticked', async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(detail({ items: [GENERATOR] }))
+    vi.mocked(fetchAvailableBidders).mockResolvedValue(
+      availableList({ bidders: [APPROVED_BIDDER] }),
+    )
+
+    renderItem()
+    fireEvent.click(await screen.findByRole('button', { name: 'Astra' }))
+
+    // `toHaveBeenCalledWith`, not `LastCalledWith`: the card makes two reads —
+    // the scoped one and the whole-list fallback — and the fallback is the one
+    // that happens to settle last.
+    await waitFor(() =>
+      expect(fetchAvailableBidders).toHaveBeenCalledWith('Electrical', ['ADNOC']),
+    )
+  })
+
+  it('will not let the last approval be unticked', async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(detail({ items: [GENERATOR] }))
+    vi.mocked(fetchAvailableBidders).mockResolvedValue(
+      availableList({ bidders: [APPROVED_BIDDER] }),
+    )
+
+    renderItem()
+    fireEvent.click(await screen.findByRole('button', { name: 'Astra' }))
+
+    // Zero required approvals matches nobody in the HAVING query — the server
+    // refuses it, and the control should not be able to ask.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'ADNOC' })).toBeDisabled(),
+    )
+  })
+
+  it('offers the internet source as not built yet', async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(detail({ items: [GENERATOR] }))
+    vi.mocked(fetchAvailableBidders).mockResolvedValue(
+      availableList({ bidders: [APPROVED_BIDDER] }),
+    )
+
+    renderItem()
+
+    const chip = await screen.findByRole('button', { name: /from the internet/i })
+    expect(chip).toBeDisabled()
+    expect(screen.getByText('Not built yet.')).toBeInTheDocument()
+  })
+
   it('shows an approval pill against each available vendor', async () => {
     vi.mocked(fetchWorkflowProject).mockResolvedValue(detail({ items: [GENERATOR] }))
     vi.mocked(fetchAvailableBidders).mockResolvedValue(
@@ -104,8 +162,11 @@ describe('ItemDetail', () => {
 
     renderItem()
 
-    expect(await screen.findByText('ADNOC')).toHaveClass('approval-badge--adnoc')
-    expect(screen.getByText('Astra')).toHaveClass('approval-badge--astra')
+    // Scoped to the row: "ADNOC" now names a filter chip as well as a pill,
+    // and an unscoped query matches both.
+    const row = (await screen.findByText('Al Munara Switchgear LLC')).closest('tr')!
+    expect(within(row).getByText('ADNOC')).toHaveClass('approval-badge--adnoc')
+    expect(within(row).getByText('Astra')).toHaveClass('approval-badge--astra')
   })
 
   it('invites a vendor into the one RFQ covering this item', async () => {
@@ -599,7 +660,10 @@ describe('ItemDetail', () => {
       expect(
         within(card).getByRole('heading', { name: /Available vendors for Cables/ }),
       ).toBeInTheDocument()
-      expect(fetchAvailableBidders).toHaveBeenCalledWith('Cables')
+      // The second argument is the approvals required. `undefined` on the
+      // first read means "the server's own default" — the card does not send
+      // a list until the reader unticks a chip.
+      expect(fetchAvailableBidders).toHaveBeenCalledWith('Cables', undefined)
       expect(
         within(card).queryByText('Al Munara Switchgear LLC'),
       ).not.toBeInTheDocument()

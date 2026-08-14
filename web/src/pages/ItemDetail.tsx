@@ -99,8 +99,37 @@ function AvailableVendorList({
   // and a stale index would attach a refusal to a different company. The same
   // rule the project screen keeps for a refused delete.
   const [rowError, setRowError] = useState<Record<string, string>>({})
-  const scoped = useAsync(() => fetchAvailableBidders(discipline), [discipline])
-  const whole = useAsync(() => fetchAvailableBidders(), [])
+  // Which approvals a vendor must carry — AND, never OR, the same rule
+  // `bidders.available` states. Null until the first response names them, so
+  // the browser never spells an approver for itself; once known, all of them
+  // are required, which is the list the server would have used anyway. The
+  // card therefore opens showing exactly what it showed before the chips
+  // existed, and only a deliberate untick changes it.
+  const [required, setRequired] = useState<string[] | null>(null)
+  const scoped = useAsync(
+    () => fetchAvailableBidders(discipline, required ?? undefined),
+    // Joined, not the array: it is rebuilt every render, and passing it here
+    // would re-run the fetch forever.
+    [discipline, (required ?? []).join(',')],
+  )
+  const whole = useAsync(
+    () => fetchAvailableBidders(undefined, required ?? undefined),
+    [(required ?? []).join(',')],
+  )
+
+  const selectable = scoped.data?.selectable_approvers ?? []
+  const approvers = required ?? selectable
+
+  function toggleApprover(org: string) {
+    const next = approvers.includes(org)
+      ? approvers.filter((o) => o !== org)
+      : [...approvers, org]
+    // Guarded here as well as by `disabled` on the control, so neither a
+    // keyboard nor a test can reach the state the query has no expression for:
+    // a HAVING count of zero matches nobody, and the server refuses it.
+    if (next.length === 0) return
+    setRequired(next)
+  }
 
   // Read from the *target* RFQ's shortlist, not from all of them: a vendor
   // invited to one RFQ covering this item is still invitable to another.
@@ -202,7 +231,36 @@ function AvailableVendorList({
               placeholder="Vendor, product group or manufacturer"
               onChange={(e) => setQuery(e.target.value)}
             />
+            {/* The approvals required, not a choice between them. Both ticked
+                is the list this card has always shown; unticking one widens it
+                to the client's whole register or narrows it to ours. */}
+            {selectable.map((org) => (
+              <button
+                key={org}
+                type="button"
+                className={`chip${approvers.includes(org) ? ' on' : ''}`}
+                // The last one standing cannot be turned off — see
+                // `toggleApprover`.
+                disabled={approvers.length === 1 && approvers.includes(org)}
+                title={
+                  approvers.length === 1 && approvers.includes(org)
+                    ? 'At least one approval is required.'
+                    : undefined
+                }
+                onClick={() => toggleApprover(org)}
+              >
+                {org}
+              </button>
+            ))}
+            {/* Nothing sources a vendor from the web yet, so this is disabled
+                rather than tickable — a tickable chip could only ever produce
+                an empty table, which reads as broken rather than unbuilt. Same
+                treatment as the RFQ wizard's search button. */}
+            <button type="button" className="chip" disabled>
+              From the internet
+            </button>
           </div>
+          <p className="muted">Not built yet.</p>
 
           {/* Which RFQ an invitation lands on. Only asked when the answer is
               not obvious — one covering RFQ needs no question, and none means
