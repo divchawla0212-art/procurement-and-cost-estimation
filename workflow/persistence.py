@@ -21,10 +21,11 @@ from contextlib import contextmanager
 from typing import Iterator
 
 from procurement.store import layout
+from workflow import bidder_db
 from workflow.models.bid import Bid, BidShortlist, VdrlReceipt
 from workflow.models.bidder import Bidder
 from workflow.models.clarification import Addendum, ClarificationQuery
-from workflow.models.project import Item, Project
+from workflow.models.project import Item, ItemVendorEntry, Project
 from workflow.models.rfq import (
     RfqRecord,
     ShortlistEntry,
@@ -51,10 +52,11 @@ def to_document(store: WorkflowStore) -> dict:
         "version": VERSION,
         "projects": [p.model_dump(mode="json") for p in store._projects.values()],
         "items": [i.model_dump(mode="json") for i in store._items.values()],
-        # Only what is stored. `effective_prequal` is computed from
-        # `prequal_expires_on` and the date it is asked on, so writing it here
-        # would put a value in the document that is wrong the next morning.
-        "bidders": [b.model_dump(mode="json") for b in store._bidders.values()],
+        # No `bidders` key. The registry lives in `<ROOT>/bidders.db` — see
+        # `workflow/bidder_db.py` for why that one collection is different —
+        # and `save` writes it there in the same call that writes this
+        # document. A key here would be a second copy for the first edit to
+        # disagree with.
         "rfqs": [r.model_dump(mode="json") for r in store._rfqs.values()],
         "packages": [p.model_dump(mode="json") for p in store._packages.values()],
         "shortlists": [
@@ -90,6 +92,15 @@ def to_document(store: WorkflowStore) -> dict:
             for addenda in store._addenda.values()
             for a in addenda
         ],
+        # An item's own vendor lists, both sources in one flat list — the
+        # source is on each record. Only what is stored: whether an entry links
+        # to the registry is `vendor_id`, and the approvals behind it are read
+        # live, never written here.
+        "item_vendor_lists": [
+            e.model_dump(mode="json")
+            for entries in store._item_vendor_lists.values()
+            for e in entries
+        ],
     }
 
 
@@ -104,9 +115,10 @@ def from_document(doc: dict) -> WorkflowStore:
     store = WorkflowStore()
     store._projects = {p["id"]: Project(**p) for p in doc.get("projects", [])}
     store._items = {i["id"]: Item(**i) for i in doc.get("items", [])}
-    # `.get` with a default, so a document written before the registry existed
-    # loads as an empty one. That is the correct reading of a missing key, not
-    # a migration, which is why `VERSION` does not move.
+    # A `bidders` key means a document written before the registry moved to
+    # SQLite. Read it, so an old document still loads with its registry: `load`
+    # hands the result to `bidder_db` and the next `save` drops the key. Absent
+    # is the normal case now, and `load` fills the registry from the database.
     store._bidders = {b["id"]: Bidder(**b) for b in doc.get("bidders", [])}
     store._rfqs = {r["id"]: RfqRecord(**r) for r in doc.get("rfqs", [])}
     store._packages = {p["rfq_id"]: TechnicalPackage(**p) for p in doc.get("packages", [])}
@@ -123,6 +135,12 @@ def from_document(doc: dict) -> WorkflowStore:
     for record in doc.get("vdrl", []):
         line = VdrlLine(**record)
         store._vdrl.setdefault(line.rfq_id, []).append(line)
+    # `.get` with a default, so a document written before per-item vendor lists
+    # existed loads as items with none. The correct reading of a missing key,
+    # not a migration — which is why `VERSION` does not move.
+    for record in doc.get("item_vendor_lists", []):
+        entry = ItemVendorEntry(**record)
+        store._item_vendor_lists.setdefault(entry.item_id, []).append(entry)
     for record in doc.get("receipts", []):
         receipt = VdrlReceipt(**record)
         store._receipts.setdefault(receipt.bid_id, []).append(receipt)
@@ -142,14 +160,41 @@ def from_document(doc: dict) -> WorkflowStore:
 def load(root: str) -> WorkflowStore:
     """Read the store from disk. A missing document is a first run, not an
     error; a corrupt one raises, because reading a truncated file as "no RFQs"
-    is indistinguishable from data loss at the point it matters."""
+    is indistinguishable from data loss at the point it matters.
+
+    Two sources, one store: the document for everything the workflow owns, and
+    `bidders.db` for the registry. The store the caller gets back is the same
+    plain-dict object it always was, so nothing downstream knows or cares that
+    one collection came from a different file.
+    """
     doc = layout.read_json(workflow_path(root), default=None)
-    if doc is None:
-        return WorkflowStore()
-    return from_document(doc)
+    store = WorkflowStore() if doc is None else from_document(doc)
+    # A document still carrying a `bidders` key predates the move. Its registry
+    # wins so that the first load after the move does not read as an emptied
+    # one; the next `save` writes it to the database and drops the key. Once
+    # that has happened the key is gone and this branch never runs again.
+    if not store._bidders:
+        store._bidders = {b.id: b for b in bidder_db.list_all(root)}
+    return store
 
 
-def save(root: str, store: WorkflowStore) -> None:
+def save(root: str, store: WorkflowStore, *, registry: bool = True) -> None:
+    """Write both halves.
+
+    The registry goes first: it is its own transaction, and a document written
+    against a registry that failed to save would be the inconsistency this
+    module exists to prevent. `replace_all` is wholesale for the same reason
+    `atomic_write_json` is — a bidder removed in memory must not survive on
+    disk.
+
+    `registry=False` skips it, and only `locked_update` passes that, having
+    compared the collection against the one it loaded. Rewriting 1 346 rows
+    costs ~130 ms, which is most of the time an RFQ transition would otherwise
+    take — and a transition does not touch the registry. The default is `True`
+    so that a direct caller cannot silently drop a registry edit by omission.
+    """
+    if registry:
+        bidder_db.replace_all(root, store._bidders.values())
     layout.atomic_write_json(workflow_path(root), to_document(store))
 
 
@@ -169,5 +214,13 @@ def locked_update(root: str) -> Iterator[WorkflowStore]:
     """
     with _LOCK:
         store = load(root)
+        # A shallow copy is enough to notice every registry edit the store can
+        # make: `create_bidder` and `delete_bidder` change the keys, and
+        # `update_bidder` rebuilds through the model and rebinds the value
+        # rather than mutating it in place (CLAUDE.md: updates rebuild through
+        # the model, which is also what makes them validate). An in-place
+        # mutation of a stored `Bidder` would defeat this — there is none, and
+        # this comment is why there must not be one.
+        registry_before = dict(store._bidders)
         yield store
-        save(root, store)
+        save(root, store, registry=store._bidders != registry_before)

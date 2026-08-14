@@ -364,6 +364,125 @@ def test_no_shortlist_entry_stores_the_approvals_it_reports(tmp_path):
         assert "client_approved" not in entry
 
 
+# -- the per-item vendor lists -----------------------------------------------
+#
+# A new collection on `WorkflowStore.__init__`, so this file's named failure
+# mode applies directly: no matching line in *both* `to_document` and
+# `from_document` and it silently fails to survive a restart. Both directions
+# are asserted here rather than only through a screen.
+
+
+def an_entry(item_id: str, source: str, name: str):
+    from datetime import datetime
+
+    from workflow.models.project import ItemVendorEntry
+
+    return ItemVendorEntry(
+        item_id=item_id,
+        source=source,
+        vendor_id=f"bdr_{name.lower()}",
+        vendor_name=name,
+        trade_categories=["CABLES - LV POWER DISTRIBUTION"],
+        uploaded_by="buyer@example.com",
+        uploaded_at=datetime(2026, 8, 14, 9, 0),
+        source_document="avl.xlsx",
+    )
+
+
+def _uncovered_item(store: WorkflowStore):
+    """An item no RFQ covers, so `delete_item` is allowed to run."""
+    project = next(iter(store._projects.values()))
+    return store.create_item(
+        project_id=project.id,
+        item_type="HV cable",
+        description="11 kV, 3-core",
+        qty=1200,
+        uom="m",
+        discipline="Cables",
+        estimated_value_aed=900_000,
+    )
+
+
+def test_setting_one_source_leaves_the_other_alone(tmp_path):
+    """A second upload is a correction, so it replaces its own source
+    wholesale — and only its own. Appending would leave a vendor dropped from
+    the revised export indistinguishable from one still on it."""
+    store, _ = populated_store()
+    item = _uncovered_item(store)
+    store.set_item_vendor_list(item.id, "Client", [an_entry(item.id, "Client", "A")])
+    store.set_item_vendor_list(item.id, "Astra", [an_entry(item.id, "Astra", "B")])
+    store.set_item_vendor_list(item.id, "Client", [an_entry(item.id, "Client", "C")])
+
+    assert [e.vendor_name for e in store.item_vendor_list(item.id, "Client")] == ["C"]
+    assert [e.vendor_name for e in store.item_vendor_list(item.id, "Astra")] == ["B"]
+
+
+def test_a_vendor_list_survives_a_round_trip(tmp_path):
+    store, _ = populated_store()
+    item = _uncovered_item(store)
+    store.set_item_vendor_list(item.id, "Client", [an_entry(item.id, "Client", "A")])
+    persistence.save(str(tmp_path), store)
+
+    loaded = persistence.load(str(tmp_path))
+
+    entries = loaded.item_vendor_list(item.id, "Client")
+    assert [e.vendor_name for e in entries] == ["A"]
+    assert entries[0].trade_categories == ["CABLES - LV POWER DISTRIBUTION"]
+    assert entries[0].uploaded_by == "buyer@example.com"
+
+
+def test_deleting_an_item_takes_its_vendor_lists(tmp_path):
+    """Read from disk on run 2, never from the store that made the change: a
+    single-run assertion passes while the document is already wrong."""
+    store, _ = populated_store()
+    item = _uncovered_item(store)
+    store.set_item_vendor_list(item.id, "Client", [an_entry(item.id, "Client", "A")])
+    persistence.save(str(tmp_path), store)
+
+    store.delete_item(item.id)
+    persistence.save(str(tmp_path), store)
+
+    doc = json.loads((tmp_path / "workflow.json").read_text(encoding="utf-8"))
+    assert [e for e in doc["item_vendor_lists"] if e["item_id"] == item.id] == []
+
+
+def test_deleting_a_project_takes_every_items_vendor_lists(tmp_path):
+    """The cascade reaches through the item cascade. An entry left behind is an
+    entry pointing at an item that is gone, and it survives the restart."""
+    store = WorkflowStore()
+    project = store.create_project(
+        name="Ruwais", code="RUU", client="ADNOC", location="Ruwais",
+        live_period_start=date(2026, 1, 1), live_period_end=date(2029, 12, 31),
+    )
+    item = store.create_item(
+        project_id=project.id, item_type="HV cable", description="11 kV",
+        qty=1, uom="m", discipline="Cables", estimated_value_aed=1,
+    )
+    store.set_item_vendor_list(item.id, "Client", [an_entry(item.id, "Client", "A")])
+    persistence.save(str(tmp_path), store)
+
+    store.delete_project(project.id)
+    persistence.save(str(tmp_path), store)
+
+    doc = json.loads((tmp_path / "workflow.json").read_text(encoding="utf-8"))
+    assert doc["item_vendor_lists"] == []
+
+
+def test_a_document_written_before_vendor_lists_loads_as_none(tmp_path):
+    """A missing key read correctly, not a migration — which is why `VERSION`
+    does not move."""
+    store, _ = populated_store()
+    persistence.save(str(tmp_path), store)
+    path = tmp_path / "workflow.json"
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    del doc["item_vendor_lists"]
+    path.write_text(json.dumps(doc), encoding="utf-8")
+
+    loaded = persistence.load(str(tmp_path))
+
+    assert loaded.item_vendor_list(next(iter(loaded._items))) == []
+
+
 # -- clarifications ----------------------------------------------------------
 #
 # Two more fields on `WorkflowStore.__init__`, and CLAUDE.md names this file's

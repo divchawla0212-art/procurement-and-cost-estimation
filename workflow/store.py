@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 from datetime import date, datetime, timezone
 
 from workflow import clarifications
@@ -9,7 +10,12 @@ from workflow.models.clarification import (
     QueryCategory,
 )
 from workflow.models.bidder import Bidder, PrequalStatus
-from workflow.models.project import Item, Project
+from workflow.models.project import (
+    Item,
+    ItemVendorEntry,
+    Project,
+    VendorListSource,
+)
 from workflow.models.rfq import (
     Attachment,
     RfqRecord,
@@ -94,6 +100,10 @@ class WorkflowStore:
         self._bid_shortlists: dict[str, BidShortlist] = {}
         self._queries: dict[str, list[ClarificationQuery]] = {}
         self._addenda: dict[str, list[Addendum]] = {}
+        # Keyed by item id, holding both sources' entries in one list — the
+        # source is on each record, so grouping by it here would be a second
+        # place for the key to disagree with what it groups.
+        self._item_vendor_lists: dict[str, list[ItemVendorEntry]] = {}
 
     # -- projects ---------------------------------------------------------
 
@@ -209,6 +219,45 @@ class WorkflowStore:
                 f"{', '.join(covering)}. Amend or retender first."
             )
         del self._items[item_id]
+        # In the same call, for the reason `delete_project` states: `save`
+        # replaces the document wholesale, so an entry left here is an entry
+        # pointing at an item that is gone — and it survives the restart.
+        self._item_vendor_lists.pop(item_id, None)
+
+    # -- an item's own vendor lists ---------------------------------------
+
+    def set_item_vendor_list(
+        self,
+        item_id: str,
+        source: VendorListSource,
+        entries: Iterable[ItemVendorEntry],
+    ) -> list[ItemVendorEntry]:
+        """Replace this item's entries **for one source**, leaving the other's.
+
+        Wholesale within the source, for the same reason `persistence.save`
+        replaces the document: a second upload is a correction, and appending
+        would leave the previous export's vendors present with nothing to mark
+        them stale — a vendor dropped from a revised list would be
+        indistinguishable from one still on it.
+
+        Nothing here touches the registry. These uploads are genuine Approved
+        Vendor List exports, so the objection is not that the evidence is weak;
+        it is that a write attached to one item must not decide what a company
+        is approved for across every project. `approved_by` moves only through
+        `python -m workflow.avl_db`.
+        """
+        if item_id not in self._items:
+            raise KeyError(f"Unknown item: {item_id}")
+        kept = [e for e in self._item_vendor_lists.get(item_id, []) if e.source != source]
+        self._item_vendor_lists[item_id] = kept + list(entries)
+        return self.item_vendor_list(item_id, source)
+
+    def item_vendor_list(
+        self, item_id: str, source: VendorListSource | None = None
+    ) -> list[ItemVendorEntry]:
+        """This item's entries, optionally for one source only."""
+        entries = self._item_vendor_lists.get(item_id, [])
+        return [e for e in entries if source is None or e.source == source]
 
     def delete_project(self, project_id: str) -> None:
         """Refused while the project holds any RFQ; otherwise the project and
@@ -231,6 +280,9 @@ class WorkflowStore:
         doomed = [i.id for i in self._items.values() if i.project_id == project_id]
         for item_id in doomed:
             del self._items[item_id]
+            # Reaches through the item cascade: an item's vendor lists go with
+            # the item, whichever door deleted it.
+            self._item_vendor_lists.pop(item_id, None)
         del self._projects[project_id]
 
     def validate_against_live_period(self, project_id: str, when: date) -> str | None:
