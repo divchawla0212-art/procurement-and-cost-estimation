@@ -5,13 +5,16 @@ import {
   extractRfqDoc,
   fetchAvailableBidders,
   fetchWorkflowProject,
+  inviteRegisteredBidder,
   updateWorkflowItem,
 } from '../api'
 import { useAsync } from '../useAsync'
+import type { CoveringShortlist } from './covering-shortlists'
 import { summarise, useCoveringShortlists } from './covering-shortlists'
 import { ItemForm, RaiseRfqForm } from './forms'
-import type { WorkflowItem, WorkflowItemInput } from '../types'
+import type { Rfq, WorkflowItem, WorkflowItemInput } from '../types'
 import {
+  ApprovalPills,
   Breadcrumb,
   Card,
   EmptyState,
@@ -62,10 +65,68 @@ const BIDDER_CAP = 25
  * an empty table would report the item as uncoverable when the truth is that
  * it is unscoped.
  */
-function AvailableVendorList({ discipline }: { discipline: string }): JSX.Element {
+function AvailableVendorList({
+  discipline,
+  covering,
+  shortlists,
+  target,
+  onTarget,
+  onInvited,
+}: {
+  discipline: string
+  /** The RFQs covering this item, passed rather than fetched: the screen has
+   *  already filtered them out of the project payload, and a second read could
+   *  disagree with the table rendered below this card. */
+  covering: Rfq[]
+  /** Their shortlists, from the one read `useCoveringShortlists` makes. Shared
+   *  with the summary column so this card cannot offer to invite somebody that
+   *  column is counting as invited. `null` while it is in flight. */
+  shortlists: CoveringShortlist[] | null
+  /** Which RFQ an invitation lands on, held by the screen rather than by this
+   *  card. A successful invitation re-reads the project, and while that read
+   *  is in flight the screen renders its loading state — which unmounts this
+   *  card and would reset a target held here to the first RFQ. The next vendor
+   *  would then be invited to an RFQ nobody chose, with the control still
+   *  looking correct. */
+  target: string
+  onTarget: (rfqId: string) => void
+  /** Re-read the screen after a successful invitation, so the Invited marks
+   *  and the summary below move together. */
+  onInvited: () => void
+}): JSX.Element {
   const [query, setQuery] = useState('')
+  // Keyed by bidder id, never by row index: the table re-sorts under a search,
+  // and a stale index would attach a refusal to a different company. The same
+  // rule the project screen keeps for a refused delete.
+  const [rowError, setRowError] = useState<Record<string, string>>({})
   const scoped = useAsync(() => fetchAvailableBidders(discipline), [discipline])
   const whole = useAsync(() => fetchAvailableBidders(), [])
+
+  // Read from the *target* RFQ's shortlist, not from all of them: a vendor
+  // invited to one RFQ covering this item is still invitable to another.
+  const invited = new Set(
+    (shortlists?.find((s) => s.rfq.id === target)?.shortlist ?? [])
+      .map((e) => e.vendor_id)
+      .filter((id): id is string => id !== null),
+  )
+
+  async function invite(bidderId: string) {
+    setRowError((prev) => {
+      const { [bidderId]: _gone, ...rest } = prev
+      return rest
+    })
+    try {
+      // `vendor_id` and nothing else. The name, prequalification and scope fit
+      // are the registry's, snapshotted server-side at the moment of the
+      // decision; a screen that sent them would be claiming they were its to
+      // decide. Nothing here checks eligibility either — the server owns that,
+      // and its refusal is what the reader sees.
+      await inviteRegisteredBidder(target, { vendor_id: bidderId })
+      onInvited()
+    } catch (err) {
+      setRowError((prev) => ({ ...prev, [bidderId]: (err as Error).message }))
+    }
+  }
 
   // The fallback is decided on the scoped answer being *empty*, not on the
   // discipline's spelling: the browser does not hold the vocabulary, and
@@ -136,19 +197,56 @@ function AvailableVendorList({ discipline }: { discipline: string }): JSX.Elemen
             />
           </label>
 
+          {/* Which RFQ an invitation lands on. Only asked when the answer is
+              not obvious — one covering RFQ needs no question, and none means
+              there is nothing to invite anybody to. */}
+          {covering.length > 1 && (
+            <label className="field">
+              <span>Shortlist into</span>
+              <select value={target} onChange={(e) => onTarget(e.target.value)}>
+                {covering.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.reference}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {covering.length === 0 && (
+            <p className="muted">
+              No RFQ covers this item, so there is nowhere to shortlist these
+              vendors — raise an RFQ first.
+            </p>
+          )}
+
           <table className="table">
             <thead>
               <tr>
                 <th scope="col">Vendor</th>
+                <th scope="col">Approvals</th>
                 <th scope="col">Product groups</th>
                 <th scope="col">Represents</th>
                 <th scope="col">Prequalification</th>
+                <th scope="col">
+                  <span className="sr-only">Shortlist</span>
+                </th>
               </tr>
             </thead>
             <tbody>
               {shown.slice(0, BIDDER_CAP).map((b) => (
                 <tr key={b.id}>
-                  <td>{b.name}</td>
+                  <td>
+                    {b.name}
+                    {/* The refusal lives in the row that caused it. */}
+                    {rowError[b.id] && (
+                      <div className="banner banner--error" role="alert">
+                        {rowError[b.id]}
+                      </div>
+                    )}
+                  </td>
+                  <td>
+                    <ApprovalPills approvers={b.approved_by} />
+                  </td>
                   <td className="muted">
                     {b.trade_categories.slice(0, 2).join(' · ') || '—'}
                     {b.trade_categories.length > 2 &&
@@ -160,6 +258,19 @@ function AvailableVendorList({ discipline }: { discipline: string }): JSX.Elemen
                   {/* The derived status, not `prequal_status`: a lapsed
                       approval is still stored as "Approved". */}
                   <td>{b.effective_prequal}</td>
+                  <td>
+                    {invited.has(b.id) ? (
+                      <span className="muted">Invited</span>
+                    ) : target ? (
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={() => void invite(b.id)}
+                      >
+                        Shortlist {b.name}
+                      </button>
+                    ) : null}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -219,6 +330,10 @@ export function ItemDetail({
   const [editing, setEditing] = useState(false)
   const [raising, setRaising] = useState(false)
   const [warning, setWarning] = useState<string | null>(null)
+  // Held here rather than in the vendor card, which unmounts while a reload is
+  // in flight. Empty until the covering RFQs are known; the fallback below
+  // resolves it to the first one.
+  const [target, setTarget] = useState('')
   const { data, error, loading } = useAsync(
     () => fetchWorkflowProject(projectId),
     [projectId, tick],
@@ -346,7 +461,20 @@ export function ItemDetail({
       {/* Above the RFQ list on purpose: who could bid is the question you have
           before an RFQ exists, and after one does the RFQ list is where you
           go next. */}
-      <AvailableVendorList discipline={item.discipline} />
+      <AvailableVendorList
+        discipline={item.discipline}
+        covering={covering}
+        shortlists={shortlists.data}
+        // Falls back to the first covering RFQ rather than being seeded by an
+        // effect: a chosen target that no longer covers this item has to
+        // resolve to something real, and computing it on render keeps the two
+        // cases in one expression.
+        target={
+          covering.some((r) => r.id === target) ? target : covering[0]?.id ?? ''
+        }
+        onTarget={setTarget}
+        onInvited={() => setTick((t) => t + 1)}
+      />
 
       <Card
         title="RFQs covering this item"

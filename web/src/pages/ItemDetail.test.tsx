@@ -79,6 +79,194 @@ describe('ItemDetail', () => {
     ])
   })
 
+  it('shows an approval pill against each available vendor', async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(detail({ items: [GENERATOR] }))
+    vi.mocked(fetchAvailableBidders).mockResolvedValue(
+      availableList({ bidders: [APPROVED_BIDDER] }),
+    )
+
+    renderItem()
+
+    expect(await screen.findByText('ADNOC')).toHaveClass('approval-badge--adnoc')
+    expect(screen.getByText('Astra')).toHaveClass('approval-badge--astra')
+  })
+
+  it('invites a vendor into the one RFQ covering this item', async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(
+      detail({ items: [GENERATOR], rfqs: [rfq('rfq_1', 'ADP-RFQ-2026-014', ['itm_1'])] }),
+    )
+    vi.mocked(fetchAvailableBidders).mockResolvedValue(
+      availableList({ bidders: [APPROVED_BIDDER] }),
+    )
+    vi.mocked(fetchRfq).mockResolvedValue({ ...RFQ_DETAIL, shortlist: [] })
+    vi.mocked(inviteRegisteredBidder).mockResolvedValue(shortlistEntry())
+
+    renderItem()
+    fireEvent.click(await screen.findByRole('button', { name: /shortlist al munara/i }))
+
+    // `vendor_id` and nothing else: the name, prequalification and scope fit
+    // are the registry's, snapshotted server-side.
+    await waitFor(() =>
+      expect(inviteRegisteredBidder).toHaveBeenCalledWith('rfq_1', {
+        vendor_id: 'bdr_almunara',
+      }),
+    )
+  })
+
+  it('has nowhere to invite a vendor when no RFQ covers the item', async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(
+      detail({ items: [GENERATOR], rfqs: [] }),
+    )
+    vi.mocked(fetchAvailableBidders).mockResolvedValue(
+      availableList({ bidders: [APPROVED_BIDDER] }),
+    )
+
+    renderItem()
+    await screen.findByText('Al Munara Switchgear LLC')
+
+    expect(screen.queryByRole('button', { name: /shortlist al munara/i })).toBeNull()
+    expect(screen.getByText(/raise an RFQ first/i)).toBeInTheDocument()
+  })
+
+  it('asks which RFQ when several cover the item', async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(
+      detail({
+        items: [GENERATOR],
+        rfqs: [
+          rfq('rfq_1', 'ADP-RFQ-2026-014', ['itm_1']),
+          rfq('rfq_2', 'ADP-RFQ-2026-021', ['itm_1']),
+        ],
+      }),
+    )
+    vi.mocked(fetchAvailableBidders).mockResolvedValue(
+      availableList({ bidders: [APPROVED_BIDDER] }),
+    )
+    vi.mocked(fetchRfq).mockResolvedValue({ ...RFQ_DETAIL, shortlist: [] })
+    vi.mocked(inviteRegisteredBidder).mockResolvedValue(shortlistEntry())
+
+    renderItem()
+    fireEvent.change(await screen.findByLabelText(/shortlist into/i), {
+      target: { value: 'rfq_2' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /shortlist al munara/i }))
+
+    await waitFor(() =>
+      expect(inviteRegisteredBidder).toHaveBeenCalledWith('rfq_2', {
+        vendor_id: 'bdr_almunara',
+      }),
+    )
+  })
+
+  it('keeps the chosen RFQ after an invitation reloads the screen', async () => {
+    // The hazard: a successful invitation re-reads the project, which unmounts
+    // and remounts the vendor card. If the chosen target lived in that card it
+    // would reset to the first RFQ, and the *next* vendor would be invited to
+    // an RFQ nobody selected — silently, since the control would look right.
+    const project = detail({
+      items: [GENERATOR],
+      rfqs: [
+        rfq('rfq_1', 'ADP-RFQ-2026-014', ['itm_1']),
+        rfq('rfq_2', 'ADP-RFQ-2026-021', ['itm_1']),
+      ],
+    })
+    // The reload resolves on a macrotask, so the screen's loading state
+    // actually commits and the vendor card actually unmounts. Resolved
+    // immediately it batches into one render, the card never unmounts, and
+    // this test would pass with the target held in the card — which is the
+    // bug it exists to catch.
+    let calls = 0
+    vi.mocked(fetchWorkflowProject).mockImplementation(() => {
+      calls += 1
+      return calls === 1
+        ? Promise.resolve(project)
+        : new Promise((resolve) => setTimeout(() => resolve(project), 0))
+    })
+    vi.mocked(fetchAvailableBidders).mockResolvedValue(
+      availableList({
+        bidders: [
+          APPROVED_BIDDER,
+          { ...APPROVED_BIDDER, id: 'bdr_other', name: 'Gulf Crescent Fabricators' },
+        ],
+      }),
+    )
+    vi.mocked(fetchRfq).mockResolvedValue({ ...RFQ_DETAIL, shortlist: [] })
+    vi.mocked(inviteRegisteredBidder).mockResolvedValue(shortlistEntry())
+
+    renderItem()
+    fireEvent.change(await screen.findByLabelText(/shortlist into/i), {
+      target: { value: 'rfq_2' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /shortlist al munara/i }))
+    // Wait for the *reload*, not merely for the call: the invitation resolves
+    // before `onInvited` re-reads the project, so asserting on the call count
+    // would let the second click land on the pre-reload render and the test
+    // would pass without the reload ever having happened.
+    await waitFor(() => expect(fetchWorkflowProject).toHaveBeenCalledTimes(2))
+    await screen.findByLabelText(/shortlist into/i)
+
+    // Second invitation, after the reload, with nobody having touched the
+    // select in between.
+    fireEvent.click(
+      await screen.findByRole('button', { name: /shortlist gulf crescent/i }),
+    )
+
+    await waitFor(() =>
+      expect(inviteRegisteredBidder).toHaveBeenLastCalledWith('rfq_2', {
+        vendor_id: 'bdr_other',
+      }),
+    )
+  })
+
+  it("renders the server's refusal against the vendor it refused", async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(
+      detail({ items: [GENERATOR], rfqs: [rfq('rfq_1', 'ADP-RFQ-2026-014', ['itm_1'])] }),
+    )
+    vi.mocked(fetchAvailableBidders).mockResolvedValue(
+      availableList({
+        bidders: [
+          APPROVED_BIDDER,
+          { ...APPROVED_BIDDER, id: 'bdr_other', name: 'Gulf Crescent Fabricators' },
+        ],
+      }),
+    )
+    vi.mocked(fetchRfq).mockResolvedValue({ ...RFQ_DETAIL, shortlist: [] })
+    vi.mocked(inviteRegisteredBidder).mockRejectedValue(
+      new Error('Al Munara Switchgear LLC is on hold — an override reason is required.'),
+    )
+
+    renderItem()
+    fireEvent.click(await screen.findByRole('button', { name: /shortlist al munara/i }))
+
+    // Beside the row that caused it, keyed by bidder id — not a page banner,
+    // and not against the other vendor. The table re-sorts under a search, so
+    // a row index would attach the refusal to a different company.
+    const row = (await screen.findByText('Al Munara Switchgear LLC')).closest('tr')!
+    expect(within(row).getByText(/an override reason is required/i)).toBeInTheDocument()
+    const other = screen.getByText('Gulf Crescent Fabricators').closest('tr')!
+    expect(within(other).queryByText(/override reason/i)).toBeNull()
+  })
+
+  it('marks a vendor already on the target RFQ as invited', async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(
+      detail({ items: [GENERATOR], rfqs: [rfq('rfq_1', 'ADP-RFQ-2026-014', ['itm_1'])] }),
+    )
+    vi.mocked(fetchAvailableBidders).mockResolvedValue(
+      availableList({ bidders: [APPROVED_BIDDER] }),
+    )
+    vi.mocked(fetchRfq).mockResolvedValue({
+      ...RFQ_DETAIL,
+      shortlist: [shortlistEntry({ vendor_id: 'bdr_almunara' })],
+    })
+
+    renderItem()
+    const row = (await screen.findByText('Al Munara Switchgear LLC')).closest('tr')!
+
+    // The screen must not offer to invite somebody it is counting as invited
+    // in the card below.
+    await waitFor(() => expect(within(row).getByText('Invited')).toBeInTheDocument())
+    expect(within(row).queryByRole('button', { name: /shortlist/i })).toBeNull()
+  })
+
   it("counts each covering RFQ's approvals", async () => {
     vi.mocked(fetchWorkflowProject).mockResolvedValue(
       detail({ items: [GENERATOR], rfqs: [rfq('rfq_1', 'ADP-RFQ-2026-014', ['itm_1'])] }),
