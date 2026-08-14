@@ -1,0 +1,231 @@
+{
+  "_comment": [
+    "A complete RFQ clarification round, both sides of it: five queries raised by",
+    "three shortlisted vendors, and Astra's answers, restriction, withdrawal and",
+    "addendum. Played against a running API by tools/mock_clarification_round.py.",
+    "",
+    "The companies here are the invented Astra cast from workflow/seed_demo.py, not",
+    "real vendors, and nothing in this file is a record of anything that happened.",
+    "The questions are written the way real bid queries read because a mock that",
+    "reads as filler exercises the screens without exercising the judgement they",
+    "exist to support.",
+    "",
+    "The `expect_gate` steps are the point of the file. They assert what the",
+    "Clarifications exit gate says at three moments: with a query open AND an",
+    "addendum in draft (both halves of the sentence), with only the draft left, and",
+    "with nothing outstanding. A data-only fixture would load and prove nothing."
+  ],
+
+  "rfq": {
+    "reference": "RUU-RFQ-2026-M01",
+    "package": "Field transmitters and 11 kV feeder cable",
+    "discipline": "PRESSURE & DIFFERENTIAL PRESSURE TRANSMITTERS",
+    "value_estimate_aed": 5200000,
+    "project": {
+      "name": "Ruwais Utilities Upgrade (mock round)",
+      "code": "RUU-MOCK",
+      "client": "ADNOC",
+      "location": "Ruwais, Al Dhafra",
+      "live_period_start": "2026-01-01",
+      "live_period_end": "2027-06-30"
+    },
+    "item": {
+      "item_type": "Instrument",
+      "description": "Pressure and differential pressure transmitters, battery limit",
+      "qty": 40,
+      "uom": "no.",
+      "discipline": "PRESSURE & DIFFERENTIAL PRESSURE TRANSMITTERS",
+      "estimated_value_aed": 5200000,
+      "required_on_site": "2027-02-15"
+    },
+    "technical_package": {
+      "revision": "Rev. A",
+      "basis_of_design": "Battery-limit field transmitters to instrument index Rev. A, plus the substation feeder cable to the cable schedule Rev. A.",
+      "attachments": [
+        { "doc_code": "RUU-IDX-410", "title": "Instrument index", "revision": "Rev. A" },
+        { "doc_code": "RUU-DS-412", "title": "Transmitter datasheet", "revision": "Rev. A" },
+        { "doc_code": "RUU-CS-501", "title": "Cable schedule", "revision": "Rev. A" }
+      ]
+    },
+    "tbe_criteria": [
+      "Accuracy class",
+      "Hazardous area certification",
+      "Turndown ratio",
+      "Wetted material compliance",
+      "Cyber-security compliance"
+    ]
+  },
+
+  "vendors": [
+    {
+      "slot": "vendor_1",
+      "name": "Meridian Instrument Co.",
+      "prequal_status": "Approved",
+      "scope_code_fit": true
+    },
+    {
+      "slot": "vendor_2",
+      "name": "Orion Gulf Automation",
+      "prequal_status": "Approved",
+      "scope_code_fit": true
+    },
+    {
+      "slot": "vendor_3",
+      "name": "Ras Dana Cables & Conductors",
+      "prequal_status": "Approved",
+      "scope_code_fit": true
+    }
+  ],
+
+  "exchange": [
+    {
+      "ref": "Q1",
+      "actor": "vendor",
+      "action": "raise_query",
+      "vendor": "vendor_1",
+      "category": "Technical",
+      "raised_on": "2026-08-03",
+      "expect_number": "TQ-001",
+      "question": "Datasheet RUU-DS-412 calls for Ex ia IIC T4 on all transmitters. Is a current IECEx certificate sufficient on its own, or is an ATEX certificate also required for this site? Please confirm whether the certificate must name the exact model offered."
+    },
+    {
+      "ref": "Q2",
+      "actor": "vendor",
+      "action": "raise_query",
+      "vendor": "vendor_1",
+      "category": "Commercial",
+      "raised_on": "2026-08-03",
+      "expect_number": "CQ-001",
+      "question": "Clause 14.3 states liquidated damages at 0.5% per week but does not state a cap. Please confirm the aggregate cap on LDs and whether it is inclusive of any performance-related deductions."
+    },
+    {
+      "ref": "Q3",
+      "actor": "vendor",
+      "action": "raise_query",
+      "vendor": "vendor_2",
+      "category": "Technical",
+      "raised_on": "2026-08-05",
+      "expect_number": "TQ-002",
+      "question": "Our standard transmitter for the 0-16 bar range is supplied with a 316L stainless wetted diaphragm rather than the Hastelloy C-276 called for in the index. Confirm whether 316L is acceptable for the utility water service lines, or whether we should price the C-276 variant across all tags."
+    },
+    {
+      "ref": "Q4",
+      "actor": "vendor",
+      "action": "raise_query",
+      "vendor": "vendor_2",
+      "category": "Commercial",
+      "raised_on": "2026-08-05",
+      "expect_number": "CQ-002",
+      "question": "The ITB states a bid validity of 90 days while the covering letter states 120 days. Please confirm which governs, and confirm the date from which validity is counted."
+    },
+    {
+      "ref": "Q5",
+      "actor": "vendor",
+      "action": "raise_query",
+      "vendor": "vendor_3",
+      "category": "Technical",
+      "raised_on": "2026-08-06",
+      "expect_number": "TQ-003",
+      "question": "Confirm the maximum drum length available for the 11 kV feeder and whether straight joints are permitted in the buried trench run between the substation and the battery limit."
+    },
+
+    {
+      "ref": "A1",
+      "actor": "astra",
+      "action": "answer_query",
+      "query": "Q1",
+      "answer": "IECEx alone is acceptable for this site; ATEX is not required. The certificate must be current at bid submission and must name the exact model and range offered. A certificate covering a product family without the offered model will be treated as non-compliant."
+    },
+    {
+      "ref": "A3",
+      "actor": "astra",
+      "action": "answer_query",
+      "query": "Q3",
+      "answer": "Price the Hastelloy C-276 variant across all tags. 316L is not acceptable on the utility water service lines; the chloride content at site conditions is outside its limit.",
+      "restricted_reason": "The question names this bidder's own offered diaphragm material and the answer would disclose their proposed deviation to the rest of the shortlist. Restricted by procurement; the underlying material requirement is unchanged and already stated in the index."
+    },
+    {
+      "ref": "A4",
+      "actor": "astra",
+      "action": "answer_query",
+      "query": "Q4",
+      "answer": "Bid validity is 120 days, counted from the revised bid due date. The ITB is in error and will be corrected by addendum."
+    },
+    {
+      "ref": "A5",
+      "actor": "astra",
+      "action": "answer_query",
+      "query": "Q5",
+      "answer": "Maximum drum length is 500 m. One straight joint per drum run is permitted in the trench, subject to the jointing procedure being submitted with the bid."
+    },
+    {
+      "ref": "W5",
+      "actor": "astra",
+      "action": "withdraw_query",
+      "query": "Q5",
+      "reason": "Withdrawn at Ras Dana Cables & Conductors' request: the query was raised against the superseded cable schedule, and the drum schedule at Rev. A already states the 500 m limit. The answer above stands but the query is out of the round.",
+      "expect_state": "Withdrawn",
+      "_note": "Answered first, then withdrawn. Reads as Withdrawn, not Answered — withdrawal is checked before an answer, and getting that backwards would let the exit gate count a dead question as satisfied."
+    },
+
+    {
+      "ref": "ADD1",
+      "actor": "astra",
+      "action": "draft_addendum",
+      "revision": "Rev. B",
+      "expect_number": "ADD-01",
+      "summary": "Instrument index reissued at Rev. B: wetted material confirmed as Hastelloy C-276 for all tags on the utility water service lines. ITB bid validity corrected to 120 days. Bid due date extended by two weeks.",
+      "arising_from": ["Q1", "Q4"],
+      "bid_due_date": "2026-09-28",
+      "attachments": [
+        { "doc_code": "RUU-IDX-410", "title": "Instrument index", "revision": "Rev. B" },
+        { "doc_code": "RUU-DS-412", "title": "Transmitter datasheet", "revision": "Rev. B" },
+        { "doc_code": "RUU-CS-501", "title": "Cable schedule", "revision": "Rev. A" }
+      ]
+    },
+
+    {
+      "ref": "G1",
+      "actor": "framework",
+      "action": "expect_gate",
+      "passed": false,
+      "reason_contains": ["queries still open", "CQ-001", "addenda still in draft", "ADD-01"],
+      "_note": "Both halves of the sentence, because both are true. A reader told only the nearer half retries and is refused again for something nobody mentioned."
+    },
+    {
+      "ref": "A2",
+      "actor": "astra",
+      "action": "answer_query",
+      "query": "Q2",
+      "answer": "Liquidated damages are capped at 10% of the order value in aggregate, inclusive of performance-related deductions. Clause 14.3 is unchanged."
+    },
+    {
+      "ref": "G2",
+      "actor": "framework",
+      "action": "expect_gate",
+      "passed": false,
+      "reason_contains": ["addenda still in draft", "ADD-01"],
+      "reason_excludes": ["queries still open"],
+      "_note": "The nearer half is gone. The gate must now name only the draft."
+    },
+    {
+      "ref": "ISS1",
+      "actor": "astra",
+      "action": "issue_addendum",
+      "addendum": "ADD1"
+    },
+    {
+      "ref": "G3",
+      "actor": "framework",
+      "action": "expect_gate",
+      "passed": true
+    },
+    {
+      "ref": "T1",
+      "actor": "framework",
+      "action": "transition",
+      "target": "Bids Received",
+      "reason": "Clarification round closed: five queries raised, four answered, one withdrawn, one addendum issued at Rev. B."
+    }
+  ]
+}

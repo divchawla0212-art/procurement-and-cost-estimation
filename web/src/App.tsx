@@ -64,9 +64,10 @@ const NAV: NavEntry[] = [
   // called "Bid sets" rather than "Projects" for the same reason — two rail
   // entries reading "Projects" over two different stores is the first confusion
   // a reader hits. Unifying the two identities is phase 2.
-  // Bidders sits between the two because that is the order the work happens
-  // in: you have projects and their items, you have a list of who may bid, and
-  // only then is there an RFQ to raise against both.
+  //
+  // There is no rail entry for the bidder registry. It is not a place you go;
+  // it is the list the Shortlisting step of an RFQ draws candidates from, and
+  // that is the only screen that reads it.
   {
     index: '01',
     label: 'Projects & items',
@@ -77,14 +78,6 @@ const NAV: NavEntry[] = [
   },
   {
     index: '02',
-    label: 'Bidders',
-    group: 'RFQ process',
-    to: () => '/bidders',
-    matches: (p) => p === '/bidders',
-    needsReview: false,
-  },
-  {
-    index: '03',
     label: 'RFQ workflow',
     group: 'RFQ process',
     to: () => '/rfqs',
@@ -92,7 +85,7 @@ const NAV: NavEntry[] = [
     needsReview: false,
   },
   {
-    index: '04',
+    index: '03',
     label: 'Bid sets',
     group: 'Bid evaluation',
     to: () => '/bid-sets',
@@ -100,7 +93,7 @@ const NAV: NavEntry[] = [
     needsReview: false,
   },
   {
-    index: '05',
+    index: '04',
     label: 'Set up & ingest',
     group: 'Bid evaluation',
     // With no project selected this is where you create one, which is exactly
@@ -110,7 +103,7 @@ const NAV: NavEntry[] = [
     needsReview: false,
   },
   {
-    index: '06',
+    index: '05',
     label: 'Extraction status',
     group: 'Bid evaluation',
     to: (slug) => (slug ? `/bid-sets/${slug}/extraction` : null),
@@ -118,7 +111,7 @@ const NAV: NavEntry[] = [
     needsReview: false,
   },
   {
-    index: '07',
+    index: '06',
     label: 'Overview',
     group: 'Bid evaluation',
     to: (slug) => (slug ? `/bid-sets/${slug}/overview` : null),
@@ -126,7 +119,7 @@ const NAV: NavEntry[] = [
     needsReview: true,
   },
   {
-    index: '08',
+    index: '07',
     label: 'Compliance matrix',
     group: 'Bid evaluation',
     to: (slug) => (slug ? `/bid-sets/${slug}/matrix` : null),
@@ -134,7 +127,7 @@ const NAV: NavEntry[] = [
     needsReview: true,
   },
   {
-    index: '09',
+    index: '08',
     label: 'Comparative statement',
     group: 'Bid evaluation',
     to: (slug) => (slug ? `/bid-sets/${slug}/statement` : null),
@@ -142,7 +135,7 @@ const NAV: NavEntry[] = [
     needsReview: true,
   },
   {
-    index: '10',
+    index: '09',
     label: 'Users and access',
     group: 'Administration',
     to: () => '/admin',
@@ -177,13 +170,13 @@ export default function App() {
   )
 
   // The URL is the authority on which bid set the evaluation screens are
-  // showing, and `04 Bid sets` is where you choose one — opening a project
+  // showing, and `03 Bid sets` is where you choose one — opening a project
   // there navigates to `/bid-sets/:slug/…`, which is what makes that choice an
   // address rather than a hidden selection.
   //
   // `remembered` answers only the question the URL cannot: which bid set the
   // rail's evaluation entries and the status bar should point at while we are
-  // on `/projects` or `/bidders`, where no slug is in the path. Deriving in
+  // on `/projects` or `/rfqs`, where no slug is in the path. Deriving in
   // this order is what stops the two from ever disagreeing.
   const pathSlug = bidSetSlug(location.pathname)
   const [remembered, setRemembered] = useState<string | null>(null)

@@ -234,7 +234,40 @@ The web suite is separate and not part of either row above — both rows are
 `python -m pytest` counts. Run it with `npm test` under `web/` (vitest,
 non-watching, exits non-zero on failure); `npm run build` also type-checks the
 test files, since `web/tsconfig.app.json` includes `src`. CI runs both, in the
-`web` job of the same workflow. It stands at **285 passed** across 20 files.
+`web` job of the same workflow. It stands at **290 passed** across 21 files.
+
+The last **5** are the sign-in screen's admin-account chip, in the new
+`Auth.test.tsx` — that screen had no test file at all.
+
+**That chip fills both credentials, and `ADMIN_PASSWORD` is therefore a
+published password.** It is a string literal in `web/src/pages/Auth.tsx`, so it
+ships in the bundle and is readable by anyone who loads the page; the demo
+administrator is a public account and neither that address nor that password
+may be reused anywhere it would matter. This was asked for deliberately, after
+the email-only version had shipped and with the exposure stated — it is not an
+oversight to be "fixed" by someone reading this later, and it is not a pattern
+to copy for a second account.
+
+The load-bearing test is `fills the form but does not submit it`. Filling is as
+far as the chip goes: signing in stays a second, deliberate press. A `<button>`
+inside a `<form>` submits by default, so dropping the explicit `type="button"`
+turns the chip into a one-click admin login — and it would fail **silently**,
+because the form is filled and the sign-in would simply succeed. That is the
+whole distance between what shipped and the unconditional bypass that was
+declined, and it is one attribute wide.
+
+One more asserts the chip carries `chip--asis`, because `.chip`'s
+`text-transform: capitalize` renders the address as *Admin@Gmail.Com*. Fourth
+instance of that family, and like the other three **jsdom cannot see it** — the
+class is the structural stand-in, and the render was checked by measuring
+`getComputedStyle` in a real browser.
+
+`ADMIN_ACCOUNT` is hardcoded and nothing verifies either credential still
+matches `auth.json`: a rotated password or a store seeded without that address
+shows a chip whose sign-in then fails with the server's ordinary "Invalid email
+or password", the same answer any wrong credential gets. The chip is offered in
+login mode only — that address is already registered, so signing up with it
+would 409.
 
 The last **14** are the item screen's four vendor cards, the suggestion card
 and the way into a covering RFQ — all in `ItemDetail.test.tsx`, net of the one

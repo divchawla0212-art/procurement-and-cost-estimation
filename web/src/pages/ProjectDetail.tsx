@@ -5,6 +5,7 @@ import {
   createWorkflowItem,
   deleteWorkflowItem,
   deleteWorkflowProject,
+  extractRfqDoc,
   fetchWorkflowProject,
   updateWorkflowProject,
 } from '../api'
@@ -257,6 +258,7 @@ export function ProjectDetail({
           <RaiseRfqForm
             projectId={projectId}
             itemIds={[...selected]}
+            onExtract={extractRfqDoc}
             onCancel={() => setRaising(false)}
             onSubmit={async (body) => {
               await createRfq(body)

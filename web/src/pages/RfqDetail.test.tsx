@@ -47,6 +47,7 @@ function detail(over: Partial<RfqDetailData> = {}): RfqDetailData {
     technical_package: null,
     shortlist: [],
     shortlist_approved: false,
+    client_approver: 'ADNOC',
     tbe_template: null,
     vdrl: [],
     bids: [],

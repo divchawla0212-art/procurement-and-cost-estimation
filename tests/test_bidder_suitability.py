@@ -18,6 +18,7 @@ from datetime import date
 
 from workflow.bidders import (
     Suitability,
+    client_approved,
     effective_prequal,
     evaluate,
     missing_client_approval,
@@ -208,6 +209,46 @@ def test_a_bidder_with_no_categories_at_all_is_a_mismatch():
     assert result.eligible
 
 
+def test_an_rfq_discipline_reaches_the_product_groups_behind_it():
+    """The same expansion `client_approved` does, for the same reason.
+
+    Without it the two disagree: the item screen lists every vendor registered
+    for a cable product group, and the candidate list beside the RFQ raised
+    from that item cautions each of them for scope — because no vendor is
+    registered for a category literally called "Cables". Two answers to one
+    question, from one vocabulary, is the bug.
+    """
+    bidder = a_bidder(trade_categories=["CABLES - LV POWER DISTRIBUTION"])
+    assert evaluate(bidder, an_rfq(discipline="Cables"), TODAY).scope_fit
+
+
+def test_the_package_is_expanded_too():
+    bidder = a_bidder(trade_categories=["GENERATOR POWER-OTHERS"])
+    result = evaluate(
+        bidder, an_rfq(package="Generators", discipline="Electrical"), TODAY
+    )
+    assert result.scope_fit
+
+
+def test_an_unknown_discipline_still_matches_itself():
+    """Expansion is additive, never a replacement. An RFQ scoped straight to a
+    product group description — which is what the export itself speaks — has to
+    keep working, and so does one carrying free text from before the vocabulary
+    existed."""
+    bidder = a_bidder(trade_categories=["SWITCHGEARS - LV -415V"])
+    assert evaluate(
+        bidder, an_rfq(discipline="SWITCHGEARS - LV -415V"), TODAY
+    ).scope_fit
+
+
+def test_expansion_does_not_widen_a_family_to_its_accessories():
+    """`disciplines.py` keeps cable trays and glands out of `Cables` on purpose.
+    Expanding here must not quietly undo that — an RFQ for cable that returned
+    tray fabricators as in-scope is a worse answer than a short one."""
+    bidder = a_bidder(trade_categories=["CABLE TRAYS & ACCESSORIES"])
+    assert not evaluate(bidder, an_rfq(discipline="Cables"), TODAY).scope_fit
+
+
 # -- the client approval gap -------------------------------------------------
 #
 # Derived from `approved_by`, for the same reason `Expired` is derived from
@@ -306,3 +347,69 @@ def test_a_blocked_bidder_off_the_client_list_reports_both_separately():
     assert any("NCRs open" in b for b in result.blockers)
     assert not any("Approved Vendor List" in b for b in result.blockers)
     assert any("Approved Vendor List" in c for c in result.cautions)
+
+
+# -- the client's approved vendor list ----------------------------------------
+#
+# One master list, because everything the product knows about who ADNOC has
+# approved came from one import of one export. `discipline` narrows it when a
+# caller wants one product group; it is off by default.
+
+
+def test_client_approved_returns_everybody_on_the_clients_list():
+    switchgear = a_bidder(name="Al Munara", trade_categories=["SWITCHGEARS - LV -415V"])
+    valves = a_bidder(name="Northwind", trade_categories=['VALVES - BALL - API 6D'])
+    found = client_approved([switchgear, valves])
+    assert [b.name for b in found] == ["Al Munara", "Northwind"]
+
+
+def test_client_approved_excludes_a_bidder_off_the_clients_list():
+    """The whole filter, and the reason the function exists rather than the
+    screen doing it: a vendor Astra approved is not one the client did."""
+    ours = a_bidder(name="Silverdune", approved_by=[ASTRA])
+    theirs = a_bidder(name="Al Munara", approved_by=[ADNOC])
+    assert [b.name for b in client_approved([ours, theirs])] == ["Al Munara"]
+
+
+def test_client_approved_orders_by_name():
+    """Registry insertion order means nothing to somebody scanning for a
+    company, and the AVL's own order is the order of its first mention."""
+    roster = [
+        a_bidder(name="zenith Piping"),
+        a_bidder(name="Al Munara"),
+        a_bidder(name="Marjan"),
+    ]
+    found = client_approved(roster)
+    assert [b.name for b in found] == ["Al Munara", "Marjan", "zenith Piping"]
+
+
+def test_client_approved_narrows_to_one_product_group_when_asked():
+    switchgear = a_bidder(name="Al Munara", trade_categories=["SWITCHGEARS - LV -415V"])
+    valves = a_bidder(name="Northwind", trade_categories=['VALVES - BALL - API 6D'])
+    found = client_approved([switchgear, valves], "SWITCHGEARS - LV -415V")
+    assert [b.name for b in found] == ["Al Munara"]
+
+
+def test_narrowing_matches_the_whole_label_not_a_substring():
+    """Same rule as `_matches_scope`, and for the same reason: "VALVES - BALL"
+    answering for "VALVES - BALL - API 6D" is a different trade whose bid gets
+    thrown out at TBE."""
+    near = a_bidder(name="Northwind", trade_categories=["VALVES - BALL"])
+    assert client_approved([near], 'VALVES - BALL - API 6D - UP TO 12"') == []
+
+
+def test_narrowing_ignores_case_and_padding():
+    """A re-exported AVL pads and recapitalises cells; a discipline is typed by
+    hand. Neither should decide whether a vendor appears."""
+    bidder = a_bidder(name="Al Munara", trade_categories=["  switchgears - LV -415V "])
+    found = client_approved([bidder], "SWITCHGEARS - LV -415V")
+    assert [b.name for b in found] == ["Al Munara"]
+
+
+def test_a_blank_discipline_narrows_nothing():
+    """Not "matches nobody". The master list is the default answer, so an
+    absent filter has to leave it whole."""
+    bidder = a_bidder(name="Al Munara", trade_categories=["SWITCHGEARS - LV -415V"])
+    assert [b.name for b in client_approved([bidder], "")] == ["Al Munara"]
+    assert [b.name for b in client_approved([bidder], "   ")] == ["Al Munara"]
+    assert [b.name for b in client_approved([bidder], None)] == ["Al Munara"]

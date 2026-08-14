@@ -19,11 +19,14 @@ Every blocker names the whole criterion rather than the nearer half of it —
 it. "Not approved" leaves a reader to guess whether renewal is the remedy; the
 date it lapsed does not.
 """
+from collections.abc import Iterable
 from datetime import date, timedelta
 
 from pydantic import BaseModel, Field
 
-from workflow.models.bidder import ADNOC, Bidder
+from workflow.disciplines import fold as dis_fold
+from workflow.disciplines import product_groups as dis_product_groups
+from workflow.models.bidder import ADNOC, ASTRA, Bidder
 from workflow.models.rfq import RfqRecord
 
 # How long before a lapse is worth mentioning. Long enough that a renewal can
@@ -107,16 +110,109 @@ def effective_prequal(bidder: Bidder, as_of: date) -> str:
     return "Approved"
 
 
-def _matches_scope(bidder: Bidder, rfq: RfqRecord) -> bool:
+def _registered_for(bidder: Bidder, wanted: set[str]) -> bool:
     """Whole-string, case-folded, whitespace-trimmed.
 
     Substring matching is deliberately not used. It is how `classify._RULES`
     shipped false matches, and here it would make "Electric" answer for
     "Electrical Testing" — a different trade, and one whose bid would be
     thrown out at TBE.
+
+    `wanted` must already be folded by the caller, with `disciplines.fold` and
+    nothing else.
     """
-    wanted = {rfq.discipline.strip().casefold(), rfq.package.strip().casefold()}
-    return any(c.strip().casefold() in wanted for c in bidder.trade_categories)
+    return any(dis_fold(c) in wanted for c in bidder.trade_categories)
+
+
+def _matches_scope(bidder: Bidder, rfq: RfqRecord) -> bool:
+    """Both the discipline and the package, each expanded through the
+    vocabulary.
+
+    The expansion has to happen here as well as in `client_approved`, or the
+    two disagree: the item screen would list every vendor registered for a
+    cable product group, and the candidate list beside the RFQ raised from that
+    item would caution every one of them for scope — because no vendor is
+    registered for a category literally called "Cables". An unknown label
+    expands to itself, so a package like "LV switchgear" matches exactly as it
+    always did.
+    """
+    wanted = {
+        dis_fold(group)
+        for label in (rfq.discipline, rfq.package)
+        for group in dis_product_groups(label)
+    }
+    return _registered_for(bidder, wanted)
+
+
+# Both approvals an invitable vendor must carry. `CLIENT_APPROVER` says the
+# client will accept them; `ASTRA` says we will. Order is the order they are
+# reported in, and the client comes first because theirs is the list ours is
+# drawn from.
+AVAILABLE_APPROVERS = (CLIENT_APPROVER, ASTRA)
+
+
+def available(
+    bidders: Iterable[Bidder], discipline: str | None = None
+) -> list[Bidder]:
+    """Vendors carrying every approval in `AVAILABLE_APPROVERS`.
+
+    "Available" is a narrower thing than "on the client's list": ADNOC's
+    approval alone means they may be used on an ADNOC project, not that we have
+    qualified them ourselves. Both, and a vendor can be invited without an
+    argument.
+
+    AND, never OR. A vendor with one of the two is exactly the case this filter
+    exists to exclude, and it is the common case — the client's list runs to
+    1 346 and ours to a hundred or so.
+    """
+    wanted = set(AVAILABLE_APPROVERS)
+    return [
+        b
+        for b in client_approved(bidders, discipline)
+        if wanted <= set(b.approved_by)
+    ]
+
+
+def client_approved(
+    bidders: Iterable[Bidder], discipline: str | None = None
+) -> list[Bidder]:
+    """The client's approved vendor list, by name.
+
+    One list, and the reason there is one: everything the product knows about
+    who ADNOC has approved comes from a single import of a single export, so a
+    screen asking "who is approved" should get the same answer wherever it
+    asks. `CLIENT_APPROVER` is the same constant `missing_client_approval`
+    reads, so "ADNOC-approved" has exactly one definition.
+
+    Registry rows, never a `Suitability` — the caller may have no RFQ, so
+    nothing here is eligible or blocked. Judging happens at Shortlisting.
+
+    `discipline` narrows the list when a caller wants that. It is expanded
+    through `workflow.disciplines` first, so "Cables" reaches the eleven cable
+    product groups the export actually names rather than looking for a group
+    called "Cables" and finding none — that mismatch is why this returned
+    nobody for every real item before the vocabulary existed. An unknown
+    discipline still matches itself, so an item scoped straight to a product
+    group works without an entry there.
+
+    Matching stays whole-string, the same rule the candidate list uses, so a
+    vendor cannot pass here and be cautioned for scope there. The filter is
+    optional and off by default: a blank or missing discipline narrows nothing
+    rather than excluding everybody.
+    """
+    if (discipline or "").strip():
+        wanted = {dis_fold(g) for g in dis_product_groups(discipline)}
+    else:
+        wanted = set()
+    return sorted(
+        (
+            b
+            for b in bidders
+            if CLIENT_APPROVER in b.approved_by
+            and (not wanted or _registered_for(b, wanted))
+        ),
+        key=lambda b: b.name.casefold(),
+    )
 
 
 def evaluate(bidder: Bidder, rfq: RfqRecord, as_of: date) -> Suitability:

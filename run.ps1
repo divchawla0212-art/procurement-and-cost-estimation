@@ -360,17 +360,151 @@ function Stop-Tree($Proc) {
     # taskkill /T, not Stop-Process: uvicorn --reload runs a worker child and
     # npm runs node as a child. Killing only the parent leaves the real server
     # alive and still holding the port.
+    #
+    # This only works while the parent is still alive. Once it has exited its
+    # PID no longer names a tree to walk, so an already-dead parent is skipped
+    # here and its survivors are collected by Stop-LeftoverListeners below.
     if ($null -eq $Proc) { return }
     try { if ($Proc.HasExited) { return } } catch { return }
     & taskkill.exe /PID $Proc.Id /T /F *> $null
 }
 
+# The descendants of what we launched, recorded while they are still alive.
+#
+# A uvicorn reload worker cannot be identified any other way. It is spawned
+# through `multiprocessing`, so its command line is a `spawn_main` stub — no
+# `api.main:app`, no `--port`, nothing `Test-OursCommandLine` can recognise —
+# and it is not the socket's owner either: the reloader creates the listening
+# socket and hands it over, so `Get-NetTCPConnection` keeps naming the reloader
+# even after the reloader is gone. Walking down from our own PIDs at cleanup
+# time does not reach it either, because the reloader in the middle of that
+# chain has usually died first, and a dead process is absent from the table
+# that the walk reads.
+#
+# Every one of those failures shares a cause: by the time we look, the
+# information is gone. So the tree is recorded as it runs.
+$script:LaunchedAt = $null
+$script:Tracked = @{}
+
+function Update-TrackedDescendants {
+    if ($script:Started.Count -eq 0) { return }
+
+    # Only the process names these two servers actually spawn, so the sweep
+    # stays a narrow query rather than an enumeration of every process.
+    $procs = @(Get-CimInstance Win32_Process `
+        -Filter "Name = 'python.exe' OR Name = 'node.exe' OR Name = 'cmd.exe'" `
+        -ErrorAction SilentlyContinue)
+    if ($procs.Count -eq 0) { return }
+
+    $known = @{}
+    foreach ($p in $script:Started) {
+        try { $known[[int]$p.Id] = $true } catch { }
+    }
+    foreach ($id in $script:Tracked.Keys) { $known[[int]$id] = $true }
+
+    # A PID left by a dead ancestor can be handed to an unrelated process, and
+    # that process would look like a child of ours. It cannot predate this run,
+    # so the launch time settles it. The second of slack absorbs clock
+    # granularity between Get-Date here and CreationDate from CIM.
+    $floor = $script:LaunchedAt.AddSeconds(-1)
+
+    # Repeat until nothing new appears: a grandchild is only reachable once its
+    # parent is known, and CIM does not return the table in tree order.
+    for ($pass = 0; $pass -lt 6; $pass++) {
+        $added = $false
+        foreach ($proc in $procs) {
+            $procId = [int]$proc.ProcessId
+            if ($known.ContainsKey($procId)) { continue }
+            if (-not $known.ContainsKey([int]$proc.ParentProcessId)) { continue }
+            if ($proc.CreationDate -and $proc.CreationDate -lt $floor) { continue }
+            $known[$procId] = $true
+            $script:Tracked[$procId] = $true
+            $added = $true
+        }
+        if (-not $added) { break }
+    }
+}
+
+function Stop-LeftoverListeners {
+    # The case Stop-Tree cannot cover: a server that outlived the process this
+    # script launched.
+    #
+    # `Start-Process $Python` does not hand us the server directly — a venv's
+    # python.exe re-execs its base interpreter, which is the uvicorn reloader,
+    # which forks a worker. The thing serving the port is therefore a
+    # grandchild. When the launched process exits on its own (the reloader
+    # dying with code 1 as WatchFiles churns, rather than a Ctrl+C), Stop-Tree
+    # is handed an already-exited process and `taskkill /T` has no tree left to
+    # walk, so those descendants survive holding the port. The next run then
+    # has to reclaim a port it should never have had to — and because the
+    # survivor keeps whatever environment it started with, a stale one can
+    # leave the API answering 401 through an entire `-NoAuth` session.
+    #
+    # Both guards from the startup reclaim still apply, and this is exactly as
+    # conservative: a port held by something that is not ours is reported and
+    # left alone, and this script's own ancestry is never a target.
+    $selfIds = Get-SelfAncestry
+    foreach ($entry in @(
+        [pscustomobject]@{ Port = $ApiPort; Label = 'api' },
+        [pscustomobject]@{ Port = $WebPort; Label = 'web' }
+    )) {
+        # A server that is merely slow to die is not a leftover. Only what is
+        # still listening after a grace period is treated as one.
+        if (Wait-PortFree $entry.Port 3) { continue }
+
+        $targets = @()
+
+        # The owner, when it is alive and resolvable — the ordinary case.
+        $holder = Get-PortHolder $entry.Port
+        if ($holder -and $holder.IsOurs -and $selfIds -notcontains $holder.Id) {
+            $targets += Get-ReclaimTarget $holder $selfIds
+        }
+
+        $targets = @($targets | Sort-Object -Unique | Where-Object { $selfIds -notcontains $_ })
+        if ($targets.Count -eq 0) {
+            $who = if ($holder) { "$($holder.ProcessName) (PID $($holder.Id))" } else { 'something' }
+            Write-Warn "port $($entry.Port) ($($entry.Label)) is held by $who, which this script did not start - left alone."
+            continue
+        }
+
+        foreach ($target in $targets) { & taskkill.exe /PID $target /T /F *> $null }
+        if (Wait-PortFree $entry.Port 5) {
+            Write-Ok "leftover $($entry.Label) (PID $($targets -join ', ')) stopped; port $($entry.Port) free"
+        } else {
+            Write-Bad "port $($entry.Port) ($($entry.Label)) is still held after stopping PID $($targets -join ', ')."
+        }
+    }
+}
+
 function Stop-All {
+    # One last look before anything is killed, so a worker spawned since the
+    # previous refresh is still recorded rather than missed.
+    Update-TrackedDescendants
+
     foreach ($p in $script:Started) { Stop-Tree $p }
+
+    # Then everything the tree kill could not reach: the survivors of a parent
+    # that had already exited. Killed deepest-PID-first is not meaningful on
+    # Windows, so each is taken with /T and failures are ignored — a PID that
+    # died with its parent is the expected case here, not an error.
+    foreach ($procId in @($script:Tracked.Keys)) {
+        & taskkill.exe /PID $procId /T /F *> $null
+    }
+
     $script:Started = @()
+    $script:Tracked = @{}
+
+    # After the trees, never before: a live server killed above needs its
+    # moment to release the port, and Stop-LeftoverListeners waits for exactly
+    # that before deciding anything is a leftover.
+    Stop-LeftoverListeners
 }
 
 try {
+    # Before the first Start-Process: everything born after this instant, below
+    # one of our PIDs, is ours. See Update-TrackedDescendants.
+    $script:LaunchedAt = Get-Date
+
     $uvicornArgs = @('-m', 'uvicorn', 'api.main:app', '--port', "$ApiPort")
     if (-not $NoReload) { $uvicornArgs += '--reload' }
 
@@ -390,6 +524,7 @@ try {
     $deadline = (Get-Date).AddSeconds(45)
     $healthy = $false
     while ((Get-Date) -lt $deadline) {
+        Update-TrackedDescendants
         if ($api.HasExited) { throw "The API exited during startup (code $($api.ExitCode)). See its output above." }
         try {
             $res = Invoke-WebRequest -Uri "$ApiUrl/api/health" -UseBasicParsing -TimeoutSec 2
@@ -398,6 +533,9 @@ try {
             Start-Sleep -Milliseconds 400
         }
     }
+    # Startup is when the tree is at its most complete and least likely to have
+    # lost a member, so record it once more now that the API is answering.
+    Update-TrackedDescendants
 
     Write-Host ""
     if ($healthy) {
@@ -412,7 +550,16 @@ try {
 
     # Hold the console until either child dies or the user interrupts. Ctrl+C
     # throws out of this loop, which is what gets us into `finally`.
+    # `--reload` replaces the worker on every code change, so the tree is not
+    # fixed for the life of the run and one recording at startup would go
+    # stale. Re-read it every few seconds rather than every tick: this is a CIM
+    # query, and the thing it guards against costs a port, not data.
+    $nextScan = (Get-Date).AddSeconds(3)
     while ($true) {
+        if ((Get-Date) -ge $nextScan) {
+            Update-TrackedDescendants
+            $nextScan = (Get-Date).AddSeconds(3)
+        }
         if ($api.HasExited) { Write-Warn "API exited (code $($api.ExitCode))."; break }
         if ($web.HasExited) { Write-Warn "Web dev server exited (code $($web.ExitCode))."; break }
         Start-Sleep -Milliseconds 500

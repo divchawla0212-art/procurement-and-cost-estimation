@@ -34,7 +34,6 @@ function scalars(props: Record<string, unknown>) {
 vi.mock('./pages/Projects', () => ({ Projects: marker('projects') }))
 vi.mock('./pages/ProjectDetail', () => ({ ProjectDetail: marker('project-detail') }))
 vi.mock('./pages/ItemDetail', () => ({ ItemDetail: marker('item-detail') }))
-vi.mock('./pages/Bidders', () => ({ Bidders: marker('bidders') }))
 vi.mock('./pages/RfqWorkflow', () => ({ RfqWorkflow: marker('rfq-workflow') }))
 vi.mock('./pages/RfqWizard', () => ({ RfqWizard: marker('rfq-wizard') }))
 vi.mock('./pages/RfqDetail', () => ({ RfqDetail: marker('rfq-detail') }))
@@ -146,9 +145,11 @@ describe('AppRoutes — dispatch', () => {
     })
   })
 
-  it('mounts the bidder registry at /bidders', () => {
+  // `/bidders` was the standalone registry screen. It is gone, and the
+  // catch-all is what an old bookmark now lands on.
+  it('sends a stale /bidders link to the roster', () => {
     renderAt('/bidders')
-    expect(screen.getByTestId('bidders')).toBeInTheDocument()
+    expect(screen.getByTestId('projects')).toBeInTheDocument()
   })
 
   it('mounts the RFQ roster at /rfqs', () => {

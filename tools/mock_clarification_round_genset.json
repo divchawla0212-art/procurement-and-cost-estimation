@@ -1,0 +1,396 @@
+{
+  "_comment": [
+    "A clarification round built on a real client MR: ADN-AEC-ME-SPC-026 Rev 0,",
+    "'MR FOR GAS POWER GENERATOR', issued for quotation 2024-10-10, in",
+    "processed-data/01-client-mr-rfq/.",
+    "",
+    "Played by tools/mock_clarification_round.py, same as the generic round:",
+    "    python -m tools.mock_clarification_round --fixture tools/mock_clarification_round_genset.json",
+    "",
+    "WHAT IS REAL AND WHAT IS NOT. Every requirement quoted below is from the MR,",
+    "at the item number given, and every query is a real defect or ambiguity in",
+    "that document rather than an invented one — four of the six are internal",
+    "contradictions the sheet actually contains. The questions and answers",
+    "themselves are written for this mock and were not asked or given by anyone.",
+    "",
+    "THE VENDORS ARE INVENTED, DELIBERATELY. The real round is on the record — the",
+    "MR was superseded following a MOM between ASTRA and a named packager on",
+    "2024-11-11, both of which sit in the same directory. Putting that company's",
+    "name against questions nobody asked would be indistinguishable on screen from",
+    "a record of what they did ask, which is the rule workflow/avl_import.py",
+    "already keeps for the registry. So the cast here is invented and says so.",
+    "",
+    "THE DISCIPLINE IS 'GENERATOR POWER-OTHERS' ON PURPOSE. The AVL vocabulary in",
+    "workflow/disciplines.py has diesel, gas turbine and steam turbine driven",
+    "generators, and no gas-engine-driven group. A reciprocating gas genset is not",
+    "a gas turbine, so it scopes to the catch-all. Worth knowing before anyone",
+    "reads a short candidate list as a short market.",
+    "",
+    "THE ADDENDUM IS THE MOM'S ANALOGUE. In the real file set the MR was reissued",
+    "after the minutes; here the same movement is an addendum superseding Rev. 0 at",
+    "Rev. 1, which is what makes this round a fair test of the frozen-package rule."
+  ],
+
+  "rfq": {
+    "reference": "ADN-AEC-ME-SPC-026-MOCK",
+    "package": "Gas engine driven generator sets, containerized — G-4101-01A / 01B",
+    "discipline": "GENERATOR POWER-OTHERS",
+    "value_estimate_aed": 18400000,
+    "project": {
+      "name": "ADNOC Gas Define Stage Project 5.0 — P5 compression (mock round)",
+      "code": "AP-044-MOCK",
+      "client": "ADNOC",
+      "location": "Habshan, Abu Dhabi",
+      "live_period_start": "2024-06-01",
+      "live_period_end": "2027-12-31"
+    },
+    "item": {
+      "item_type": "Package equipment",
+      "description": "525 kW 415 V 3-phase 4-wire 50 Hz containerized gas engine generator, duty S1 — 2 no.",
+      "qty": 2,
+      "uom": "no.",
+      "discipline": "GENERATOR POWER-OTHERS",
+      "estimated_value_aed": 18400000,
+      "required_on_site": "2025-11-30"
+    },
+    "technical_package": {
+      "revision": "Rev. 0",
+      "basis_of_design": "Two containerized gas engine driven generator sets, 525 kW 415 V 3-phase 4-wire 50 Hz, star connected, duty S1, tags G-4101-01A and G-4101-01B, feeding the P5 compression facility with one set running and one standby. Scope per MR Table 1: alternator, acoustic enclosure, starting and lube oil systems, F&G and CO2 fire protection, LCP in the container and GCP in the substation, DCS and ESD interface.",
+      "attachments": [
+        { "doc_code": "ADN-AEC-ME-SPC-026", "title": "MR for gas power generator", "revision": "Rev. 0" },
+        { "doc_code": "ATT-1A", "title": "Fuel gas composition — sustained summer", "revision": "Rev. 0" },
+        { "doc_code": "ATT-1B", "title": "Fuel gas composition — sustained winter", "revision": "Rev. 0" },
+        { "doc_code": "ATT-2", "title": "Emission compliance data", "revision": "Rev. 0" },
+        { "doc_code": "ATT-3", "title": "Synchronization diagram", "revision": "Rev. 0" },
+        { "doc_code": "ATT-5", "title": "Approved vendor list 21.05.2024", "revision": "Rev. 0" },
+        { "doc_code": "ATT-7", "title": "Load list", "revision": "Rev. 0" },
+        { "doc_code": "ATT-9", "title": "VDRL", "revision": "Rev. 0" }
+      ]
+    },
+    "tbe_criteria": [
+      "Generator rating at 58 °C site ambient",
+      "Insulation class and temperature rise",
+      "Fuel gas tolerance at 700 ppm H2S",
+      "Emission compliance and SCR requirement",
+      "Noise at 1 m with cooling fans running",
+      "Sub-vendor compliance with Attachment-5 AVL"
+    ]
+  },
+
+  "_vendors_comment": [
+    "Each of the three carries a `registry` block, so the script creates the",
+    "bidder and invites it by vendor_id rather than typing a name onto the",
+    "shortlist. That is what makes the wizard's Shortlisting step derive",
+    "prequalification, scope fit and client approval from the registry instead",
+    "of taking this file's word for any of them.",
+    "",
+    "EVERY ONE OF THESE COMPANIES IS INVENTED, and each notes field says so in",
+    "its own first sentence rather than relying on this comment — a registry",
+    "row with a turnover band and a performance rating reads as a record of a",
+    "real company far more readily than a name typed into a box does, so the",
+    "label has to travel with the row into the product.",
+    "",
+    "NONE OF THE THREE CARRIES ADNOC APPROVAL, AND NONE MAY. ADNOC approval is",
+    "a fact about a company on ADNOC's list, and these companies are not on it",
+    "— they are not on anything, they do not exist. An earlier version of this",
+    "file flagged two of them `[\"ADNOC\", \"Astra\"]` to make the shortlist show",
+    "an approved row next to an unapproved one, which is a fabricated client",
+    "approval and is indistinguishable on screen from a recorded one. That is",
+    "the same rule workflow/avl_import.py keeps when it leaves every field the",
+    "export does not carry empty. They carry `Astra` alone: an internal",
+    "qualification of an invented company, which is invented in the same",
+    "direction as the company and claims nothing about the client.",
+    "",
+    "THE APPROVED ROWS COME FROM `also_invited`, AND THEY ARE REAL. Those three",
+    "are quoted from the export and are genuinely registered for GENERATOR",
+    "POWER-OTHERS, so their ADNOC approval is read rather than asserted. They",
+    "are looked up in the registry and never created: a name in that list that",
+    "the registry does not hold means the AVL has not been imported, not that a",
+    "vendor is missing and should be invented to fill the gap.",
+    "",
+    "THEY RAISE NOTHING, WHICH IS THE WHOLE POINT OF KEEPING THEM SEPARATE. A",
+    "shortlist entry records that a company was invited. A query records what a",
+    "company said. The first is a fact this mock is entitled to make up about a",
+    "real company on a development store; the second is not, and the real round",
+    "behind this MR is on file two directories away for anyone to confuse it",
+    "with. So the questions stay with the invented cast and the approvals stay",
+    "with the real vendors, and the shortlist shows both states at once without",
+    "either being a fiction about what someone asked.",
+    "",
+    "TRADE CATEGORIES ARE WHOLE-STRING MATCHED against the RFQ discipline, so",
+    "GENERATOR POWER-OTHERS is quoted from workflow/disciplines.py rather than",
+    "described. A near-miss here reads as a vendor who does not do this work."
+  ],
+
+  "vendors": [
+    {
+      "slot": "vendor_1",
+      "name": "Falcon Bay Rotating Equipment",
+      "prequal_status": "Approved",
+      "scope_code_fit": true,
+      "registry": {
+        "name": "Falcon Bay Rotating Equipment",
+        "country": "United Arab Emirates",
+        "currency": "AED",
+        "approved_by": ["Astra"],
+        "trade_categories": [
+          "GENERATOR POWER-OTHERS",
+          "GENERATORS (ALTERNATORS) - FOR ELECTRIC POWER GENERATION"
+        ],
+        "prequal_status": "Approved",
+        "prequal_expires_on": "2027-03-31",
+        "turnover_band": "AED 250-500m",
+        "performance_rating": 4.2,
+        "past_awards": 6,
+        "represented_manufacturers": ["Waukesha", "Marelli Motori"],
+        "notes": "Invented for this mock round; not a real company. Rotating-equipment packager in Mussafah with its own alternator and switchgear integration shop, which is why it is the one bidder on this list that can be held to the insulation and temperature-rise clauses without going back to a principal for every answer. Six awards on ADNOC onshore packages, none containerized at this rating. Reads specifications closely and raises the electrical contradictions early, which is a virtue at Clarifications and a nuisance at bid evaluation."
+      }
+    },
+    {
+      "slot": "vendor_2",
+      "name": "Jebel Ali Power Systems",
+      "prequal_status": "Approved",
+      "scope_code_fit": true,
+      "registry": {
+        "name": "Jebel Ali Power Systems",
+        "country": "United Arab Emirates",
+        "currency": "AED",
+        "approved_by": ["Astra"],
+        "trade_categories": [
+          "GENERATOR POWER-OTHERS",
+          "GENERATOR POWER-DIESEL ENGINE DRIVEN"
+        ],
+        "prequal_status": "Approved",
+        "prequal_expires_on": "2026-11-30",
+        "turnover_band": "AED 500m-1bn",
+        "performance_rating": 4.5,
+        "past_awards": 11,
+        "represented_manufacturers": ["Jenbacher", "Stamford"],
+        "notes": "Invented for this mock round; not a real company. The gas-engine specialist of the three and the only one with sour-service running hours behind it, so its questions are about what 700 ppm H2S does to the oil-change interval rather than about whether it can be tolerated at all. Largest turnover on the list and the shortest prequalification runway — it expires inside the year, so an award that slips past November needs it renewed first. Alternator comes from a single principal, which is the constraint behind its sub-vendor query."
+      }
+    },
+    {
+      "slot": "vendor_3",
+      "name": "Northgate Energy Packages",
+      "prequal_status": "Approved",
+      "scope_code_fit": true,
+      "registry": {
+        "name": "Northgate Energy Packages",
+        "country": "United Kingdom",
+        "currency": "AED",
+        "approved_by": ["Astra"],
+        "trade_categories": ["GENERATOR POWER-OTHERS"],
+        "prequal_status": "Approved",
+        "prequal_expires_on": "2028-06-30",
+        "turnover_band": "AED 100-250m",
+        "performance_rating": 3.9,
+        "past_awards": 2,
+        "represented_manufacturers": ["MWM"],
+        "notes": "Invented for this mock round; not a real company. Containerization and acoustics house — enclosure design, cooling and emissions treatment are the work it does itself, which is why the noise limit and the SCR pricing are the two things it asks about. Smallest of the three by turnover and by awards, and the only one not on the client's approved vendor list, so its row carries the approval caution: procurement has qualified it, the client has not been asked. That is a caution to resolve before award, not a reason to leave it off the enquiry."
+      }
+    }
+  ],
+
+  "_also_invited_comment": [
+    "Three of the six vendors the export registers for GENERATOR POWER-OTHERS.",
+    "Names are quoted from the `Vendor Name` column exactly, truncation and all",
+    "— the sheet cuts that column at 35 characters, and 'correcting' a name to",
+    "the full company style would stop it matching the registry row it names.",
+    "",
+    "These three and not the other three because the manufacturer the export",
+    "lists against their GENERATOR POWER-OTHERS row builds generator sets:",
+    "Detroit Diesel, Sterling Generators and Intergen. The remaining three are",
+    "registered for the group behind an alternator or a power-conversion",
+    "principal, which is a different offer against a containerized genset",
+    "enquiry. That is a judgement about the package, not about the companies.",
+    "",
+    "No profile is stated here on purpose. Whatever the registry holds for them",
+    "came from the export, and a turnover band or a rating written in this file",
+    "would be a fact about a real company that this file invented."
+  ],
+
+  "also_invited": [
+    "GENERAL NAVIGATION & COMMERCE COMPA",
+    "OILTEK TRADING-SOLE PROPRIETORSHIPL",
+    "Ali & Sons Oil-Field Supplies & Ser"
+  ],
+
+  "exchange": [
+    {
+      "ref": "Q1",
+      "actor": "vendor",
+      "action": "raise_query",
+      "vendor": "vendor_1",
+      "category": "Technical",
+      "raised_on": "2024-10-21",
+      "expect_number": "TQ-001",
+      "_defect": "MR Table 1 items 2.6 and 2.7 contradict each other.",
+      "question": "Table 1 item 2.6 requires Class F insulation limited to Class B temperature rise, and item 2.7 immediately below requires Class H winding insulation. These cannot both be met as written. Please confirm which governs. Note that at the 58 °C site ambient of item 2.7.1 the two produce materially different continuous ratings, so this determines the frame size offered and cannot be resolved after bid."
+    },
+    {
+      "ref": "Q2",
+      "actor": "vendor",
+      "action": "raise_query",
+      "vendor": "vendor_1",
+      "category": "Commercial",
+      "raised_on": "2024-10-21",
+      "expect_number": "CQ-001",
+      "_defect": "Item 2.47's requirement text is a copy of 2.46's; the skid's scope is undefined.",
+      "question": "Table 1 item 2.47 is headed 'Gas Pressure Regulating Skid' but its project requirement reads 'Generator synchronization relays shall be provided by Generator vendor as per attached Synchronization Scheme', which is verbatim the requirement of item 2.46 above it. The skid's actual requirement is therefore undefined. Please confirm whether the gas pressure regulating skid is within the vendor scope of supply and, if so, issue its duty conditions and confirm whether it is priced in the base bid or as an option."
+    },
+    {
+      "ref": "Q3",
+      "actor": "vendor",
+      "action": "raise_query",
+      "vendor": "vendor_2",
+      "category": "Technical",
+      "raised_on": "2024-10-23",
+      "expect_number": "TQ-002",
+      "_defect": "700 ppm H2S is high for a gas engine; 2.41 leaves the consequence with the vendor.",
+      "question": "Item 2.5.1 states an H2S content of 700 ppm. At that level the lubricating oil replacement interval requested under item 2.41 falls well below a standard gas engine service interval, and the engine builder's warranty is normally conditional on fuel treatment. Please confirm whether any fuel gas treatment or H2S removal is provided upstream of the battery limit, and whether the 5-year design life of item 1.3 is to be demonstrated at 700 ppm continuous or at a lower sustained figure from Attachments 1A and 1B."
+    },
+    {
+      "ref": "Q4",
+      "actor": "vendor",
+      "action": "raise_query",
+      "vendor": "vendor_2",
+      "category": "Technical",
+      "raised_on": "2024-10-23",
+      "expect_number": "TQ-003",
+      "_defect": "Not a defect — a genuine sub-vendor question, and the one whose answer must not circulate.",
+      "question": "Item 1.8 requires all sub-vendors to be drawn from the Attachment-5 Approved Vendor List dated 21.05.2024. Our standard alternator for this rating is from a manufacturer that does not appear on that list, although it is approved on two other ADNOC assets. Please confirm whether we may offer it against a concession, or whether we must repackage on a listed alternator, which affects the enclosure envelope and the price."
+    },
+    {
+      "ref": "Q5",
+      "actor": "vendor",
+      "action": "raise_query",
+      "vendor": "vendor_3",
+      "category": "Commercial",
+      "raised_on": "2024-10-24",
+      "expect_number": "CQ-002",
+      "_defect": "2.51 asks for an optional price; 2.8.2 requires compliance. Which the base bid must meet is unstated.",
+      "question": "Item 2.51 asks for the Selective Catalytic Reduction system as an optional price, while item 2.8.2 requires compliance with the emission limits of Attachment-2. Please confirm whether the base bid is required to meet Attachment-2 without SCR, with SCR quoted separately only if the base offer cannot, or whether SCR is to be excluded from the base bid in all cases. Bids will not be comparable unless this is fixed for all bidders."
+    },
+    {
+      "ref": "Q6",
+      "actor": "vendor",
+      "action": "raise_query",
+      "vendor": "vendor_3",
+      "category": "Technical",
+      "raised_on": "2024-10-24",
+      "expect_number": "TQ-004",
+      "question": "Item 2.42 sets a noise limit of 85 dB(A) at 1 m while item 2.24 states air cooling is preferred and asks for the number and wattage of fans. Please confirm whether the 85 dB(A) is to be met with the cooling fans running at full speed and at the 58 °C ambient, and whether it is a free-field or a near-field measurement."
+    },
+
+    {
+      "ref": "A1",
+      "actor": "astra",
+      "action": "answer_query",
+      "query": "Q1",
+      "answer": "Item 2.7 governs: Class H winding insulation, limited to Class B temperature rise, at the rated output and the 58 °C site ambient. Item 2.6 is in error and is corrected by addendum. Rate the machine on that basis and state the resulting continuous output at 58 °C in the deviation form."
+    },
+    {
+      "ref": "A3",
+      "actor": "astra",
+      "action": "answer_query",
+      "query": "Q3",
+      "answer": "No fuel gas treatment is provided upstream of the battery limit; 700 ppm H2S is the design figure and is to be taken as continuous. Sustained summer and winter compositions in Attachments 1A and 1B govern the remaining properties. State the lubricating oil replacement interval at that condition under item 2.41, and state separately any qualification the engine builder places on the 5-year design life of item 1.3. A shortened oil interval is acceptable if it is declared; an undeclared one is not."
+    },
+    {
+      "ref": "A4",
+      "actor": "astra",
+      "action": "answer_query",
+      "query": "Q4",
+      "restricted_reason": "The question names this bidder's own alternator sub-supplier and their proposed route to a concession. Circulating the answer would tell the rest of the shortlist which manufacturer they intend to package on, and the sub-vendor requirement it turns on is already stated identically to everyone at item 1.8. Restricted by procurement.",
+      "answer": "Attachment-5 dated 21.05.2024 governs for this enquiry and no concession will be entertained at bid stage. Approval on another ADNOC asset does not carry across. You may either package on a listed alternator, or bid the unlisted one as a deviation under Attachment-6 with the listed alternative priced alongside it — an offer carrying only the unlisted machine will be treated as non-compliant. Prequalification of a new sub-vendor is a separate route and will not be concluded inside this tender period."
+    },
+    {
+      "ref": "A5",
+      "actor": "astra",
+      "action": "answer_query",
+      "query": "Q5",
+      "answer": "The base bid shall meet Attachment-2 without SCR. Quote SCR as a separate optional lump sum under item 2.51 in all cases, whether or not your base offer needs it, so that the options are comparable. State the emission figures your base offer achieves at 100%, 75% and 50% load."
+    },
+    {
+      "ref": "A6",
+      "actor": "astra",
+      "action": "answer_query",
+      "query": "Q6",
+      "answer": "85 dB(A) is to be met at 1 m from the enclosure surface with all cooling fans at full speed and the set at rated output, at the 58 °C ambient. Near-field measurement, averaged over the standard measurement positions."
+    },
+    {
+      "ref": "W6",
+      "actor": "astra",
+      "action": "withdraw_query",
+      "query": "Q6",
+      "reason": "Withdrawn at Northgate Energy Packages' request: the bidder re-raised the same point as part of TQ-002's fuel and ambient discussion and asked that it be consolidated there rather than answered twice. The answer above stands and has been circulated; the query is out of the round.",
+      "expect_state": "Withdrawn",
+      "_note": "Answered first, then withdrawn — it must still read Withdrawn. This is the case a stored status field gets wrong."
+    },
+
+    {
+      "ref": "ADD1",
+      "actor": "astra",
+      "action": "draft_addendum",
+      "revision": "Rev. 1",
+      "expect_number": "ADD-01",
+      "summary": "MR ADN-AEC-ME-SPC-026 reissued at Rev. 1. Item 2.6 deleted and item 2.7 restated: Class H winding insulation limited to Class B temperature rise, rated at 58 °C ambient. Item 1.2 ambient band corrected from 5-58 °C to 4-58 °C to agree with item 2.7.1. Item 2.5.1 confirmed as 700 ppm H2S continuous with no upstream treatment, and item 2.41 now requires the oil replacement interval to be stated at that condition. Bid due date extended by three weeks.",
+      "arising_from": ["Q1", "Q3"],
+      "bid_due_date": "2024-12-05",
+      "attachments": [
+        { "doc_code": "ADN-AEC-ME-SPC-026", "title": "MR for gas power generator", "revision": "Rev. 1" },
+        { "doc_code": "ATT-1A", "title": "Fuel gas composition — sustained summer", "revision": "Rev. 0" },
+        { "doc_code": "ATT-1B", "title": "Fuel gas composition — sustained winter", "revision": "Rev. 0" },
+        { "doc_code": "ATT-2", "title": "Emission compliance data", "revision": "Rev. 0" },
+        { "doc_code": "ATT-3", "title": "Synchronization diagram", "revision": "Rev. 0" },
+        { "doc_code": "ATT-5", "title": "Approved vendor list 21.05.2024", "revision": "Rev. 0" },
+        { "doc_code": "ATT-6", "title": "Technical deviation form", "revision": "Rev. 1" },
+        { "doc_code": "ATT-7", "title": "Load list", "revision": "Rev. 0" },
+        { "doc_code": "ATT-9", "title": "VDRL", "revision": "Rev. 0" }
+      ]
+    },
+
+    {
+      "ref": "G1",
+      "actor": "framework",
+      "action": "expect_gate",
+      "passed": false,
+      "reason_contains": ["queries still open", "CQ-001", "addenda still in draft", "ADD-01"],
+      "_note": "CQ-001 is the gas pressure regulating skid — the scope question that needed the client, which is why it outlived the technical ones."
+    },
+    {
+      "ref": "A2",
+      "actor": "astra",
+      "action": "answer_query",
+      "query": "Q2",
+      "answer": "The gas pressure regulating skid IS within the vendor scope of supply and is to be priced in the base bid. The requirement text at item 2.47 was carried over in error from item 2.46 and is corrected in the reissued MR. Duty conditions are the inlet pressure and temperature of Attachments 1A and 1B at the skid inlet, regulated to the engine builder's stated inlet requirement, with slam-shut and vent to a safe location. Item 2.46 is unchanged: synchronization relays remain with the generator vendor per Attachment-3."
+    },
+    {
+      "ref": "G2",
+      "actor": "framework",
+      "action": "expect_gate",
+      "passed": false,
+      "reason_contains": ["addenda still in draft", "ADD-01"],
+      "reason_excludes": ["queries still open"]
+    },
+    {
+      "ref": "ISS1",
+      "actor": "astra",
+      "action": "issue_addendum",
+      "addendum": "ADD1"
+    },
+    {
+      "ref": "G3",
+      "actor": "framework",
+      "action": "expect_gate",
+      "passed": true
+    },
+    {
+      "ref": "T1",
+      "actor": "framework",
+      "action": "transition",
+      "target": "Bids Received",
+      "reason": "Clarification round closed: six queries raised across three bidders, five answered, one withdrawn, one restricted, MR reissued at Rev. 1 by ADD-01."
+    }
+  ]
+}

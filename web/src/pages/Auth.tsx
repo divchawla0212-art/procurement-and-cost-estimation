@@ -5,6 +5,19 @@ import { Card, PageHeader, PasswordField } from '../components/primitives'
 
 type Mode = 'login' | 'signup'
 
+// A typing convenience for the demo administrator, and only that: clicking it
+// fills the email field and you still supply the password. Nothing verifies
+// this address exists — a store seeded without it shows a chip whose sign-in
+// then fails on the server's own "Invalid email or password", which is the
+// same answer any wrong address gets.
+const ADMIN_ACCOUNT = 'admin@gmail.com'
+
+// Shipped in the bundle, so this password is public to anyone who loads the
+// page — treat the demo administrator as a published account, and never reuse
+// this address or password for anything that matters. Signing in is still a
+// second, deliberate press of the button; the chip only fills the fields.
+const ADMIN_PASSWORD = 'Admin@1234'
+
 export function Auth(): JSX.Element {
   const { login, signup } = useAuth()
   const [mode, setMode] = useState<Mode>('login')
@@ -75,6 +88,29 @@ export function Auth(): JSX.Element {
                 onChange={(e) => setEmail(e.target.value)}
               />
             </div>
+            {isLogin && (
+              <div className="form-row">
+                <span className="hint">Admin account</span>
+                <div>
+                  <button
+                    type="button"
+                    className="chip chip--asis"
+                    disabled={submitting}
+                    onClick={() => {
+                      setEmail(ADMIN_ACCOUNT)
+                      setPassword(ADMIN_PASSWORD)
+                      // Both fields are filled, so the next act is the button
+                      // rather than the password box. By id rather than a ref
+                      // because the submit lives inside this form's own markup
+                      // and one id is cheaper than threading a ref through it.
+                      document.getElementById('auth-submit')?.focus()
+                    }}
+                  >
+                    {ADMIN_ACCOUNT}
+                  </button>
+                </div>
+              </div>
+            )}
             <div className="form-row">
               <label htmlFor="auth-password">Password</label>
               <PasswordField
@@ -93,7 +129,7 @@ export function Auth(): JSX.Element {
               )}
             </div>
             <div className="auth-actions">
-              <button type="submit" className="btn btn-primary" disabled={submitting}>
+              <button id="auth-submit" type="submit" className="btn btn-primary" disabled={submitting}>
                 {submitting
                   ? isLogin
                     ? 'Signing in…'
