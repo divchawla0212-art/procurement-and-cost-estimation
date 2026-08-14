@@ -12,6 +12,7 @@
  */
 import type {
   BidderSummary,
+  ItemVendorEntry,
   Rfq,
   RfqDetail,
   ShortlistEntry,
@@ -90,7 +91,32 @@ export function rfq(id: string, reference: string, itemIds: string[]): Rfq {
 export function detail(
   over: Partial<WorkflowProjectDetail> = {},
 ): WorkflowProjectDetail {
-  return { project: HALIBA_PROJECT, items: [GENERATOR], rfqs: [], ...over }
+  return {
+    project: HALIBA_PROJECT,
+    items: [GENERATOR],
+    rfqs: [],
+    item_vendor_lists: {},
+    ...over,
+  }
+}
+
+/** One row of an item's uploaded vendor list. `vendor_id: null` is the
+ *  "the registry does not hold them" state, distinct from unapproved. */
+export function vendorEntry(
+  over: Partial<ItemVendorEntry> = {},
+): ItemVendorEntry {
+  return {
+    id: 'ive_1',
+    item_id: 'itm_1',
+    source: 'Client',
+    vendor_id: 'bdr_almunara',
+    vendor_name: 'AL MUNARA SWITCHGEAR LLC',
+    trade_categories: ['CABLES - LV POWER DISTRIBUTION'],
+    uploaded_by: 'buyer@example.com',
+    uploaded_at: '2026-08-14T09:00:00Z',
+    source_document: 'avl.xlsx',
+    ...over,
+  }
 }
 
 /* ------------------------------------------------------------ RFQ detail */

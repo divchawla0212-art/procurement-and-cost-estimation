@@ -639,6 +639,11 @@ export function ItemDetail({
           <ItemForm
             initial={toInput(item)}
             submitLabel="Save item"
+            // Present here and absent on the project screen's create form:
+            // an upload needs an item to attach to.
+            projectId={projectId}
+            itemId={itemId}
+            onVendorListUploaded={() => setTick((t) => t + 1)}
             onCancel={() => setEditing(false)}
             onSubmit={async (body) => {
               const saved = await updateWorkflowItem(

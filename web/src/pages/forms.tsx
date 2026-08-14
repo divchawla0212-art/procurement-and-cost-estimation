@@ -1,9 +1,10 @@
 import { useRef, useState } from 'react'
 import type { FormEvent, JSX, ReactNode } from 'react'
-import { fetchDisciplines } from '../api'
+import { fetchDisciplines, uploadItemVendorList } from '../api'
 import { useAsync } from '../useAsync'
 import type {
   RfqInput,
+  VendorListSource,
   WorkflowItemInput,
   WorkflowProjectInput,
 } from '../types'
@@ -268,16 +269,104 @@ function DisciplineSelect({
   )
 }
 
+/**
+ * One vendor list upload: the client's, or Astra's.
+ *
+ * The source is sent by the caller rather than read out of the file, because
+ * the Astra list is a subset *of* the client's export and so carries nothing
+ * in it that says whose list it is.
+ *
+ * Reuses the hidden-input pattern the enquiry document uses: the native
+ * control's "No file chosen" is browser-owned and cannot be relabelled, so it
+ * is hidden behind a button and one status line reports what was read.
+ */
+function VendorListUpload({
+  source,
+  projectId,
+  itemId,
+  onUploaded,
+}: {
+  source: VendorListSource
+  projectId: string
+  itemId: string
+  onUploaded: () => void
+}): JSX.Element {
+  const id = `vendor-list-${source.toLowerCase()}`
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [summary, setSummary] = useState<string | null>(null)
+  const ref = useRef<HTMLInputElement>(null)
+
+  async function upload(file: File) {
+    setBusy(true)
+    setError(null)
+    setSummary(null)
+    try {
+      const { summary: s } = await uploadItemVendorList(projectId, itemId, source, file)
+      // The counts, not just a tick: an empty list after a 1 346-vendor upload
+      // is a narrowing that found nobody, not a failed read, and only the
+      // numbers can say which.
+      setSummary(`${s.kept} of ${s.parsed} kept · ${s.linked} in the registry`)
+      onUploaded()
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <span className="fxrow">
+      <input
+        id={id}
+        className="sr-only"
+        ref={ref}
+        type="file"
+        accept=".xlsx"
+        aria-label={`Add ${source === 'Client' ? 'client' : 'Astra'} list`}
+        disabled={busy}
+        onChange={(e) => {
+          const file = e.target.files?.[0]
+          // Cleared so picking the same file twice reads it twice — the retry
+          // after a refused workbook is the case that needs it.
+          e.target.value = ''
+          if (file) void upload(file)
+        }}
+      />
+      <button type="button" className="btn btn-sm" disabled={busy}
+              onClick={() => ref.current?.click()}>
+        Add {source === 'Client' ? 'client' : 'Astra'} list
+      </button>
+      {busy && <span className="muted">Reading…</span>}
+      {summary && (
+        <span className="muted" role="status">
+          <span aria-hidden="true" className="ok-tick">✓</span> {summary}
+        </span>
+      )}
+      {error && <span className="warn">{error}</span>}
+    </span>
+  )
+}
+
 export function ItemForm({
   initial,
   submitLabel,
   onSubmit,
   onCancel,
+  projectId,
+  itemId,
+  onVendorListUploaded,
 }: {
   initial?: WorkflowItemInput
   submitLabel: string
   onSubmit: (body: WorkflowItemInput) => Promise<void>
   onCancel: () => void
+  /** Both present only when editing an item that already exists. On the create
+   *  form there is no id for an upload to attach to, so the two controls are
+   *  absent rather than holding a file that a failed save would strand. */
+  projectId?: string
+  itemId?: string
+  onVendorListUploaded?: () => void
 }): JSX.Element {
   const [f, setF] = useState<WorkflowItemInput>(initial ?? BLANK_ITEM)
   // The string the reader is typing is the source of truth for the money
@@ -345,6 +434,22 @@ export function ItemForm({
         </label>
       </div>
       <Actions submitLabel={submitLabel} busy={busy} onCancel={onCancel} />
+      {/* Beside the save controls, and only for an item that already exists.
+          The upload posts immediately and is not part of this form's submit —
+          it stores against the item on its own, which is why it needs an id
+          and why the create form cannot offer it. */}
+      {projectId && itemId ? (
+        <div className="form-row">
+          <VendorListUpload source="Client" projectId={projectId} itemId={itemId}
+                            onUploaded={onVendorListUploaded ?? (() => {})} />
+          <VendorListUpload source="Astra" projectId={projectId} itemId={itemId}
+                            onUploaded={onVendorListUploaded ?? (() => {})} />
+        </div>
+      ) : (
+        <p className="muted">
+          Save the item first to add the client and Astra vendor lists.
+        </p>
+      )}
     </form>
   )
 }

@@ -592,10 +592,45 @@ export interface WorkflowItemSaved extends WorkflowItem {
 /** One project with everything the detail screen renders. One response rather
  *  than three, so the three lists cannot come from three generations of the
  *  document. */
+/** Which of the two uploads an entry came from: the client's Approved Vendor
+ *  List, or Astra's subset of it. */
+export type VendorListSource = 'Client' | 'Astra'
+
+/** One vendor on one item's list.
+ *
+ *  `vendor_id` is the export's own vendor number, and `null` means the export
+ *  named a vendor the registry does not hold — a reportable state, and not the
+ *  same as "unapproved". Approvals are deliberately absent: they are read from
+ *  the registry through `vendor_id`, never copied here. */
+export interface ItemVendorEntry {
+  id: string
+  item_id: string
+  source: VendorListSource
+  vendor_id: string | null
+  vendor_name: string
+  trade_categories: string[]
+  uploaded_by: string
+  uploaded_at: string
+  source_document: string
+}
+
+export interface VendorListSummary {
+  /** Vendors in the uploaded export, before the discipline filter. */
+  parsed: number
+  /** How many survived it — the size of this item's list. */
+  kept: number
+  /** How many of those the registry holds. */
+  linked: number
+}
+
 export interface WorkflowProjectDetail {
   project: WorkflowProject
   items: WorkflowItem[]
   rfqs: Rfq[]
+  /** Keyed by item id, then by source. Sent with the project because the item
+   *  screen already reads this payload, and a second fetch could disagree with
+   *  the items rendered beside it. */
+  item_vendor_lists: Record<string, Record<VendorListSource, ItemVendorEntry[]>>
 }
 
 export interface RfqInput {

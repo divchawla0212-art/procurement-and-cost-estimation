@@ -27,6 +27,9 @@ import type {
   WorkflowProjectDetail,
   WorkflowProjectInput,
   WorkflowProjectSummary,
+  ItemVendorEntry,
+  VendorListSource,
+  VendorListSummary,
 } from './types'
 
 /** The server's `detail` if it sent one, else the status line. */
@@ -339,6 +342,23 @@ export function createRfq(body: RfqInput): Promise<Rfq> {
 
 export function extractRfqDoc(file: File): Promise<Partial<RfqInput>> {
   return sendFile('/api/workflow/rfqs/extract', file)
+}
+
+/** Store an Approved Vendor List export as this item's list, for one source.
+ *
+ *  Unlike `extractRfqDoc`, this **stores**: an enquiry document fills a form
+ *  the reader then submits, while a vendor list is itself the record. */
+export function uploadItemVendorList(
+  projectId: string,
+  itemId: string,
+  source: VendorListSource,
+  file: File,
+): Promise<{ entries: ItemVendorEntry[]; summary: VendorListSummary }> {
+  return sendFile(
+    `/api/workflow/projects/${encodeURIComponent(projectId)}/items/` +
+      `${encodeURIComponent(itemId)}/vendor-list?source=${encodeURIComponent(source)}`,
+    file,
+  )
 }
 
 /* ------------------------------------------------------------------ workflow */

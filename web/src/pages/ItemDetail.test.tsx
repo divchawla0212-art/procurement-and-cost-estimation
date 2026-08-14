@@ -10,6 +10,7 @@ import {
   detail,
   rfq,
   shortlistEntry,
+  vendorEntry,
 } from './workflow-fixtures'
 import type { AvailableBidders } from '../types'
 
@@ -26,6 +27,7 @@ vi.mock('../api', async (importOriginal) => {
     // One read per covering RFQ: the project payload carries no shortlist.
     fetchRfq: vi.fn(),
     inviteRegisteredBidder: vi.fn(),
+    uploadItemVendorList: vi.fn(),
   }
 })
 
@@ -37,6 +39,7 @@ import {
   fetchWorkflowProject,
   inviteRegisteredBidder,
   updateWorkflowItem,
+  uploadItemVendorList,
 } from '../api'
 
 function availableList(over: Partial<AvailableBidders> = {}): AvailableBidders {
@@ -78,6 +81,53 @@ describe('ItemDetail', () => {
       { name: 'Cables', product_groups: ['CABLES - LV POWER DISTRIBUTION'] },
       { name: 'Generators', product_groups: ['GENERATOR POWER-OTHERS'] },
     ])
+  })
+
+  it('offers both vendor list uploads when editing an item', async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(detail({ items: [GENERATOR] }))
+
+    renderItem()
+    fireEvent.click(await screen.findByRole('button', { name: /edit item/i }))
+
+    expect(screen.getByLabelText(/add client list/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/add astra list/i)).toBeInTheDocument()
+  })
+
+  it('uploads the client list against this item', async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(detail({ items: [GENERATOR] }))
+    vi.mocked(uploadItemVendorList).mockResolvedValue({
+      entries: [vendorEntry()],
+      summary: { parsed: 2, kept: 1, linked: 1 },
+    })
+
+    renderItem()
+    fireEvent.click(await screen.findByRole('button', { name: /edit item/i }))
+    const file = new File(['x'], 'avl.xlsx')
+    fireEvent.change(screen.getByLabelText(/add client list/i), {
+      target: { files: [file] },
+    })
+
+    // The source is the browser's to send: the Astra list is a subset of the
+    // client's and carries nothing in it saying whose list it is.
+    await waitFor(() =>
+      expect(uploadItemVendorList).toHaveBeenCalledWith('prj_1', 'itm_1', 'Client', file),
+    )
+    expect(await screen.findByText(/1 of 2 kept · 1 in the registry/i)).toBeInTheDocument()
+  })
+
+  it("surfaces the server's refusal of a bad workbook", async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(detail({ items: [GENERATOR] }))
+    vi.mocked(uploadItemVendorList).mockRejectedValue(
+      new Error('avl.xlsx has no "Vendor Name" column.'),
+    )
+
+    renderItem()
+    fireEvent.click(await screen.findByRole('button', { name: /edit item/i }))
+    fireEvent.change(screen.getByLabelText(/add client list/i), {
+      target: { files: [new File(['x'], 'avl.xlsx')] },
+    })
+
+    expect(await screen.findByText(/has no "Vendor Name" column/i)).toBeInTheDocument()
   })
 
   it('renders the RFQ chooser as one field, not a box inside a box', async () => {
