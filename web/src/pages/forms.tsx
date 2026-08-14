@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import type { FormEvent, JSX, ReactNode } from 'react'
 import { fetchDisciplines } from '../api'
 import { useAsync } from '../useAsync'
@@ -381,6 +381,8 @@ export function RaiseRfqForm({
   // a successful read left the screen saying "No file chosen". This state is
   // that report, and it survives the clear.
   const [picked, setPicked] = useState<File | null>(null)
+  // The hidden native input, opened by the visible button below.
+  const fileRef = useRef<HTMLInputElement>(null)
 
   const { onSubmit: submit, error, busy } = useSubmit(async () => {
     // Parsed once, here, rather than on every keystroke: a half-typed value is
@@ -434,9 +436,15 @@ export function RaiseRfqForm({
             the read — the RFQ is created by the submit button, out of whatever
             the reader is looking at by then, so a bad extraction is corrected
             rather than undone. */}
+        {/* Hidden, not removed. The browser owns this control's label — it
+            reads "No file chosen" and cannot be relabelled from CSS or JS —
+            so after a successful read it contradicted the filename beside it.
+            It keeps its id, `accept` and label association, so it is still
+            what the label names and what a test addresses. */}
         <input
           id="r-doc"
-          className="field"
+          className="sr-only"
+          ref={fileRef}
           type="file"
           accept=".pdf,.docx,.xlsx"
           disabled={extracting}
@@ -448,12 +456,30 @@ export function RaiseRfqForm({
             if (file) void extract(file)
           }}
         />
-        <span className="muted">
-          {extracting
-            ? 'Reading the document…'
-            : picked
-              ? picked.name
-              : 'Optional. PDF, Word or Excel.'}
+        <button
+          type="button"
+          className="btn btn-sm"
+          disabled={extracting}
+          onClick={() => fileRef.current?.click()}
+        >
+          Choose file
+        </button>
+        {/* The one place this control's state is reported. `role="status"` so
+            a change is announced; the tick is decorative and the filename
+            carries the meaning. */}
+        <span className="muted" role="status">
+          {extracting ? (
+            'Reading the document…'
+          ) : picked ? (
+            <>
+              <span aria-hidden="true" className="ok-tick">
+                ✓
+              </span>{' '}
+              {picked.name}
+            </>
+          ) : (
+            'Optional. PDF, Word or Excel.'
+          )}
         </span>
         {picked && !extracting && (
           <button

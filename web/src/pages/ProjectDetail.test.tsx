@@ -372,6 +372,29 @@ describe('ProjectDetail', () => {
     expect(screen.getByLabelText('Estimated budget (AED)')).toHaveValue('500000')
   })
 
+  it('marks the held document with a tick rather than "no file chosen"', async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(detail())
+    vi.mocked(extractRfqDoc).mockResolvedValue({})
+
+    renderDetail()
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select Gas generator' }))
+    fireEvent.click(screen.getByRole('button', { name: /raise rfq/i }))
+    await screen.findByRole('option', { name: /^Cables/ })
+
+    const input = screen.getByLabelText(/fill in from the enquiry document/i)
+    fireEvent.change(input, {
+      target: { files: [new File(['%PDF-1.4'], 'haliba-enquiry.pdf')] },
+    })
+
+    // The native control is labelled "No file chosen" by the browser and
+    // cannot be relabelled, so it is hidden and this line is the only status.
+    const status = await screen.findByRole('status')
+    expect(status).toHaveTextContent('haliba-enquiry.pdf')
+    expect(status).toHaveTextContent('✓')
+    expect(input).toHaveClass('sr-only')
+    expect(screen.getByRole('button', { name: /choose file/i })).toBeInTheDocument()
+  })
+
   it('names the document it read, rather than reporting no file chosen', async () => {
     vi.mocked(fetchWorkflowProject).mockResolvedValue(detail())
     vi.mocked(extractRfqDoc).mockResolvedValue({ reference: 'MOCK-RFQ-1234' })
