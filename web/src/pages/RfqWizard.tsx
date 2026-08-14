@@ -105,6 +105,16 @@ export function RfqWizard({
           {rfq.package} · {rfq.discipline} · est.{' '}
           {rfq.value_estimate_aed.toLocaleString()} AED
         </p>
+        {/* Nothing behind it yet — no search, no provider, no route.
+            Disabled rather than enabled-and-inert, and captioned rather than
+            bare: this screen's rule is that a control which cannot act says
+            why. The stage button below is enabled for the opposite reason —
+            there the refusal is the gate's own sentence, which is information
+            worth surfacing. Here there is nothing to surface. */}
+        <button type="button" className="btn" disabled>
+          Search the web for similar vendors
+        </button>
+        <p className="muted">Not built yet.</p>
       </header>
 
       <ol className="wizsteps" aria-label="RFQ steps">

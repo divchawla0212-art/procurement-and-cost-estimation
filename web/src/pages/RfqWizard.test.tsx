@@ -160,6 +160,19 @@ describe('RfqWizard', () => {
     expect(screen.getByLabelText('Package revision')).toBeInTheDocument()
   })
 
+  it('offers a web vendor search that is not built yet', async () => {
+    await show(detail())
+
+    const button = screen.getByRole('button', {
+      name: /search the web for similar vendors/i,
+    })
+    // Disabled *and* captioned. This screen's rule is that a disabled control
+    // states its reason — the stage button is enabled precisely because its
+    // refusal is information, and there is nothing behind this one at all.
+    expect(button).toBeDisabled()
+    expect(screen.getByText('Not built yet.')).toBeInTheDocument()
+  })
+
   it('says what is blocking the step, in the gate’s own words', async () => {
     await show(detail())
     expect(
