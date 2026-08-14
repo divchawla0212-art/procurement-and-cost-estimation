@@ -376,6 +376,11 @@ export function RaiseRfqForm({
   const [value, setValue] = useState('')
   const [extracting, setExtracting] = useState(false)
   const [extractError, setExtractError] = useState<string | null>(null)
+  // What the reader picked. The file input clears itself after every read (see
+  // below), and its native label was the only thing reporting the choice — so
+  // a successful read left the screen saying "No file chosen". This state is
+  // that report, and it survives the clear.
+  const [picked, setPicked] = useState<File | null>(null)
 
   const { onSubmit: submit, error, busy } = useSubmit(async () => {
     // Parsed once, here, rather than on every keystroke: a half-typed value is
@@ -399,6 +404,9 @@ export function RaiseRfqForm({
    *  document's version of it — but a field the document did not yield is
    *  never blanked, so a partial answer costs nothing that was already there. */
   async function extract(file: File) {
+    // Set before the read, so a failure still leaves the reader able to open
+    // the document the failure is about.
+    setPicked(file)
     setExtracting(true)
     setExtractError(null)
     try {
@@ -441,8 +449,33 @@ export function RaiseRfqForm({
           }}
         />
         <span className="muted">
-          {extracting ? 'Reading the document…' : 'Optional. PDF, Word or Excel.'}
+          {extracting
+            ? 'Reading the document…'
+            : picked
+              ? picked.name
+              : 'Optional. PDF, Word or Excel.'}
         </span>
+        {picked && !extracting && (
+          <button
+            type="button"
+            className="linkish"
+            // Named, so two forms open at once are distinguishable and a
+            // screen reader announces which document is being opened.
+            aria-label={`View ${picked.name}`}
+            onClick={() => {
+              // Created on click rather than on pick: one blob per file the
+              // reader tried would leak every one of them. Nothing was
+              // uploaded — `/rfqs/extract` stores nothing — so this URL is the
+              // only thing that can back the control, and it dies with the
+              // form.
+              const url = URL.createObjectURL(picked)
+              window.open(url, '_blank', 'noopener')
+              setTimeout(() => URL.revokeObjectURL(url), 0)
+            }}
+          >
+            View
+          </button>
+        )}
       </Row>
       <Row id="r-ref" label="Reference">
         <input id="r-ref" className="field" required value={reference}

@@ -372,6 +372,76 @@ describe('ProjectDetail', () => {
     expect(screen.getByLabelText('Estimated budget (AED)')).toHaveValue('500000')
   })
 
+  it('names the document it read, rather than reporting no file chosen', async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(detail())
+    vi.mocked(extractRfqDoc).mockResolvedValue({ reference: 'MOCK-RFQ-1234' })
+
+    renderDetail()
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select Gas generator' }))
+    fireEvent.click(screen.getByRole('button', { name: /raise rfq/i }))
+    await screen.findByRole('option', { name: /^Cables/ })
+
+    fireEvent.change(screen.getByLabelText(/fill in from the enquiry document/i), {
+      target: { files: [new File(['%PDF-1.4'], 'haliba-enquiry.pdf')] },
+    })
+
+    // The input clears itself so the same file can be picked twice — which is
+    // what reset its native label to "No file chosen" after a successful read.
+    // This is the state that has to survive that clear.
+    expect(await screen.findByText('haliba-enquiry.pdf')).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: /view haliba-enquiry\.pdf/i }),
+    ).toBeInTheDocument()
+  })
+
+  it('still offers the document when reading it failed', async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(detail())
+    vi.mocked(extractRfqDoc).mockRejectedValue(new Error('The upload has no file name.'))
+
+    renderDetail()
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select Gas generator' }))
+    fireEvent.click(screen.getByRole('button', { name: /raise rfq/i }))
+    await screen.findByRole('option', { name: /^Cables/ })
+
+    fireEvent.change(screen.getByLabelText(/fill in from the enquiry document/i), {
+      target: { files: [new File([''], 'unreadable.pdf')] },
+    })
+
+    // Being able to open the file that failed is more useful than being able
+    // to open only the ones that worked.
+    expect(await screen.findByText(/has no file name/i)).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: /view unreadable\.pdf/i }),
+    ).toBeInTheDocument()
+  })
+
+  it('opens the picked document in a new tab', async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(detail())
+    vi.mocked(extractRfqDoc).mockResolvedValue({})
+    // jsdom implements neither, so both are installed and asserted directly.
+    const createObjectURL = vi.fn().mockReturnValue('blob:enquiry')
+    const revokeObjectURL = vi.fn()
+    URL.createObjectURL = createObjectURL
+    URL.revokeObjectURL = revokeObjectURL
+    const open = vi.fn()
+    vi.stubGlobal('open', open)
+
+    renderDetail()
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select Gas generator' }))
+    fireEvent.click(screen.getByRole('button', { name: /raise rfq/i }))
+    await screen.findByRole('option', { name: /^Cables/ })
+    const file = new File(['%PDF-1.4'], 'haliba-enquiry.pdf')
+    fireEvent.change(screen.getByLabelText(/fill in from the enquiry document/i), {
+      target: { files: [file] },
+    })
+
+    fireEvent.click(await screen.findByRole('button', { name: /view haliba-enquiry\.pdf/i }))
+
+    expect(createObjectURL).toHaveBeenCalledWith(file)
+    expect(open).toHaveBeenCalledWith('blob:enquiry', '_blank', 'noopener')
+    vi.unstubAllGlobals()
+  })
+
   it('leaves the fields alone when the document cannot be read', async () => {
     vi.mocked(fetchWorkflowProject).mockResolvedValue(
       detail({ items: [GENERATOR, CABLE] }),
