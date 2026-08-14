@@ -302,6 +302,19 @@ export interface ShortlistEntry {
   prequal_status: string
   scope_code_fit: boolean
   included: boolean
+  /** Whether the client has approved this vendor — derived by the server from
+   *  the registry on every read, so correcting `approved_by` is the only edit
+   *  needed. Unlike the three snapshot fields above it is deliberately *not*
+   *  frozen at invitation: it answers who is approved now, not what was known
+   *  then. `null` means unknown rather than unapproved — a vendor typed in by
+   *  hand has no registry row to check, and so no finding either way. */
+  client_approved: boolean | null
+  /** Every organisation that has approved this vendor, live from the registry
+   *  on each read — the identity behind `client_approved`'s verdict. `null` is
+   *  the same third state that key uses: no registry row, so no finding either
+   *  way. `[]` is a row that exists and carries no approval. Sent as well as
+   *  the boolean because Astra approval is not a function of it. */
+  approved_by: string[] | null
   override_by: string | null
   override_reason: string | null
 }
@@ -358,6 +371,9 @@ export interface RfqDetail {
   technical_package: TechnicalPackage | null
   shortlist: ShortlistEntry[]
   shortlist_approved: boolean
+  /** Whose approval `client_approved` on each entry refers to. From the server
+   *  so the shortlist table does not spell the client's name itself. */
+  client_approver: string
   tbe_template: TbeTemplate | null
   vdrl: VdrlLine[]
   bids: BidWithVdrl[]
@@ -474,6 +490,27 @@ export interface BidderSummary extends Bidder {
 
 export interface BidderDetail extends BidderSummary {
   invited_by: string[]
+}
+
+/** A discipline an item can be scoped to, and the export's product group
+ *  descriptions it stands for. */
+export interface Discipline {
+  name: string
+  product_groups: string[]
+}
+
+/** The vendors that may be invited: approved by the client and by us. */
+export interface AvailableBidders {
+  /** The approvals a vendor must carry to be here — the client's and ours.
+   *  From the server, so a second client's AVL does not mean editing the
+   *  screens that render it. */
+  approvers: string[]
+  /** The product group the list was narrowed to, or null for the whole list. */
+  discipline: string | null
+  /** The size of the answer, which is not `bidders.length` once a screen caps
+   *  what it draws. */
+  total: number
+  bidders: BidderSummary[]
 }
 
 /** Why a bidder may or may not be invited to one specific RFQ. A blocker is

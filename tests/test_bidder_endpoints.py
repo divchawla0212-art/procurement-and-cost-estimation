@@ -394,3 +394,294 @@ def test_a_bidder_off_the_client_list_needs_no_override_to_be_shortlisted(
         f"/api/workflow/rfqs/{rfq_id}/shortlist", json={"vendor_id": bidder["id"]}
     )
     assert r.status_code == 201, r.text
+
+
+# -- client approval on the shortlist ----------------------------------------
+#
+# The shortlist table shows who was invited; these say whether each of them is
+# on the client's list. Derived on read from the registry — never a field on
+# `ShortlistEntry`, for the same reason `approval_caution` is not a field on
+# `Bidder`: a snapshot taken at invitation is wrong the moment `approved_by` is
+# corrected, and the correction is the common case.
+#
+# `prequal_status` on the same row *is* a snapshot, deliberately, because it
+# records the state the invitation was issued against. The two differ because
+# they answer different questions: "what did we know then" and "who is approved
+# now". Both on one row is the point.
+
+
+def shortlist_of(client: TestClient, rfq_id: str) -> list[dict]:
+    r = client.get(f"/api/workflow/rfqs/{rfq_id}")
+    assert r.status_code == 200, r.text
+    return r.json()["shortlist"]
+
+
+def test_a_shortlisted_bidder_on_the_client_list_says_so(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    rfq_id = create_rfq(client)
+    bidder = create_bidder(client)
+
+    client.post(f"/api/workflow/rfqs/{rfq_id}/shortlist", json={"vendor_id": bidder["id"]})
+
+    assert shortlist_of(client, rfq_id)[0]["client_approved"] is True
+
+
+def test_a_shortlisted_bidder_off_the_client_list_says_so(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    rfq_id = create_rfq(client)
+    bidder = create_bidder(client, approved_by=["Astra"])
+
+    client.post(f"/api/workflow/rfqs/{rfq_id}/shortlist", json={"vendor_id": bidder["id"]})
+
+    assert shortlist_of(client, rfq_id)[0]["client_approved"] is False
+
+
+def test_a_free_text_vendor_reports_unknown_rather_than_unapproved(
+    tmp_path, monkeypatch
+):
+    """None, not False. A vendor typed in by hand has no registry row, so there
+    is nothing that says they are off the client's list — only that we cannot
+    tell. Coercing that to False is the "missing data as a passing or failing
+    value" mistake, and it would read on screen as a finding nobody made."""
+    client = _client(tmp_path, monkeypatch)
+    rfq_id = create_rfq(client)
+
+    client.post(f"/api/workflow/rfqs/{rfq_id}/shortlist", json={
+        "vendor_name": "Galfar", "prequal_status": "Qualified",
+        "scope_code_fit": True, "included": True,
+    })
+
+    assert shortlist_of(client, rfq_id)[0]["client_approved"] is None
+
+
+def test_the_shortlist_answer_follows_the_registry_with_no_second_write(
+    tmp_path, monkeypatch
+):
+    """The invariant, stated as a test. Correcting the registry is the only edit
+    needed; nothing rewrites the shortlist entry. A stored copy would still read
+    False here, which is exactly the bug this shape exists to prevent."""
+    client = _client(tmp_path, monkeypatch)
+    rfq_id = create_rfq(client)
+    bidder = create_bidder(client, approved_by=["Astra"])
+    client.post(f"/api/workflow/rfqs/{rfq_id}/shortlist", json={"vendor_id": bidder["id"]})
+    assert shortlist_of(client, rfq_id)[0]["client_approved"] is False
+
+    r = client.patch(
+        f"/api/workflow/bidders/{bidder['id']}", json={"approved_by": ["ADNOC", "Astra"]}
+    )
+    assert r.status_code == 200, r.text
+
+    assert shortlist_of(client, rfq_id)[0]["client_approved"] is True
+
+
+def test_a_shortlist_row_carries_both_approvals_not_just_the_clients(
+    tmp_path, monkeypatch
+):
+    """`client_approved` is one boolean about the client. Astra approval is not
+    a function of it, so a screen wanting both has to be sent the list too."""
+    client = _client(tmp_path, monkeypatch)
+    rfq_id = create_rfq(client)
+    bidder = create_bidder(client, approved_by=["ADNOC", "Astra"])
+
+    client.post(f"/api/workflow/rfqs/{rfq_id}/shortlist", json={"vendor_id": bidder["id"]})
+
+    assert shortlist_of(client, rfq_id)[0]["approved_by"] == ["ADNOC", "Astra"]
+
+
+def test_a_registry_row_nobody_approved_reports_an_empty_list(tmp_path, monkeypatch):
+    """`[]` is a real answer: the row exists and carries no approval."""
+    client = _client(tmp_path, monkeypatch)
+    rfq_id = create_rfq(client)
+    bidder = create_bidder(client, approved_by=[])
+
+    client.post(f"/api/workflow/rfqs/{rfq_id}/shortlist", json={"vendor_id": bidder["id"]})
+
+    assert shortlist_of(client, rfq_id)[0]["approved_by"] == []
+
+
+def test_a_free_text_vendor_reports_no_approvals_rather_than_none_held(
+    tmp_path, monkeypatch
+):
+    """None, not `[]`. There is no registry row, so nothing says this vendor
+    holds no approvals — only that we cannot tell. The same distinction
+    `client_approved` already keeps, and for the same reason."""
+    client = _client(tmp_path, monkeypatch)
+    rfq_id = create_rfq(client)
+
+    client.post(f"/api/workflow/rfqs/{rfq_id}/shortlist", json={
+        "vendor_name": "Galfar", "prequal_status": "Qualified",
+        "scope_code_fit": True, "included": True,
+    })
+
+    assert shortlist_of(client, rfq_id)[0]["approved_by"] is None
+
+
+def test_the_approvals_follow_the_registry_with_no_second_write(tmp_path, monkeypatch):
+    """Derived on read. A stored copy would still read ["Astra"] here, which is
+    exactly what this shape exists to prevent."""
+    client = _client(tmp_path, monkeypatch)
+    rfq_id = create_rfq(client)
+    bidder = create_bidder(client, approved_by=["Astra"])
+    client.post(f"/api/workflow/rfqs/{rfq_id}/shortlist", json={"vendor_id": bidder["id"]})
+    assert shortlist_of(client, rfq_id)[0]["approved_by"] == ["Astra"]
+
+    r = client.patch(
+        f"/api/workflow/bidders/{bidder['id']}", json={"approved_by": ["ADNOC", "Astra"]}
+    )
+    assert r.status_code == 200, r.text
+
+    assert shortlist_of(client, rfq_id)[0]["approved_by"] == ["ADNOC", "Astra"]
+
+
+def test_the_rfq_names_the_client_approver_rather_than_leaving_it_spelled_out(
+    tmp_path, monkeypatch
+):
+    """Same reason `/bidders/approved` sends it: the browser labelling a column
+    "ADNOC" itself would be a second place that has to change for a second
+    client."""
+    client = _client(tmp_path, monkeypatch)
+    rfq_id = create_rfq(client)
+
+    assert client.get(f"/api/workflow/rfqs/{rfq_id}").json()["client_approver"] == "ADNOC"
+
+
+# -- the available vendor list ------------------------------------------------
+#
+# `/bidders/available` is the list the item screen renders: on the client's
+# Approved Vendor List *and* on ours. The filtering
+# rule is `bidders.client_approved` and is tested there; what matters here is
+# that the literal path is not swallowed by `/bidders/{bidder_id}`, that the
+# optional narrowing works, and that the payload is the same shape every other
+# bidder list returns.
+
+
+def approved(client: TestClient, params: str = ""):
+    r = client.get(f"/api/workflow/bidders/available{params}")
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_the_available_list_needs_both_approvals(tmp_path, monkeypatch):
+    """The whole point of the screen. One approval is the common case and the
+    one being excluded: the client's list runs to 1 346 and ours to a hundred."""
+    client = _client(tmp_path, monkeypatch)
+    create_bidder(client, name="Al Munara Switchgear LLC",
+                  approved_by=["ADNOC", "Astra"],
+                  trade_categories=["SWITCHGEARS - LV -415V"])
+    create_bidder(client, name="Northwind Valve Works",
+                  approved_by=["ADNOC", "Astra"],
+                  trade_categories=['VALVES - BALL - API 6D - UP TO 12"'])
+    create_bidder(client, name="Client Only", approved_by=["ADNOC"])
+    create_bidder(client, name="Ours Only", approved_by=["Astra"])
+
+    body = approved(client)
+    assert [b["name"] for b in body["bidders"]] == [
+        "Al Munara Switchgear LLC",
+        "Northwind Valve Works",
+    ]
+    assert body["total"] == 2
+    # Which approvals this stands for, sent rather than spelled out in the
+    # browser.
+    assert body["approvers"] == ["ADNOC", "Astra"]
+
+
+def test_a_vendor_only_we_approved_is_not_available(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    create_bidder(client, name="Silverdune Process Systems", approved_by=["Astra"])
+
+    assert approved(client)["bidders"] == []
+
+
+def test_a_vendor_only_the_client_approved_is_not_available(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    create_bidder(client, name="Al Munara Switchgear LLC", approved_by=["ADNOC"])
+
+    assert approved(client)["bidders"] == []
+
+
+def test_the_available_path_is_not_read_as_a_bidder_id(tmp_path, monkeypatch):
+    """`/bidders/{bidder_id}` would swallow it if declared first, and the
+    symptom is a 404 on every request rather than an error anybody can read."""
+    client = _client(tmp_path, monkeypatch)
+    r = client.get("/api/workflow/bidders/available")
+    assert r.status_code == 200
+    assert "bidders" in r.json()
+
+
+def test_the_available_list_narrows_to_a_discipline_when_asked(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    create_bidder(client, name="Al Munara Switchgear LLC",
+                  approved_by=["ADNOC", "Astra"],
+                  trade_categories=["SWITCHGEARS - LV -415V"])
+    create_bidder(client, name="Northwind Valve Works",
+                  approved_by=["ADNOC", "Astra"],
+                  trade_categories=['VALVES - BALL - API 6D - UP TO 12"'])
+
+    body = approved(client, "?discipline=SWITCHGEARS - LV -415V")
+    assert [b["name"] for b in body["bidders"]] == ["Al Munara Switchgear LLC"]
+    assert body["total"] == 1
+
+
+def test_a_blank_discipline_returns_the_whole_list(tmp_path, monkeypatch):
+    """Absent means "the whole available list", not "nobody" — an unscoped item
+    has no discipline to send."""
+    client = _client(tmp_path, monkeypatch)
+    create_bidder(client, approved_by=["ADNOC", "Astra"],
+                  trade_categories=["SWITCHGEARS - LV -415V"])
+
+    assert approved(client, "?discipline=")["total"] == 1
+
+
+def test_an_available_bidder_carries_the_values_the_screen_must_not_compute(
+    tmp_path, monkeypatch
+):
+    """Same payload as every other bidder list. A screen deriving expiry from
+    its own clock would be a second definition of `effective_prequal`."""
+    client = _client(tmp_path, monkeypatch)
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    create_bidder(client, approved_by=["ADNOC", "Astra"],
+                  prequal_expires_on=yesterday)
+
+    only = approved(client)["bidders"][0]
+    assert only["effective_prequal"] == "Expired"
+    assert only["approval_caution"] is None
+    assert only["invited_count"] == 0
+
+
+# -- the discipline vocabulary ------------------------------------------------
+
+
+def test_the_disciplines_route_serves_the_vocabulary(tmp_path, monkeypatch):
+    """Served, not hardcoded in the browser: `workflow/disciplines.py` is the
+    one definition, and a third family should be an edit there alone."""
+    client = _client(tmp_path, monkeypatch)
+    r = client.get("/api/workflow/disciplines")
+    assert r.status_code == 200, r.text
+    names = [d["name"] for d in r.json()["disciplines"]]
+    assert names == ["Cables", "Generators"]
+
+
+def test_each_discipline_carries_the_product_groups_behind_it(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    body = client.get("/api/workflow/disciplines").json()["disciplines"]
+    cables = next(d for d in body if d["name"] == "Cables")
+    assert "CABLES - MV (UP TO 33KV)POWER TRANSMISSION" in cables["product_groups"]
+
+
+def test_a_discipline_narrows_the_approved_list_through_its_family(
+    tmp_path, monkeypatch
+):
+    """The join this vocabulary exists for. The vendor is registered for a
+    product group, never for "Cables" — asking for the family has to reach
+    them anyway, or the screen empties exactly as it did before."""
+    client = _client(tmp_path, monkeypatch)
+    create_bidder(client, name="Ras Dana Cables & Conductors",
+                  approved_by=["ADNOC", "Astra"],
+                  trade_categories=["CABLES - MV (UP TO 33KV)POWER TRANSMISSION"])
+    create_bidder(client, name="Falcon Bay Rotating Equipment",
+                  approved_by=["ADNOC", "Astra"],
+                  trade_categories=["GENERATOR POWER-DIESEL ENGINE DRIVEN"])
+
+    body = approved(client, "?discipline=Cables")
+    assert [b["name"] for b in body["bidders"]] == ["Ras Dana Cables & Conductors"]
+    assert body["total"] == 1

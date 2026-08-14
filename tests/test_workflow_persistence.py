@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from workflow import clarifications, persistence
+from workflow import bidder_db, clarifications, persistence
 from workflow.models.rfq import Attachment
 from workflow.stages import Stage
 from workflow.store import WorkflowStore
@@ -270,30 +270,63 @@ def test_a_bidder_survives_a_round_trip_with_every_field(tmp_path):
     assert loaded == bidder
 
 
-def test_the_document_carries_a_bidders_collection(tmp_path):
+def test_the_registry_is_in_the_database_and_not_in_the_document(tmp_path):
+    """The registry moved to `bidders.db`. A `bidders` key in the document
+    would be a second copy for the first edit to disagree with."""
     store, _ = populated_store()
     a_registered_bidder(store)
     persistence.save(str(tmp_path), store)
 
     doc = json.loads((tmp_path / "workflow.json").read_text(encoding="utf-8"))
-    assert doc["bidders"][0]["name"] == "Al Munara Switchgear LLC"
-    # Derived, never stored — the load has nothing to keep honest.
-    assert "effective_prequal" not in doc["bidders"][0]
+    assert "bidders" not in doc
+    assert [b.name for b in bidder_db.list_all(str(tmp_path))] == [
+        "Al Munara Switchgear LLC"
+    ]
 
 
-def test_a_document_written_before_the_registry_loads_as_an_empty_one(tmp_path):
-    """No version bump and no migration: a document with no `bidders` key means
-    no bidders, which is the correct reading of it."""
+def test_no_derived_value_is_written_to_the_database(tmp_path):
+    """`effective_prequal` is computed from the stored expiry and the day it is
+    asked on. A column for it would be wrong the next morning."""
+    store, _ = populated_store()
+    a_registered_bidder(store)
+    persistence.save(str(tmp_path), store)
+
+    with bidder_db.connect(str(tmp_path)) as conn:
+        columns = {r[1] for r in conn.execute("PRAGMA table_info(bidders)")}
+    assert "effective_prequal" not in columns
+    assert "approval_caution" not in columns
+    assert "invited_count" not in columns
+
+
+def test_an_empty_database_and_no_key_load_as_an_empty_registry(tmp_path):
+    """Both halves absent is a first run, not an error — the same reading a
+    missing document gets."""
     store, _ = populated_store()
     persistence.save(str(tmp_path), store)
-    path = tmp_path / "workflow.json"
-    doc = json.loads(path.read_text(encoding="utf-8"))
-    del doc["bidders"]
-    path.write_text(json.dumps(doc), encoding="utf-8")
 
     loaded = persistence.load(str(tmp_path))
     assert loaded.list_bidders() == []
     assert loaded.list_projects()  # everything else still loaded
+
+
+def test_a_document_still_carrying_a_bidders_key_keeps_its_registry(tmp_path):
+    """The one-way migration. A document written before the move loads with its
+    registry intact, and the next save puts it in the database and drops the
+    key — so an old store is never read as an emptied one."""
+    store, _ = populated_store()
+    a_registered_bidder(store)
+    path = tmp_path / "workflow.json"
+    # A pre-move document: the registry inside the JSON, no database beside it.
+    legacy = persistence.to_document(store)
+    legacy["bidders"] = [b.model_dump(mode="json") for b in store.list_bidders()]
+    path.write_text(json.dumps(legacy), encoding="utf-8")
+
+    loaded = persistence.load(str(tmp_path))
+    assert [b.name for b in loaded.list_bidders()] == ["Al Munara Switchgear LLC"]
+
+    persistence.save(str(tmp_path), loaded)
+    assert "bidders" not in json.loads(path.read_text(encoding="utf-8"))
+    assert bidder_db.count(str(tmp_path)) == 1
 
 
 def test_a_shortlist_link_survives_a_round_trip(tmp_path):
@@ -308,6 +341,27 @@ def test_a_shortlist_link_survives_a_round_trip(tmp_path):
     # The reference still resolves after the restart, which is what makes the
     # delete guard mean anything.
     assert loaded.rfqs_inviting(bidder.id) == ["ADP-RFQ-2026-014"]
+
+
+def test_no_shortlist_entry_stores_the_approvals_it_reports(tmp_path):
+    """The invariant the approval pills own. `approved_by` is served on every
+    shortlist row and stored on none of them — a written copy is wrong the
+    moment the registry is corrected, and correcting it is the common case.
+
+    Same shape as `test_no_derived_value_is_written_to_the_database` above, and
+    the same reason: this is the assertion that fails if anyone ever
+    "optimises" the derived value by writing it down.
+    """
+    store, rfq_id = populated_store()
+    bidder = a_registered_bidder(store, approved_by=["ADNOC", "Astra"])
+    store.add_shortlist_entry(rfq_id, vendor_id=bidder.id, as_of=date(2026, 8, 13))
+    persistence.save(str(tmp_path), store)
+
+    doc = json.loads((tmp_path / "workflow.json").read_text(encoding="utf-8"))
+    assert doc["shortlists"], "the fixture must actually write a shortlist entry"
+    for entry in doc["shortlists"]:
+        assert "approved_by" not in entry
+        assert "client_approved" not in entry
 
 
 # -- clarifications ----------------------------------------------------------
@@ -732,6 +786,19 @@ def test_removing_the_invitation_releases_the_bidder_across_a_restart(tmp_path):
     assert reloaded.shortlist_for(rfq_id) == []
 
 
+def _stored_bidder(root: str, bidder_id: str) -> dict:
+    """The bidder's row as SQLite holds it, for the byte-for-byte comparisons.
+
+    The parent row only — the child tables are asserted through `list_all`,
+    which is what any reader actually gets back.
+    """
+    with bidder_db.connect(root) as conn:
+        row = conn.execute(
+            "SELECT * FROM bidders WHERE id = ?", (bidder_id,)
+        ).fetchone()
+        return dict(row)
+
+
 def test_an_approval_lapsing_between_runs_changes_no_stored_byte(tmp_path):
     """Row 4. The whole reason `Expired` is derived: nothing has to be written
     for a lapse to take effect, and nothing is."""
@@ -740,7 +807,7 @@ def test_an_approval_lapsing_between_runs_changes_no_stored_byte(tmp_path):
     root = str(tmp_path)
     with persistence.locked_update(root) as store:
         bidder = a_registered_bidder(store, prequal_expires_on=date(2026, 9, 30))
-    before = json.loads(Path(persistence.workflow_path(root)).read_text(encoding="utf-8"))
+    before = _stored_bidder(root, bidder.id)
 
     # Run 2 mutates something else entirely; the clock is what moved.
     with persistence.locked_update(root) as store:
@@ -752,8 +819,8 @@ def test_an_approval_lapsing_between_runs_changes_no_stored_byte(tmp_path):
     assert effective_prequal(reloaded, date(2026, 9, 30)) == "Approved"
     assert effective_prequal(reloaded, date(2026, 10, 1)) == "Expired"
     # The stored record is untouched but for the one field that was edited.
-    after = json.loads(Path(persistence.workflow_path(root)).read_text(encoding="utf-8"))
-    assert {**before["bidders"][0], "notes": "Chased the renewal"} == after["bidders"][0]
+    after = _stored_bidder(root, bidder.id)
+    assert {**before, "notes": "Chased the renewal"} == after
 
 
 def test_suspending_a_bidder_does_not_rewrite_an_invitation_already_recorded(tmp_path):

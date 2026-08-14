@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { RfqWizard } from './RfqWizard'
 import type { Candidate, RfqDetail, ShortlistEntry } from '../types'
 import { APPROVED_BIDDER, EXPIRED_BIDDER } from './workflow-fixtures'
@@ -44,6 +44,8 @@ function entry(over: Partial<ShortlistEntry> = {}): ShortlistEntry {
     prequal_status: 'Approved',
     scope_code_fit: true,
     included: true,
+    client_approved: true,
+    approved_by: ['ADNOC', 'Astra'],
     override_by: null,
     override_reason: null,
     ...over,
@@ -127,6 +129,7 @@ function detail(over: Partial<RfqDetail> = {}): RfqDetail {
     technical_package: null,
     shortlist: [],
     shortlist_approved: false,
+    client_approver: 'ADNOC',
     tbe_template: null,
     vdrl: [],
     bids: [],
@@ -329,6 +332,58 @@ describe('RfqWizard', () => {
 
     expect(await screen.findByText('Invited')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Invite Al Munara/ })).toBeNull()
+  })
+
+  // The card above the item screen's RFQ list answers "who may bid"; this
+  // column answers "is who we invited still on that list". They read the same
+  // registry, so a vendor cannot be approved on one screen and not the other.
+  it('says on the shortlist who the client has approved', async () => {
+    await show(
+      detail({
+        rfq: { ...detail().rfq, stage: 'Shortlisting' },
+        shortlist: [
+          entry(),
+          entry({
+            id: 'sle_2',
+            vendor_name: 'Silverdune Process Systems',
+            client_approved: false,
+            // On our list and not the client's — the two keys stay coherent,
+            // because the boolean is derived from this list server-side.
+            approved_by: ['Astra'],
+          }),
+        ],
+      }),
+      [candidate({ shortlisted: true })],
+    )
+
+    const approved = screen.getByRole('row', { name: /Al Munara/ })
+    expect(within(approved).getByText('ADNOC')).toBeInTheDocument()
+    const off = screen.getByRole('row', { name: /Silverdune/ })
+    expect(within(off).getByText(/Not on the ADNOC list/)).toBeInTheDocument()
+  })
+
+  it('reports an unregistered vendor as unknown, not as unapproved', async () => {
+    // `null` is "we cannot tell", and the column has to keep saying that. A
+    // hand-typed vendor rendered as "Not on the ADNOC list" would be a finding
+    // nobody made — nothing was checked, because there was nothing to check.
+    await show(
+      detail({
+        rfq: { ...detail().rfq, stage: 'Shortlisting' },
+        shortlist: [
+          entry({
+            vendor_id: null,
+            vendor_name: 'Galfar',
+            client_approved: null,
+            approved_by: null,
+          }),
+        ],
+      }),
+      [],
+    )
+
+    const row = screen.getByRole('row', { name: /Galfar/ })
+    expect(within(row).queryByText(/Not on the ADNOC list/)).toBeNull()
+    expect(within(row).getByText('Not checked')).toBeInTheDocument()
   })
 
   it('removes a shortlisted vendor by id', async () => {

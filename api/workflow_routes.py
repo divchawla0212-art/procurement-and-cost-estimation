@@ -21,18 +21,26 @@ Status mapping, kept consistent across the module:
 """
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from api.auth.deps import current_user
 from api.auth.models import User
 from workflow import clarifications, persistence
-from workflow.bidders import effective_prequal, evaluate, missing_client_approval
+from workflow import bidder_db, disciplines
+from workflow.bidders import (
+    AVAILABLE_APPROVERS,
+    CLIENT_APPROVER,
+    effective_prequal,
+    evaluate,
+    missing_client_approval,
+)
 from workflow.gates import GateResult, check_gate
 from workflow.models.bidder import Bidder, PrequalStatus
 from workflow.models.clarification import Addendum, ClarificationQuery, QueryCategory
 from workflow.models.project import Item, ProjectStatus
-from workflow.models.rfq import Attachment
+from workflow.models.rfq import Attachment, ShortlistEntry
+from workflow.rfq_extractor import extract_rfq_info
 from workflow.stages import STAGE_ORDER, Stage
 from workflow.store import IncompleteShortlistEntry, WorkflowStore
 
@@ -437,11 +445,108 @@ def _bidder_payload(store: WorkflowStore, bidder: Bidder, as_of: date) -> dict:
     }
 
 
+def _shortlist_payload(store: WorkflowStore, entry: ShortlistEntry) -> dict:
+    """One shortlist row, plus whether the client has approved that vendor.
+
+    Derived on read, and deliberately not a field on `ShortlistEntry` — the
+    same rule, and the same reason, as `approval_caution` on `Bidder`: a copy
+    taken when the invitation was issued is wrong the moment `approved_by` is
+    corrected, and correcting it is the common case.
+
+    `prequal_status` on this very row *is* a snapshot, on purpose, and the two
+    sitting side by side is not an inconsistency. That column records what was
+    known when the invitation went out, which is what makes the row an audit
+    trail; this one answers who is approved now.
+
+    Three states, not two, and both derived keys below are keyed on the same
+    `bidder is None`. `None` is a vendor typed in by hand: there is no registry
+    row, so nothing says they are off the client's list — only that we cannot
+    tell. Coercing that to `False` would put a finding on screen that nobody
+    made, which is the same mistake as an unfound parameter stored as `0`. A
+    `vendor_id` pointing at a deleted bidder lands here too, and for the same
+    reason it stays unknown rather than becoming a refusal.
+
+    `approved_by` is sent **as well as**, never instead of, `client_approved`.
+    The boolean carries the *rule* — `missing_client_approval` is its one
+    definition — and the list carries *identity*. Astra approval is not a
+    function of the boolean, so a screen wanting both approvals has to be sent
+    both; and rebuilding the client-approval rule in the browser from the list
+    would be the second definition of it this repository forbids.
+    """
+    bidder = store.get_bidder(entry.vendor_id) if entry.vendor_id else None
+    return {
+        **entry.model_dump(mode="json"),
+        "client_approved": (
+            None if bidder is None else missing_client_approval(bidder) is None
+        ),
+        "approved_by": None if bidder is None else list(bidder.approved_by),
+    }
+
+
 @router.get("/bidders")
 def list_bidders() -> dict:
     store = _read()
     today = date.today()
     return {"bidders": [_bidder_payload(store, b, today) for b in store.list_bidders()]}
+
+
+@router.get("/disciplines")
+def list_disciplines() -> dict:
+    """The disciplines an item may be scoped to.
+
+    Served rather than hardcoded in the browser for the same reason the
+    approver is: `workflow/disciplines.py` is the one definition, and adding a
+    third family should be an edit there and nowhere else.
+
+    `product_groups` rides along so a screen can show what a discipline covers
+    without asking for the whole export's vocabulary.
+    """
+    return {
+        "disciplines": [
+            {"name": name, "product_groups": list(groups)}
+            for name, groups in disciplines.DISCIPLINES.items()
+        ]
+    }
+
+
+@router.get("/bidders/available")
+def list_available_bidders(discipline: str | None = None) -> dict:
+    """The vendors that may actually be invited: on the client's list *and* on
+    ours.
+
+    Declared above `/bidders/{bidder_id}`: FastAPI matches in declaration
+    order, so the literal path has to come first or "available" is read as a
+    bidder id and every request 404s.
+
+    Narrower than "ADNOC-approved" on purpose. The client's approval says they
+    may be used on an ADNOC project; ours says we have qualified them. A screen
+    offering the first as though it were the second would put vendors in front
+    of a buyer that procurement has never assessed.
+
+    `discipline` narrows to one family and is optional; absent means the whole
+    available list, never none of it.
+    """
+    groups = (
+        list(disciplines.product_groups(discipline))
+        if (discipline or "").strip()
+        else None
+    )
+    # Straight to the database: this read wants the registry and nothing else,
+    # and the indexes on the folded approver and product group are what make it
+    # a query rather than a scan of 1 346 objects.
+    rows = bidder_db.approved_by_all(_root(), list(AVAILABLE_APPROVERS), groups)
+
+    store = _read()
+    today = date.today()
+    return {
+        # Which approvals "available" stands for, sent rather than spelled out
+        # in the browser — one constant, so a second client's AVL stays a
+        # one-line change here.
+        "approvers": list(AVAILABLE_APPROVERS),
+        "discipline": discipline,
+        "total": len(rows),
+        "bidders": [_bidder_payload(store, b, today) for b in rows],
+    }
 
 
 @router.post("/bidders", status_code=201)
@@ -518,6 +623,21 @@ def create_rfq(body: RfqIn) -> dict:
     return rfq.model_dump(mode="json")
 
 
+@router.post("/rfqs/extract")
+def extract_rfq_document(file: UploadFile = File(...)) -> dict:
+    """The RFQ fields read out of an uploaded document, for the form to fill in.
+
+    Declared above `/rfqs/{rfq_id}` for the same reason `/bidders/approved` is:
+    a literal segment that arrives after a path parameter is read as a value
+    for it. Nothing is stored — the answer goes back to the browser, and the
+    RFQ is only created when the user submits the form, so an extraction the
+    reader disagrees with is corrected before anything lands.
+    """
+    if not file.filename:
+        raise HTTPException(status_code=422, detail="The upload has no file name.")
+    return extract_rfq_info(file.filename, file.file.read())
+
+
 def _query_payload(query: ClarificationQuery) -> dict:
     """`state` and `circulated` are computed here rather than stored, so no
     screen re-derives that withdrawal beats an answer."""
@@ -581,8 +701,12 @@ def get_rfq(rfq_id: str) -> dict:
         "rfq": rfq.model_dump(mode="json"),
         "gate": _next_forward_gate(store, rfq_id, rfq.stage).model_dump(),
         "technical_package": package.model_dump(mode="json") if package else None,
-        "shortlist": [e.model_dump(mode="json") for e in store.shortlist_for(rfq_id)],
+        "shortlist": [_shortlist_payload(store, e) for e in store.shortlist_for(rfq_id)],
         "shortlist_approved": store.is_shortlist_approved(rfq_id),
+        # Sent rather than spelled out in the browser, for the same reason
+        # `/bidders/approved` sends it: a column headed "ADNOC" in the front end
+        # would be a second place that has to change for a second client.
+        "client_approver": CLIENT_APPROVER,
         "tbe_template": tbe.model_dump(mode="json") if tbe else None,
         "vdrl": [line.model_dump(mode="json") for line in store.vdrl_for(rfq_id)],
         "bids": bids,
