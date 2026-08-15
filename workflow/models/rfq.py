@@ -73,10 +73,27 @@ class Attachment(BaseModel):
 
 
 class TechnicalPackage(BaseModel):
+    """What vendors bid against, at one revision, frozen when it is settled.
+
+    Two lists, and they are not alternatives. `attachments` is the register:
+    document codes, titles and revisions describing what the package consists
+    of, carrying no bytes. `documents` holds ids into the `RfqDocument`
+    collection — the actual files, uploaded against this RFQ. The register is
+    kept because `Addendum.attachments` uses the same record, and an addendum
+    that supersedes a package has to be able to describe what it supersedes.
+
+    `documents` is **rebuilt from the records** by the store rather than
+    accumulated here, so the two cannot disagree: a document removed from the
+    collection is off this list in the same call. It is the store, not this
+    model, that decides which records belong — the contractor's own, never a
+    vendor's submission.
+    """
+
     rfq_id: str
     revision: str
     basis_of_design: str
     attachments: list[Attachment] = Field(default_factory=list)
+    documents: list[str] = Field(default_factory=list)
     frozen_at: datetime | None = None
     frozen_by: str | None = None
 

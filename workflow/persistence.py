@@ -36,6 +36,7 @@ from workflow.models.rfq import (
     TechnicalPackage,
     VdrlLine,
 )
+from workflow.models.rfq_document import RfqDocument
 from workflow.stages import RETIRED_STAGES
 from workflow.store import WorkflowStore
 
@@ -113,6 +114,16 @@ def to_document(store: WorkflowStore) -> dict:
             e.model_dump(mode="json")
             for entries in store._draft_shortlists.values()
             for e in entries
+        ],
+        # The documents an RFQ carries, both halves of the enquiry in one flat
+        # list — `submitted_by_vendor_id` on each record says which half. Only
+        # what is stored: the bytes live under `<ROOT>/rfq-docs/`, addressed by
+        # the digest and leaf name on the record, so no path is written here
+        # for a moved root to invalidate.
+        "rfq_documents": [
+            d.model_dump(mode="json")
+            for documents in store._rfq_documents.values()
+            for d in documents
         ],
     }
 
@@ -204,6 +215,20 @@ def from_document(doc: dict) -> WorkflowStore:
     for record in doc.get("draft_shortlists", []):
         pick = DraftShortlistEntry(**record)
         store._draft_shortlists.setdefault(pick.item_id, []).append(pick)
+    # I-E: the document holds exactly the `RfqDocument` records whose RFQ still
+    # exists. Nothing in this repository deletes an RFQ — deleting a project is
+    # refused while it holds one — so the invariant is held at both ends
+    # instead of by a cascade: `add_rfq_document` refuses an RFQ that is not
+    # there, and a record whose RFQ has gone from the document is dropped here
+    # rather than loaded as a row pointing at nothing. Dropping rather than
+    # tolerating, because the blob behind such a record is unreachable: no
+    # screen can show it and no delete path can reach it, so keeping the row
+    # would only make the orphan harder to see.
+    for record in doc.get("rfq_documents", []):
+        document = RfqDocument(**record)
+        if document.rfq_id not in store._rfqs:
+            continue
+        store._rfq_documents.setdefault(document.rfq_id, []).append(document)
     for record in doc.get("receipts", []):
         receipt = VdrlReceipt(**record)
         store._receipts.setdefault(receipt.bid_id, []).append(receipt)

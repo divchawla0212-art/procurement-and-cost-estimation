@@ -7,6 +7,11 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from procurement.models import Project
 from procurement.store import layout
+# Both packages share one traversal guard. `workflow/safe_extract.py` imports
+# stdlib only and nothing from either package, so this direction cannot close
+# a cycle — `workflow/__init__.py` is deliberately import-free for the same
+# reason.
+from workflow.safe_extract import safe_destination
 
 _SLUG = re.compile(r"[^a-z0-9]+")
 
@@ -138,9 +143,13 @@ def unpack_vendor_zip(root: str, slug: str, zip_path: str) -> list[str]:
             name = info.filename
             if info.is_dir() or _is_skippable(name):
                 continue
-            dest = os.path.realpath(os.path.join(vendors_dir, name))
-            if not (dest == vendors_dir or dest.startswith(vendors_dir + os.sep)):
-                raise ValueError(f"Unsafe path in archive: {name}")
+            # The one traversal guard, shared rather than inlined here. It was
+            # written for this loop and lived in it; BD-6 needs the same check
+            # for uploaded folders and archives, and a second copy of a
+            # security check is the copy that does not get fixed. The rule it
+            # applies is the same one and slightly stricter — a `..` segment is
+            # refused on the segment rather than on where it lands.
+            dest = safe_destination(vendors_dir, name, what="path in archive")
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             with zf.open(info) as src, open(dest, "wb") as out:
                 out.write(src.read())

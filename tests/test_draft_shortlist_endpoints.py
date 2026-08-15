@@ -207,3 +207,43 @@ def test_the_draft_survives_a_restart(tmp_path, monkeypatch):
     assert [e["vendor_name"] for e in body["draft_shortlists"][item_id]] == [
         "Al Munara Cables LLC"
     ]
+
+
+# -- adoption, over HTTP ------------------------------------------------------
+#
+# Raising an RFQ is the moment a draft becomes invitations. There is no
+# separate "adopt" endpoint and no new screen: the draft is the buyer's own
+# selection against the item, so an RFQ that covers the item takes it.
+
+
+def test_raising_an_rfq_adopts_the_drafts_of_the_items_it_covers(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    project_id, item_id = make_item(client)
+    pick(client, project_id, item_id, vendor_name="Ducab LLC", source="Manual")
+
+    r = client.post("/api/workflow/rfqs", json={
+        "project_id": project_id, "item_ids": [item_id],
+        "reference": "ADP-RFQ-2026-014", "package": "HV cable",
+        "discipline": "Cables", "value_estimate_aed": 900000,
+    })
+
+    assert r.status_code == 201, r.text
+    body = client.get(f"/api/workflow/rfqs/{r.json()['id']}").json()
+    assert [e["vendor_name"] for e in body["shortlist"]] == ["Ducab LLC"]
+
+
+def test_the_draft_is_still_there_after_an_rfq_took_it(tmp_path, monkeypatch):
+    """A second RFQ may cover the same item later. Emptying the basket because
+    one RFQ consumed it is a surprise the buyer cannot undo."""
+    client = _client(tmp_path, monkeypatch)
+    project_id, item_id = make_item(client)
+    pick(client, project_id, item_id, vendor_name="Ducab LLC", source="Manual")
+
+    client.post("/api/workflow/rfqs", json={
+        "project_id": project_id, "item_ids": [item_id],
+        "reference": "ADP-RFQ-2026-014", "package": "HV cable",
+        "discipline": "Cables", "value_estimate_aed": 900000,
+    })
+
+    body = client.get(f"/api/workflow/projects/{project_id}").json()
+    assert [e["vendor_name"] for e in body["draft_shortlists"][item_id]] == ["Ducab LLC"]

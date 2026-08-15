@@ -394,12 +394,159 @@ def test_deleting_one_project_leaves_another_projects_draft_alone():
     assert [e.vendor_name for e in store.draft_shortlist(kept_item.id)] == ["Kept Co"]
 
 
-# -- what this task deliberately does not build -------------------------------
+# -- adoption -----------------------------------------------------------------
+#
+# This is where the draft stops being a draft. `test_there_is_no_adoption_yet`
+# stood here until BD-6: it marked `adopt_draft_shortlist` as belonging to the
+# task where the RFQ-raising screen needs it, which is the task that replaced
+# it with the cases below.
 
 
-def test_there_is_no_adoption_yet():
-    """`adopt_draft_shortlist` belongs to the task where the RFQ-raising screen
-    needs it. Asserting its absence here keeps the draft a *draft*: nothing in
-    this phase turns one into invitations, and an invitation is an attributed
-    act with its own per-vendor guards."""
-    assert not hasattr(WorkflowStore, "adopt_draft_shortlist")
+def a_registry_bidder(store, name="Al Munara Cables LLC", **changes):
+    # A real product group, not the discipline label: scope matching expands
+    # "Cables" through the vocabulary and no vendor is registered for a
+    # category literally called that.
+    # Approved unless a case says otherwise: the registry's default is "Under
+    # review", which `evaluate` reports as a *blocker*, and a fixture that
+    # blocks by accident would make every adoption case below assert the
+    # skipping path.
+    changes.setdefault("prequal_status", "Approved")
+    return store.create_bidder(
+        name=name, trade_categories=["CABLES - FIBER OPTICS"], **changes
+    )
+
+
+def an_rfq_over(store, project, item, **changes):
+    return store.create_rfq(
+        project_id=project.id, item_ids=[item.id], reference="ADP-RFQ-2026-014",
+        package="HV cable", discipline="Cables", value_estimate_aed=900_000,
+        **changes,
+    )
+
+
+def test_adoption_copies_the_draft_onto_the_rfq():
+    store, project, item = store_with_an_item()
+    store.add_draft_shortlist_entry(item.id, an_entry(item.id, "Ducab LLC"))
+    rfq = an_rfq_over(store, project, item)
+
+    added = store.adopt_draft_shortlist(rfq.id, item.id)
+
+    assert added == 1
+    assert [e.vendor_name for e in store.shortlist_for(rfq.id)] == ["Ducab LLC"]
+
+
+def test_a_registry_pick_adopts_through_the_vendor_id_path():
+    """The snapshot is the registry's, derived at adoption time — not copied
+    from the draft, which holds only a name. That is the existing rule in
+    `add_shortlist_entry`, reused rather than reimplemented."""
+    store, project, item = store_with_an_item()
+    bidder = a_registry_bidder(store, prequal_status="Approved")
+    store.add_draft_shortlist_entry(
+        item.id,
+        # A stale name, deliberately: the registry's is the one that must land.
+        an_entry(item.id, "Al Munara Cables (old name)", vendor_id=bidder.id,
+                 source="ADNOC"),
+    )
+    rfq = an_rfq_over(store, project, item)
+
+    store.adopt_draft_shortlist(rfq.id, item.id)
+
+    [entry] = store.shortlist_for(rfq.id)
+    assert entry.vendor_id == bidder.id
+    assert entry.vendor_name == "Al Munara Cables LLC"
+    assert entry.prequal_status == "Approved"
+    assert entry.scope_code_fit is True
+
+
+def test_adoption_does_not_clear_the_draft():
+    """The item may be covered by a second RFQ later, and silently emptying a
+    buyer's basket because one RFQ consumed it is a surprise."""
+    store, project, item = store_with_an_item()
+    store.add_draft_shortlist_entry(item.id, an_entry(item.id, "Ducab LLC"))
+    rfq = an_rfq_over(store, project, item)
+
+    store.adopt_draft_shortlist(rfq.id, item.id)
+
+    assert [e.vendor_name for e in store.draft_shortlist(item.id)] == ["Ducab LLC"]
+
+
+def test_adoption_is_idempotent():
+    store, project, item = store_with_an_item()
+    store.add_draft_shortlist_entry(item.id, an_entry(item.id, "Ducab LLC"))
+    rfq = an_rfq_over(store, project, item)
+
+    first = store.adopt_draft_shortlist(rfq.id, item.id)
+    second = store.adopt_draft_shortlist(rfq.id, item.id)
+
+    assert (first, second) == (1, 0)
+    assert len(store.shortlist_for(rfq.id)) == 1
+
+
+def test_a_vendor_already_invited_by_hand_is_not_duplicated():
+    store, project, item = store_with_an_item()
+    bidder = a_registry_bidder(store)
+    store.add_draft_shortlist_entry(
+        item.id, an_entry(item.id, bidder.name, vendor_id=bidder.id, source="ADNOC")
+    )
+    rfq = an_rfq_over(store, project, item)
+    store.add_shortlist_entry(rfq.id, vendor_id=bidder.id)
+
+    added = store.adopt_draft_shortlist(rfq.id, item.id)
+
+    assert added == 0
+    assert len(store.shortlist_for(rfq.id)) == 1
+
+
+def test_a_registry_pick_and_a_hand_typed_one_of_the_same_name_both_adopt():
+    """The same two-space rule the draft itself keeps: keyed on the registry id
+    where there is one and the name where there is not, so collapsing them
+    would attach a real company's approvals to a string somebody typed."""
+    store, project, item = store_with_an_item()
+    bidder = a_registry_bidder(store, name="Ducab LLC")
+    store.add_draft_shortlist_entry(
+        item.id, an_entry(item.id, "Ducab LLC", vendor_id=bidder.id, source="ADNOC")
+    )
+    store.add_draft_shortlist_entry(item.id, an_entry(item.id, "Ducab LLC"))
+    rfq = an_rfq_over(store, project, item)
+
+    added = store.adopt_draft_shortlist(rfq.id, item.id)
+
+    assert added == 2
+    assert [e.vendor_id for e in store.shortlist_for(rfq.id)] == [bidder.id, None]
+
+
+def test_a_blocked_bidder_is_skipped_rather_than_invited_unattributed():
+    """Inviting a blocked bidder needs a recorded reason, and adoption has
+    nobody to attribute one to. Skipping leaves the buyer to invite them
+    deliberately, which is the whole point of that guard."""
+    store, project, item = store_with_an_item()
+    blocked = a_registry_bidder(store, name="Suspended Cables LLC",
+                                prequal_status="Suspended")
+    store.add_draft_shortlist_entry(
+        item.id, an_entry(item.id, blocked.name, vendor_id=blocked.id, source="ADNOC")
+    )
+    store.add_draft_shortlist_entry(item.id, an_entry(item.id, "Ducab LLC"))
+    rfq = an_rfq_over(store, project, item)
+
+    added = store.adopt_draft_shortlist(rfq.id, item.id)
+
+    assert added == 1
+    assert [e.vendor_name for e in store.shortlist_for(rfq.id)] == ["Ducab LLC"]
+
+
+def test_adopting_an_empty_draft_adds_nothing():
+    store, project, item = store_with_an_item()
+    rfq = an_rfq_over(store, project, item)
+
+    assert store.adopt_draft_shortlist(rfq.id, item.id) == 0
+    assert store.shortlist_for(rfq.id) == []
+
+
+def test_adoption_against_an_unknown_rfq_or_item_raises():
+    store, project, item = store_with_an_item()
+    rfq = an_rfq_over(store, project, item)
+
+    with pytest.raises(KeyError):
+        store.adopt_draft_shortlist("rfq_nope", item.id)
+    with pytest.raises(KeyError):
+        store.adopt_draft_shortlist(rfq.id, "itm_nope")

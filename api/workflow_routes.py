@@ -19,18 +19,23 @@ Status mapping, kept consistent across the module:
   409  it exists, but the workflow says no — a closed gate or a refused freeze
   422  the request is self-inconsistent, e.g. an item from another project
 """
+import hashlib
+import io
 import os
 import tempfile
+import zipfile
 from datetime import date, datetime, timezone
-from typing import Annotated, get_args
+from typing import Annotated, NamedTuple, get_args
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
 from api.auth.deps import current_user
 from api.auth.models import User
 from workflow import clarifications, persistence
-from workflow import bidder_db, disciplines, item_vendor_lists
+from workflow import bidder_db, disciplines, doc_store, item_vendor_lists
+from workflow.models.rfq_document import EligibilityCategory, RfqDocument
+from workflow.safe_extract import safe_destination, safe_relative_path
 from workflow.avl_import import parse_avl
 from workflow.bidders import (
     AVAILABLE_APPROVERS,
@@ -1015,9 +1020,22 @@ def list_rfqs(project_id: str | None = None) -> dict:
 
 @router.post("/rfqs", status_code=201)
 def create_rfq(body: RfqIn) -> dict:
+    """Raise an RFQ, and take the draft shortlists of the items it covers.
+
+    Adoption is not a second step and has no screen of its own: the buyer
+    assembled that selection against the item for exactly this moment, and an
+    RFQ raised over an item with picks that then showed an empty shortlist
+    would read as the picks having been lost.
+
+    Inside the same `locked_update` as the creation, so an RFQ never exists
+    with its adoption half-done. `adopt_draft_shortlist` is idempotent and
+    leaves the draft alone — the item may be covered again later.
+    """
     try:
         with persistence.locked_update(_root()) as store:
             rfq = store.create_rfq(**body.model_dump())
+            for item_id in rfq.item_ids:
+                store.adopt_draft_shortlist(rfq.id, item_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -1109,6 +1127,13 @@ def get_rfq(rfq_id: str) -> dict:
         # `/bidders/approved` sends it: a column headed "ADNOC" in the front end
         # would be a second place that has to change for a second client.
         "client_approver": CLIENT_APPROVER,
+        # The files themselves, both halves of the enquiry in one list — the
+        # bytes are on disk, and `submitted_by_vendor_id` says who put them
+        # there. `document_categories` rides alongside for the same reason
+        # `selectable_approvers` does: the upload card builds its picker
+        # without spelling the vocabulary itself.
+        "documents": [_document_payload(d) for d in store.rfq_documents(rfq_id)],
+        "document_categories": [c.value for c in EligibilityCategory],
         "tbe_template": tbe.model_dump(mode="json") if tbe else None,
         "vdrl": [line.model_dump(mode="json") for line in store.vdrl_for(rfq_id)],
         "bids": bids,
@@ -1176,6 +1201,259 @@ def freeze_technical_package(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return package.model_dump(mode="json")
+
+
+# -- the documents an RFQ carries --------------------------------------------
+
+
+class _Pending(NamedTuple):
+    """One file about to be stored, with its name already through the guard."""
+
+    rel_path: str
+    filename: str
+    content_type: str | None
+    data: bytes
+
+    @property
+    def sha256(self) -> str:
+        return hashlib.sha256(self.data).hexdigest()
+
+
+def _expand(files: list[UploadFile], paths: list[str] | None, base: str) -> list[_Pending]:
+    """Turn an upload into the files that will actually be stored.
+
+    Three shapes arrive at one route. A plain multi-select sends files and no
+    paths. A folder sends files plus their `webkitRelativePath`s, positional —
+    which is why a `paths` list of the wrong length is refused rather than
+    zipped short: a path attached to the wrong file is worse than no path.
+    A `.zip` is expanded and each member stored individually, so what lands is
+    the package rather than an archive nobody can look inside.
+
+    **Every name goes through `workflow.safe_extract`**, the same guard
+    `procurement/project.py` runs archive members through — a zip member and a
+    browser-supplied relative path are the same risk arriving through two
+    doors, and a second implementation of the check is the one that does not
+    get fixed. Each refusal names the offending entry.
+
+    Nothing is written here. The whole upload is materialised first so that one
+    bad member refuses the lot: half an enquiry package on disk, with no record
+    of the other half, is worse than a refusal the uploader can act on.
+    """
+    if not files:
+        raise HTTPException(status_code=422, detail="The upload carried no files.")
+    if paths is not None and len(paths) != len(files):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{len(files)} files arrived with {len(paths)} paths. They are "
+                f"positional, so a short list would attach a path to the wrong file."
+            ),
+        )
+
+    pending: list[_Pending] = []
+    for index, upload in enumerate(files):
+        name = upload.filename or ""
+        if not name.strip():
+            raise HTTPException(status_code=422, detail="A file arrived with no name.")
+        payload = upload.file.read()
+        declared = paths[index] if paths else name
+
+        if name.lower().endswith(".zip"):
+            pending.extend(_expand_archive(name, payload, base))
+            continue
+
+        try:
+            rel_path = safe_relative_path(declared, what="path")
+            _guarded(base, rel_path)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        pending.append(
+            _Pending(
+                rel_path=rel_path,
+                filename=rel_path.rsplit("/", 1)[-1],
+                content_type=upload.content_type,
+                data=payload,
+            )
+        )
+    return pending
+
+
+def _guarded(base: str, rel_path: str) -> None:
+    """Resolve the name under the RFQ's own directory and refuse an escape.
+
+    The blob itself is stored by digest, not under this path, so this is not
+    where containment is enforced — `doc_store` builds its paths out of leaves
+    and cannot be escaped. It is enforced anyway, because the name is about to
+    be recorded and shown, and a `rel_path` reading `../../etc/passwd` in a
+    document register is a finding whether or not anything acted on it.
+    """
+    safe_destination(base, rel_path, what="path")
+
+
+def _expand_archive(archive_name: str, payload: bytes, base: str) -> list[_Pending]:
+    try:
+        with zipfile.ZipFile(io.BytesIO(payload)) as zf:
+            members = []
+            for info in zf.infolist():
+                if info.is_dir():
+                    continue
+                rel_path = safe_relative_path(info.filename, what="path in archive")
+                _guarded(base, rel_path)
+                members.append(
+                    _Pending(
+                        rel_path=rel_path,
+                        filename=rel_path.rsplit("/", 1)[-1],
+                        # A zip carries no per-member content type, and
+                        # guessing one from the extension would put a claim on
+                        # the record that nobody made.
+                        content_type=None,
+                        data=zf.read(info),
+                    )
+                )
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(
+            status_code=422, detail=f"{archive_name} is not a readable zip archive."
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return members
+
+
+def _document_payload(document: RfqDocument) -> dict:
+    return document.model_dump(mode="json")
+
+
+def _store_documents(
+    root: str,
+    rfq_id: str,
+    pending: list[_Pending],
+    *,
+    category: EligibilityCategory | None,
+    uploaded_by: str,
+    uploaded_at: str,
+) -> list[RfqDocument]:
+    """Write the blobs and the records as one unit.
+
+    Inside `locked_update`, and that is deliberate even though writing bytes
+    under a lock is not free: the freeze rule that refuses this write lives in
+    the store, so checking it outside would be the two-critical-sections
+    mistake this module names at the top.
+
+    A refusal partway through unwinds the blobs **this call** created.
+    `locked_update` writes nothing on a raise, so the records are gone already,
+    and a blob with no record naming it is exactly the orphan I-D forbids. A
+    blob an earlier record already shares is left where it is — the same rule
+    the delete path keeps, arriving from the other direction.
+    """
+    blobs = doc_store.LocalBlobStore(root)
+    stored: list[RfqDocument] = []
+    created: list[doc_store.BlobRef] = []
+    try:
+        with persistence.locked_update(root) as store:
+            if store.get_rfq(rfq_id) is None:
+                raise KeyError(f"Unknown RFQ: {rfq_id}")
+            for item in pending:
+                # Whether this call is the one that puts the bytes on disk,
+                # asked the way the delete path asks it: a blob is shared when
+                # some record already names the same digest and leaf.
+                shared = any(
+                    (d.sha256, d.filename) == (item.sha256, item.filename)
+                    for d in store.rfq_documents(rfq_id)
+                )
+                ref = blobs.put(rfq_id, item.filename, io.BytesIO(item.data))
+                if not shared:
+                    created.append(ref)
+                stored.append(
+                    store.add_rfq_document(
+                        RfqDocument(
+                            rfq_id=rfq_id,
+                            filename=item.filename,
+                            rel_path=item.rel_path,
+                            sha256=ref.sha256,
+                            size_bytes=ref.size,
+                            content_type=item.content_type,
+                            category=category,
+                            uploaded_by=uploaded_by,
+                            uploaded_at=uploaded_at,
+                            # The contractor's own. A vendor's submission
+                            # arrives through the bid door, which is a later
+                            # phase; nothing here may claim to be one.
+                            submitted_by_vendor_id=None,
+                        )
+                    )
+                )
+    except BaseException:
+        for ref in created:
+            blobs.delete(ref)
+        raise
+    return stored
+
+
+@router.post("/rfqs/{rfq_id}/documents", status_code=201)
+def upload_rfq_documents(
+    rfq_id: str,
+    files: list[UploadFile] = File(...),
+    paths: list[str] | None = Form(None),
+    category: EligibilityCategory | None = Form(None),
+    user: User = Depends(current_user),
+) -> dict:
+    """Store real files against an RFQ: several at once, a folder, or a zip.
+
+    Unlike every other upload route in this module, this one **keeps the
+    bytes** — an enquiry package is the record, not a form to fill in.
+
+    Two halves, and the split is where the work belongs: `_expand` turns the
+    request into files with guarded names and touches nothing, and
+    `_store_documents` writes them inside the lock. So an upload that names an
+    unsafe member is refused before a single byte lands.
+    """
+    root = _root()
+    pending = _expand(files, paths, doc_store.rfq_dir(root, rfq_id))
+    try:
+        stored = _store_documents(
+            root,
+            rfq_id,
+            pending,
+            category=category,
+            uploaded_by=user.email,
+            uploaded_at=datetime.now(timezone.utc).isoformat(),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc).strip("'")) from exc
+    except ValueError as exc:
+        # A frozen package refusing an edit: the RFQ exists and the request is
+        # well-formed, the workflow simply says no.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"documents": [_document_payload(d) for d in stored]}
+
+
+@router.delete("/rfqs/{rfq_id}/documents/{document_id}", status_code=204)
+def remove_rfq_document(rfq_id: str, document_id: str) -> None:
+    """Drop one document, and its blob **only when no record still shares it**.
+
+    Content addressing means two records legitimately point at one file, so
+    the store answers whether the blob is now unreferenced and this route acts
+    on that answer. Deciding it here would be a check in the caller and a write
+    in the store — two critical sections, which is the rule this module opens
+    with.
+    """
+    try:
+        with persistence.locked_update(_root()) as store:
+            document, orphaned = store.remove_rfq_document(rfq_id, document_id)
+            if orphaned:
+                doc_store.LocalBlobStore(_root()).delete(
+                    doc_store.blob_ref(
+                        document.rfq_id,
+                        document.sha256,
+                        document.size_bytes,
+                        document.filename,
+                    )
+                )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc).strip("'")) from exc
+    except ValueError as exc:
+        # A frozen package refusing an edit.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 # -- artifact editing --------------------------------------------------------

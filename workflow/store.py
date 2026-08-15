@@ -28,6 +28,7 @@ from workflow.models.rfq import (
     TechnicalPackage,
     VdrlLine,
 )
+from workflow.models.rfq_document import RfqDocument
 from workflow.gates import check_gate
 from workflow.stages import Stage, is_allowed
 
@@ -111,6 +112,11 @@ class WorkflowStore:
         # `persistence` flattens this to one array and regroups on the way in,
         # the same shape as `_item_vendor_lists` above.
         self._draft_shortlists: dict[str, list[DraftShortlistEntry]] = {}
+        # Keyed by RFQ id, holding both halves of the enquiry: the documents
+        # the contractor issued and the ones bidders return. Which is which is
+        # `submitted_by_vendor_id` on each record, so grouping by it here would
+        # be a second place for the key to disagree with what it groups.
+        self._rfq_documents: dict[str, list[RfqDocument]] = {}
 
     # -- projects ---------------------------------------------------------
 
@@ -617,23 +623,35 @@ class WorkflowStore:
     ) -> TechnicalPackage:
         if rfq_id not in self._rfqs:
             raise KeyError(f"Unknown RFQ: {rfq_id}")
-        existing = self._packages.get(rfq_id)
-        if existing is not None and existing.frozen_at is not None:
-            # Freezing exists precisely because vendors bid against a fixed
-            # revision. Replacing it afterwards moves the goalposts under bids
-            # already invited against the old one. (It used to be the Scoping
-            # exit criterion as well; that stage is gone, the refusal is not.)
-            raise ValueError(
-                "The technical package is frozen and can no longer be edited."
-            )
+        self._refuse_a_frozen_package(rfq_id)
         package = TechnicalPackage(
             rfq_id=rfq_id,
             revision=revision,
             basis_of_design=basis_of_design,
             attachments=list(attachments),
+            # Rebuilt from the records rather than carried in the request, so a
+            # package created after its documents were uploaded still lists
+            # them and a caller cannot name a document that is not there.
+            documents=self._contractor_document_ids(rfq_id),
         )
         self._packages[rfq_id] = package
         return package
+
+    def _refuse_a_frozen_package(self, rfq_id: str) -> None:
+        """Freezing exists precisely because vendors bid against a fixed
+        revision. Replacing it afterwards moves the goalposts under bids
+        already invited against the old one. (It used to be the Scoping exit
+        criterion as well; that stage is gone, the refusal is not.)
+
+        One function, because the rule now guards two collections — the
+        package's own fields and the documents behind `documents` — and two
+        copies of it would be two sentences to keep in step.
+        """
+        existing = self._packages.get(rfq_id)
+        if existing is not None and existing.frozen_at is not None:
+            raise ValueError(
+                "The technical package is frozen and can no longer be edited."
+            )
 
     def get_technical_package(self, rfq_id: str) -> TechnicalPackage | None:
         return self._packages.get(rfq_id)
@@ -658,6 +676,98 @@ class WorkflowStore:
         )
         self._packages[rfq_id] = frozen
         return frozen
+
+    # -- the documents an RFQ carries -------------------------------------
+
+    @staticmethod
+    def _blob_key(document: RfqDocument) -> tuple[str, str]:
+        """What makes two records point at one blob.
+
+        The digest **and** the leaf name, because the blob path is built from
+        both: the same bytes uploaded twice under one name are one file, and
+        the same bytes under two names are two files that differ before the
+        leaf. Keying on the digest alone would leave the second file on disk
+        with no record naming it, which is the orphan I-D forbids.
+        """
+        return (document.sha256, document.filename)
+
+    def _contractor_document_ids(self, rfq_id: str) -> list[str]:
+        """The ids the technical package lists: the contractor's own documents,
+        never a vendor's submission. One collection serves both halves of the
+        enquiry, and this is the one function that says which half is which."""
+        return [
+            d.id
+            for d in self._rfq_documents.get(rfq_id, [])
+            if d.submitted_by_vendor_id is None
+        ]
+
+    def _relist_package_documents(self, rfq_id: str) -> None:
+        """Rebuild `documents` from the records, so the list on the package
+        cannot disagree with the collection it points into."""
+        package = self._packages.get(rfq_id)
+        if package is None:
+            return
+        self._packages[rfq_id] = package.model_copy(
+            update={"documents": self._contractor_document_ids(rfq_id)}
+        )
+
+    def add_rfq_document(self, document: RfqDocument) -> RfqDocument:
+        """Record one uploaded file against its RFQ.
+
+        Two reads gate this write, and both are here rather than in the route
+        for the reason this store states everywhere else: the route runs the
+        whole method inside `locked_update`, so a check made outside it would
+        be a second critical section.
+
+        The RFQ must exist — half of I-E, and the half that can be enforced,
+        since nothing in this repository deletes an RFQ.
+
+        A **frozen package refuses a contractor document**, because that list
+        is part of what vendors bid against. A vendor's submission is not
+        refused: bids arrive after the freeze, and blocking them would make the
+        rule that protects the enquiry destroy the responses to it.
+        """
+        if document.rfq_id not in self._rfqs:
+            raise KeyError(f"Unknown RFQ: {document.rfq_id}")
+        if document.submitted_by_vendor_id is None:
+            self._refuse_a_frozen_package(document.rfq_id)
+        self._rfq_documents.setdefault(document.rfq_id, []).append(document)
+        self._relist_package_documents(document.rfq_id)
+        return document
+
+    def rfq_documents(self, rfq_id: str) -> list[RfqDocument]:
+        """This RFQ's documents, in the order they arrived. Absent reads as
+        empty — the screen asks before anybody has uploaded anything."""
+        return list(self._rfq_documents.get(rfq_id, []))
+
+    def remove_rfq_document(
+        self, rfq_id: str, document_id: str
+    ) -> tuple[RfqDocument, bool]:
+        """Drop one record, and say whether its blob is now unreferenced.
+
+        The second half of the answer is the whole of I-D. Content addressing
+        means two records legitimately point at one blob, so a caller that
+        deleted the file unconditionally would destroy a document somebody
+        else's record still names — and a test with one document cannot tell
+        the two behaviours apart.
+
+        It is computed **here**, after the removal and against what is left,
+        because it is a read that gates a write to the filesystem: deciding it
+        in the route would be the two-critical-sections mistake this store has
+        needed to avoid six times now.
+        """
+        entries = self._rfq_documents.get(rfq_id, [])
+        removed = next((e for e in entries if e.id == document_id), None)
+        if removed is None:
+            raise KeyError(f"Unknown document: {document_id}")
+        if removed.submitted_by_vendor_id is None:
+            self._refuse_a_frozen_package(rfq_id)
+
+        kept = [e for e in entries if e.id != document_id]
+        self._rfq_documents[rfq_id] = kept
+        self._relist_package_documents(rfq_id)
+        key = self._blob_key(removed)
+        return removed, not any(self._blob_key(e) == key for e in kept)
 
     def add_shortlist_entry(
         self,
@@ -733,6 +843,78 @@ class WorkflowStore:
         self._shortlists.setdefault(rfq_id, []).append(entry)
         self._revoke_shortlist_approval(rfq_id)
         return entry
+
+    def adopt_draft_shortlist(self, rfq_id: str, item_id: str) -> int:
+        """Turn an item's draft picks into invitations on this RFQ.
+
+        This is the moment a draft stops being a draft, and it is called when
+        an RFQ is raised over the item — the buyer assembled that selection
+        for exactly this, so there is no second screen asking them to confirm
+        what they already chose.
+
+        Four rules, and each is somebody else's rule reused rather than a new
+        one:
+
+        - **It does not clear the draft.** The item may be covered by a second
+          RFQ later, and silently emptying a buyer's basket because one RFQ
+          consumed it is a surprise they cannot undo.
+        - **It is idempotent.** A vendor already on this RFQ's shortlist is
+          skipped, keyed the way the draft itself is keyed — the registry id
+          where there is one and the name where there is not, so a registry
+          row and a hand-typed one sharing a trading name adopt as two rows
+          rather than one.
+        - **A registry pick adopts through the `vendor_id` path**, so the
+          entry's `vendor_name`, `prequal_status` and `scope_code_fit` are
+          derived from the registry at adoption time by `add_shortlist_entry`
+          rather than copied from the draft, which holds none of them. That
+          derivation is not reimplemented here; there is one of it.
+        - **A blocked bidder is skipped, not invited.** Inviting one requires
+          a recorded reason and adoption has nobody to attribute one to, so
+          they are left for the buyer to invite deliberately — which is the
+          entire point of that guard.
+
+        Returns how many entries were actually added, so a caller can tell an
+        adoption that found nothing from one that skipped everything.
+        """
+        if rfq_id not in self._rfqs:
+            raise KeyError(f"Unknown RFQ: {rfq_id}")
+        if item_id not in self._items:
+            raise KeyError(f"Unknown item: {item_id}")
+
+        def key(vendor_id: str | None, vendor_name: str) -> tuple[str, str]:
+            return ("id", vendor_id) if vendor_id else ("name", vendor_name)
+
+        seen = {
+            key(e.vendor_id, e.vendor_name) for e in self._shortlists.get(rfq_id, [])
+        }
+        added = 0
+        for pick in self.draft_shortlist(item_id):
+            if key(pick.vendor_id, pick.vendor_name) in seen:
+                continue
+            try:
+                if pick.vendor_id:
+                    self.add_shortlist_entry(rfq_id, vendor_id=pick.vendor_id)
+                else:
+                    self.add_shortlist_entry(
+                        rfq_id,
+                        vendor_name=pick.vendor_name,
+                        # The same defaults the item screen and the wizard's
+                        # hand-typed row post. A curated pick has no registry
+                        # row, so there is no prequalification finding to
+                        # snapshot — "Under review" is what nobody has looked
+                        # at yet, which is the true fact.
+                        prequal_status="Under review",
+                        scope_code_fit=True,
+                    )
+            except (ValueError, KeyError):
+                # Blocked, or pointing at a bidder the registry no longer
+                # holds. Skipped rather than raised: one such pick must not
+                # stop the other twenty-four being invited, and raising here
+                # would fail the RFQ creation this runs inside.
+                continue
+            seen.add(key(pick.vendor_id, pick.vendor_name))
+            added += 1
+        return added
 
     def remove_shortlist_entry(self, rfq_id: str, entry_id: str) -> None:
         """Refused while the entry has raised any clarification.
