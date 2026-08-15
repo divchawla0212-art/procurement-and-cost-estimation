@@ -1,0 +1,641 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Running Cost — 5 packages a month</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  body { margin: 0; }
+</style>
+<style>
+  :root {
+    --paper:      #F4F7F8;
+    --surface:    #FFFFFF;
+    --surface-2:  #EAEFF1;
+    --ink:        #131A1E;
+    --ink-2:      #3E4B52;
+    --ink-3:      #6B7A82;
+    --rule:       #CBD5D9;
+    --rule-soft:  #E2E9EB;
+    --accent:     #0C6C75;
+    --accent-2:   #0A5860;
+    --accent-wash:#DCEDEF;
+    --warn:       #94641A;
+    --warn-wash:  #FBF2DE;
+    --crit:       #9E3226;
+    --crit-wash:  #FBE9E6;
+    --ok:         #1F6B4A;
+    --ok-wash:    #E1F1E8;
+    --shadow:     0 1px 2px rgba(19,26,30,.06), 0 8px 24px -16px rgba(19,26,30,.28);
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --serif: ui-serif, "Iowan Old Style", Georgia, "Times New Roman", serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper:#0D1214; --surface:#141C1F; --surface-2:#1B2529;
+      --ink:#DDE6E8; --ink-2:#A6B5BA; --ink-3:#77878D;
+      --rule:#2C3A3F; --rule-soft:#202B2F;
+      --accent:#45B3BC; --accent-2:#6FCBD2; --accent-wash:#152C2F;
+      --warn:#D0A254; --warn-wash:#2A2415; --crit:#E08076; --crit-wash:#2C1A18;
+      --ok:#6BC098; --ok-wash:#14261E;
+      --shadow: 0 1px 2px rgba(0,0,0,.5), 0 8px 24px -16px rgba(0,0,0,.8);
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper:#0D1214; --surface:#141C1F; --surface-2:#1B2529;
+    --ink:#DDE6E8; --ink-2:#A6B5BA; --ink-3:#77878D;
+    --rule:#2C3A3F; --rule-soft:#202B2F;
+    --accent:#45B3BC; --accent-2:#6FCBD2; --accent-wash:#152C2F;
+    --warn:#D0A254; --warn-wash:#2A2415; --crit:#E08076; --crit-wash:#2C1A18;
+    --ok:#6BC098; --ok-wash:#14261E;
+    --shadow: 0 1px 2px rgba(0,0,0,.5), 0 8px 24px -16px rgba(0,0,0,.8);
+  }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 60rem; margin: 0 auto; padding: 3rem 1.5rem 6rem; }
+
+  header { border-bottom: 2px solid var(--rule); padding-bottom: 1.75rem; margin-bottom: 2.5rem; }
+  .eyebrow {
+    font-family: var(--mono); font-size: .72rem; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 .6rem;
+  }
+  h1 { font-family: var(--serif); font-size: clamp(1.9rem, 4.5vw, 2.7rem); line-height: 1.15; margin: 0 0 .6rem; font-weight: 600; }
+  .sub { color: var(--ink-2); font-size: 1.05rem; margin: 0; max-width: 46rem; }
+
+  h2 {
+    font-family: var(--serif); font-size: 1.5rem; font-weight: 600;
+    margin: 3.25rem 0 .5rem; padding-top: 1.5rem; border-top: 1px solid var(--rule-soft);
+  }
+  h2:first-of-type { border-top: 0; padding-top: 0; }
+  h3 { font-size: 1.02rem; font-weight: 650; margin: 2rem 0 .4rem; color: var(--ink); }
+  p { margin: .75rem 0; color: var(--ink-2); }
+  p.lead { color: var(--ink); font-size: 1.05rem; }
+  strong { color: var(--ink); font-weight: 650; }
+  code { font-family: var(--mono); font-size: .88em; background: var(--surface-2); padding: .1em .35em; border-radius: 3px; }
+
+  /* ---------- the answer ---------- */
+  .answer {
+    background: var(--surface); border: 1px solid var(--rule); border-radius: 10px;
+    box-shadow: var(--shadow); padding: 1.75rem; margin: 1.5rem 0 0;
+  }
+  .figure-row { display: flex; flex-wrap: wrap; gap: 1.25rem; }
+  .figure { flex: 1 1 12rem; }
+  .figure .label {
+    font-family: var(--mono); font-size: .7rem; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--ink-3); margin-bottom: .3rem;
+  }
+  .figure .value { font-size: 2.1rem; font-weight: 650; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .figure .value.big { font-size: 2.9rem; color: var(--accent); }
+  .figure .note { font-size: .85rem; color: var(--ink-3); margin-top: .2rem; }
+
+  /* ---------- the formula ---------- */
+  .formula {
+    background: var(--accent-wash); border: 1px solid var(--accent);
+    border-radius: 10px; padding: 1.5rem; margin: 1.5rem 0;
+  }
+  .formula .line {
+    font-family: var(--mono); font-size: .95rem; color: var(--ink);
+    overflow-x: auto; white-space: nowrap; padding-bottom: .35rem;
+  }
+  .formula .line + .line { margin-top: .45rem; }
+  .formula .caption { font-size: .88rem; color: var(--ink-2); margin: .9rem 0 0; }
+
+  /* ---------- tables ---------- */
+  .table-scroll { overflow-x: auto; margin: 1rem 0; -webkit-overflow-scrolling: touch; }
+  table { border-collapse: collapse; width: 100%; font-size: .92rem; min-width: 30rem; }
+  th, td { text-align: left; padding: .6rem .8rem; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+  th {
+    font-family: var(--mono); font-size: .7rem; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--ink-3); border-bottom: 1px solid var(--rule); font-weight: 600; white-space: nowrap;
+  }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  tr.total td { border-top: 2px solid var(--rule); border-bottom: 0; font-weight: 650; color: var(--ink); }
+  tbody tr:last-child td { border-bottom: 0; }
+  .hl { background: var(--accent-wash); }
+
+  /* ---------- callouts ---------- */
+  .box { border-radius: 8px; padding: 1.1rem 1.25rem; margin: 1.5rem 0; border: 1px solid; }
+  .box p:first-child { margin-top: 0; } .box p:last-child { margin-bottom: 0; }
+  .box .tag {
+    font-family: var(--mono); font-size: .68rem; letter-spacing: .1em; text-transform: uppercase;
+    font-weight: 700; display: block; margin-bottom: .4rem;
+  }
+  .box.warn { background: var(--warn-wash); border-color: var(--warn); }
+  .box.warn .tag { color: var(--warn); }
+  .box.crit { background: var(--crit-wash); border-color: var(--crit); }
+  .box.crit .tag { color: var(--crit); }
+  .box.ok { background: var(--ok-wash); border-color: var(--ok); }
+  .box.ok .tag { color: var(--ok); }
+
+  /* ---------- confidence pills ---------- */
+  .pill {
+    display: inline-block; font-family: var(--mono); font-size: .66rem;
+    letter-spacing: .06em; text-transform: uppercase; padding: .15em .5em;
+    border-radius: 999px; border: 1px solid; white-space: nowrap; font-weight: 600;
+  }
+  .pill.solid { color: var(--ok); border-color: var(--ok); background: var(--ok-wash); }
+  .pill.mid   { color: var(--warn); border-color: var(--warn); background: var(--warn-wash); }
+  .pill.soft  { color: var(--crit); border-color: var(--crit); background: var(--crit-wash); }
+
+  ul, ol { color: var(--ink-2); padding-left: 1.3rem; }
+  li { margin: .4rem 0; }
+  li::marker { color: var(--ink-3); }
+
+  footer {
+    margin-top: 4rem; padding-top: 1.5rem; border-top: 1px solid var(--rule);
+    font-size: .85rem; color: var(--ink-3);
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">Running cost · internal</p>
+  <h1>What it costs to run, at five packages a month</h1>
+  <p class="sub">
+    Five tender packages a month, 80&nbsp;MB of documents each — 400&nbsp;MB a month.
+    This is the cost to <em>operate</em>: the AI bill and the server bill. It excludes
+    anything spent building the system.
+  </p>
+</header>
+
+<h2>The answer</h2>
+
+<div class="answer">
+  <div class="figure-row">
+    <div class="figure">
+      <div class="label">Plan for</div>
+      <div class="value big">$120</div>
+      <div class="note">per month, all in</div>
+    </div>
+    <div class="figure">
+      <div class="label">Realistic range</div>
+      <div class="value">$75 – $290</div>
+      <div class="note">floor to worst case</div>
+    </div>
+    <div class="figure">
+      <div class="label">Per package</div>
+      <div class="value">$24</div>
+      <div class="note">$120 ÷ 5 packages</div>
+    </div>
+  </div>
+</div>
+
+<p class="lead" style="margin-top:1.5rem">
+  The number most people expect to be large — the AI — is the small half.
+  <strong>At this volume the server costs more than the AI does.</strong>
+</p>
+
+<div class="table-scroll">
+<table>
+  <thead>
+    <tr>
+      <th>What you are paying for</th>
+      <th class="num">Per month</th>
+      <th class="num">Share</th>
+      <th>Does it grow with volume?</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>AI</strong> — reading the documents (Claude)</td>
+      <td class="num">$30</td>
+      <td class="num">27%</td>
+      <td>Yes — directly with megabytes</td>
+    </tr>
+    <tr>
+      <td><strong>Server</strong> — hosting, storage, backups (AWS)</td>
+      <td class="num">$80</td>
+      <td class="num">73%</td>
+      <td>No — flat, whether busy or idle</td>
+    </tr>
+    <tr class="total">
+      <td>Total to run</td>
+      <td class="num">$110</td>
+      <td class="num">100%</td>
+      <td>Mostly flat at this size</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<p>
+  The $120 planning figure is that $110 with a little room for document revisions.
+  Everything below explains where each piece comes from and what moves it.
+</p>
+
+<h2>The method, in one line</h2>
+
+<p>
+  You do not need the derivation to use this. The whole model collapses to a rate
+  per megabyte, a waste multiplier, and a flat server bill.
+</p>
+
+<div class="formula">
+  <div class="line">monthly cost  =  (MB per month × rate)  ×  waste  +  server</div>
+  <div class="line">              =  (400 × $0.065)      ×  1.5    +  $80</div>
+  <div class="line">              =  $26                  ×  1.5    +  $80   =  <strong>$119</strong></div>
+  <p class="caption">
+    <strong>Rate</strong> is about <strong>6.5&nbsp;cents per megabyte</strong> on Sonnet 5 (11&nbsp;cents on Opus 5,
+    2&nbsp;cents on Haiku 4.5). <strong>Waste</strong> covers retries and re-reading revised documents —
+    1.5 is a sensible default. <strong>Server</strong> is flat at this scale.
+  </p>
+</div>
+
+<div class="box ok">
+  <span class="tag">Rule of thumb</span>
+  <p>
+    <strong>Seven cents a megabyte, plus eighty dollars a month.</strong>
+    That is close enough for budgeting at any volume up to about 40&nbsp;GB a month,
+    which is roughly a hundred times what you are doing now.
+  </p>
+</div>
+
+<h2>Where the AI number comes from</h2>
+
+<p>
+  Four steps take megabytes of PDF to dollars. Each constant was
+  <strong>measured by replaying a real tender</strong> through the actual code, not estimated —
+  the two exceptions are flagged.
+</p>
+
+<div class="table-scroll">
+<table>
+  <thead>
+    <tr>
+      <th class="num">Step</th>
+      <th>What happens</th>
+      <th class="num">For 400 MB</th>
+      <th>Confidence</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td class="num">1</td>
+      <td><strong>PDF becomes text.</strong> A megabyte of PDF is mostly not text. Measured at 18,470 usable characters per MB.</td>
+      <td class="num">7.4M characters</td>
+      <td><span class="pill mid">Corpus-dependent</span></td>
+    </tr>
+    <tr>
+      <td class="num">2</td>
+      <td><strong>Text becomes what we actually send.</strong> Documents are split into chunks and each chunk re-sends its instructions, so ~1.46× the text goes over the wire.</td>
+      <td class="num">10.8M characters</td>
+      <td><span class="pill solid">Measured</span></td>
+    </tr>
+    <tr>
+      <td class="num">3</td>
+      <td><strong>Characters become tokens</strong> — the unit Anthropic bills in. Calibrated at 3.41 characters per token in, 2.06 out.</td>
+      <td class="num">4.27M tokens</td>
+      <td><span class="pill solid">Measured</span></td>
+    </tr>
+    <tr>
+      <td class="num">4</td>
+      <td><strong>Tokens become dollars</strong> at the published list price.</td>
+      <td class="num">$25.98</td>
+      <td><span class="pill solid">List price</span></td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<p>
+  The split is <strong>74% reading, 26% writing</strong> — 3.17M tokens in, 1.10M out.
+  That matters because writing costs five times more per token than reading,
+  so the smaller half of the traffic is the bigger half of the bill.
+</p>
+
+<h3>Which model you run changes it most</h3>
+
+<div class="table-scroll">
+<table>
+  <thead>
+    <tr>
+      <th>Model</th>
+      <th class="num">Per package</th>
+      <th class="num">Per month</th>
+      <th class="num">Per MB</th>
+      <th>When you'd use it</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Haiku 4.5</td>
+      <td class="num">$1.73</td>
+      <td class="num">$8.66</td>
+      <td class="num">2.2¢</td>
+      <td>Cheapest; weakest at nuanced extraction</td>
+    </tr>
+    <tr class="hl">
+      <td><strong>Sonnet 5</strong></td>
+      <td class="num"><strong>$5.20</strong></td>
+      <td class="num"><strong>$25.98</strong></td>
+      <td class="num"><strong>6.5¢</strong></td>
+      <td><strong>The sensible default</strong></td>
+    </tr>
+    <tr>
+      <td>Opus 5</td>
+      <td class="num">$8.66</td>
+      <td class="num">$43.30</td>
+      <td class="num">10.8¢</td>
+      <td>Hardest documents; 1.67× Sonnet</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<p>
+  Even the most expensive option adds only about <strong>$17 a month</strong> over the default.
+  Model choice is not where the money is at this volume — which is worth knowing before
+  anyone optimises the wrong thing.
+</p>
+
+<div class="box ok">
+  <span class="tag">Live discount</span>
+  <p>
+    Sonnet 5 is on introductory pricing at <strong>$2/$10 per million tokens</strong> instead of $3/$15
+    <strong>through 31 August 2026</strong>. Until then the monthly AI bill is <strong>$17.32</strong>, not $25.98.
+    Budget at the full rate; the discount expires.
+  </p>
+</div>
+
+<h2>What makes it go up</h2>
+
+<p>
+  Three things add cost on top of the clean number. The first two are what you asked about.
+</p>
+
+<h3>1. Failed calls and reruns &nbsp;<span class="pill mid">+15% typical</span></h3>
+
+<p>
+  When a document chunk is too dense, the model hits its output ceiling and the call fails.
+  The system retries once. Three details make this worse than a simple retry rate suggests:
+</p>
+
+<ul>
+  <li><strong>The failure is deterministic.</strong> If a chunk is too big, it is too big
+      on the retry as well — so you pay for two failed calls, not one.</li>
+  <li><strong>Merging is all-or-nothing.</strong> One chunk failing twice discards the
+      whole document's work — after every one of its chunks has already been billed.
+      A 220,000-character proposal is about 19 chunks, so 19 chances to lose all 19.</li>
+  <li><strong>Failures are not cached.</strong> Successful documents are skipped on the
+      next run; failed ones are retried at full price <em>every single run</em>.</li>
+</ul>
+
+<div class="box crit">
+  <span class="tag">The one real leak</span>
+  <p>
+    A document that reliably fails costs money <strong>every week, forever, and produces nothing</strong>.
+    It is not a rounding error — it is a permanent subscription to a failure.
+    The fix is configuration, not spend: raise the output ceiling or lower the chunk size.
+    Switching to a more expensive model does <strong>not</strong> fix it — same ceiling.
+  </p>
+</div>
+
+<div class="table-scroll">
+<table>
+  <thead>
+    <tr><th>Failure rate</th><th class="num">Haiku</th><th class="num">Sonnet 5</th><th class="num">Opus 5</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Clean (nothing fails)</td><td class="num">$8.66</td><td class="num">$25.98</td><td class="num">$43.30</td></tr>
+    <tr class="hl"><td><strong>Typical (+15%)</strong></td><td class="num">$9.96</td><td class="num"><strong>$29.88</strong></td><td class="num">$49.80</td></tr>
+    <tr><td>Bad (+30%)</td><td class="num">$11.26</td><td class="num">$33.78</td><td class="num">$56.29</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>2. Revised vendor documents &nbsp;<span class="pill mid">×1.3 – ×2.0</span></h3>
+
+<p>
+  A vendor issuing Rev. B of a proposal means that document is read again from scratch.
+  There is no partial re-read and no diffing — <strong>a revision costs the same as the original</strong>.
+  Superseding the old revision's data is free, but that is bookkeeping, not AI work.
+</p>
+
+<div class="table-scroll">
+<table>
+  <thead>
+    <tr><th>How often documents get revised</th><th class="num">Multiplier</th><th class="num">Monthly AI cost</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Never — one pass, no changes</td><td class="num">×1.0</td><td class="num">$29.88</td></tr>
+    <tr class="hl"><td><strong>Three in ten revised once</strong> (assumed in the $120 figure)</td><td class="num">×1.3</td><td class="num"><strong>$38.84</strong></td></tr>
+    <tr><td>Six in ten revised once</td><td class="num">×1.6</td><td class="num">$47.81</td></tr>
+    <tr><td>Every document revised once</td><td class="num">×2.0</td><td class="num">$59.76</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>
+  Even the worst case here — every single document revised — adds <strong>about $30 a month</strong>.
+  Revisions are worth understanding, but they will not break a budget at this volume.
+</p>
+
+<h3>3. Everything else</h3>
+
+<div class="table-scroll">
+<table>
+  <thead>
+    <tr><th>Edge case</th><th>Effect on cost</th><th>How likely</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Scanned drawings instead of digital PDFs</strong></td>
+      <td>Cost <em>falls</em> sharply — there is no text to read. But you also get no data out, which is the real problem.</td>
+      <td><span class="pill mid">Very likely, partly</span></td>
+    </tr>
+    <tr>
+      <td><strong>Turning on image reading for scans</strong></td>
+      <td><strong>Large increase.</strong> Prices pictures instead of text and invalidates every rate on this page. Currently switched off.</td>
+      <td><span class="pill soft">Only if enabled</span></td>
+    </tr>
+    <tr>
+      <td><strong>Re-running a whole tender</strong></td>
+      <td>Free for documents that already succeeded — they are cached. Full price for any that failed.</td>
+      <td><span class="pill solid">Well understood</span></td>
+    </tr>
+    <tr>
+      <td><strong>Spreadsheets and plain text</strong></td>
+      <td>Increase — these are much denser in text per megabyte than PDFs.</td>
+      <td><span class="pill mid">Depends on mix</span></td>
+    </tr>
+    <tr>
+      <td><strong>Clarification rounds, RFQ reading</strong></td>
+      <td>Nothing today — these run on fixtures, not the AI.</td>
+      <td><span class="pill solid">Zero for now</span></td>
+    </tr>
+    <tr>
+      <td><strong>Vendor suggestions (new feature)</strong></td>
+      <td>Pennies. One small call per request, nothing stored.</td>
+      <td><span class="pill solid">Negligible</span></td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<h2>The server bill, and why it dominates</h2>
+
+<p>
+  The server is a flat monthly cost that barely notices your workload.
+</p>
+
+<div class="table-scroll">
+<table>
+  <thead>
+    <tr><th>Line</th><th class="num">Per month</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Compute (one small instance, on 24/7)</td><td class="num">$61</td></tr>
+    <tr><td>Disk</td><td class="num">$8</td></tr>
+    <tr><td>Backups</td><td class="num">$3</td></tr>
+    <tr><td>Document archive</td><td class="num">$1</td></tr>
+    <tr><td>Logs</td><td class="num">$4</td></tr>
+    <tr><td>Networking, DNS, misc</td><td class="num">$3</td></tr>
+    <tr class="total"><td>Lean total (single server, no redundancy)</td><td class="num">$80</td></tr>
+    <tr><td>Add a second server + load balancer for redundancy</td><td class="num">+$95</td></tr>
+    <tr class="total"><td>With redundancy</td><td class="num">$175</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="box warn">
+  <span class="tag">The striking number</span>
+  <p>
+    Processing one package takes about <strong>34 minutes</strong>. Five packages is
+    <strong>2.8 hours of work a month</strong> — out of roughly 730 hours in the month.
+  </p>
+  <p>
+    <strong>The server is 99.6% idle and you pay for all of it.</strong>
+    You are not buying computing power; you are buying an address that is always answering.
+    Nothing about this improves by processing fewer documents — it is already as low as it goes.
+  </p>
+</div>
+
+<p>
+  This is also why <strong>volume barely moves your bill</strong>. One server handles roughly
+  40&nbsp;GB a month before capacity is a concern. You could grow a hundredfold before the server
+  line changes at all — only the AI line would rise, at seven cents a megabyte.
+</p>
+
+<h2>How to make it cheaper</h2>
+
+<div class="table-scroll">
+<table>
+  <thead>
+    <tr><th>Lever</th><th class="num">Saves</th><th>What it costs you</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Batch processing</strong> — submit work asynchronously</td>
+      <td class="num">$19/mo</td>
+      <td>Results arrive later, not instantly. Ingestion already runs in the background, so this is close to free.</td>
+    </tr>
+    <tr>
+      <td><strong>Reserve the server for a year</strong></td>
+      <td class="num">$21/mo</td>
+      <td>A 12-month commitment. Roughly 35% off the compute line.</td>
+    </tr>
+    <tr>
+      <td><strong>Fix the failing-chunk leak</strong></td>
+      <td class="num">$5/mo</td>
+      <td>Nothing — it is a configuration change. Small in money, but it stops paying indefinitely for documents that never process.</td>
+    </tr>
+    <tr>
+      <td><strong>Run Haiku instead of Sonnet</strong></td>
+      <td class="num">$26/mo</td>
+      <td>Lower extraction quality. Not recommended — you would be trading accuracy for the price of a couple of coffees.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<p>
+  The first two are free money. Batch processing plus a reserved server takes the realistic
+  monthly figure from <strong>$119 down to about $78</strong> — a third off, with no loss of
+  quality and no change to what the system does.
+</p>
+
+<h2>How much to trust these numbers</h2>
+
+<p>
+  Being clear about this matters more than the precision of any single figure.
+</p>
+
+<div class="table-scroll">
+<table>
+  <thead>
+    <tr><th>Claim</th><th>Confidence</th><th>Why</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Tokens → dollars</td>
+      <td><span class="pill solid">High</span></td>
+      <td>Published list prices, verified 24 June 2026, times arithmetic. The only risk is Anthropic changing prices.</td>
+    </tr>
+    <tr>
+      <td>Text → tokens</td>
+      <td><span class="pill solid">High</span></td>
+      <td>Calibrated with Anthropic's own token counter against text reproducing this corpus's exact layout.</td>
+    </tr>
+    <tr>
+      <td>Documents → text</td>
+      <td><span class="pill mid">Medium</span></td>
+      <td><strong>Measured on one corpus of born-digital PDFs.</strong> A client whose documents are scanned, or spreadsheet-heavy, moves this a long way. This is the weakest link in the chain.</td>
+    </tr>
+    <tr>
+      <td>Failure overhead (+15%)</td>
+      <td><span class="pill soft">Estimated</span></td>
+      <td>A judgement, not a measurement. Could plausibly be 5% or 30%.</td>
+    </tr>
+    <tr>
+      <td>Server bill ($80–175)</td>
+      <td><span class="pill soft">Estimated</span></td>
+      <td>Priced from a standard configuration, not from an actual invoice.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<div class="box crit">
+  <span class="tag">Read this before quoting anyone</span>
+  <p>
+    <strong>Nothing here has been measured from a real bill.</strong> The system has no token
+    accounting anywhere in it — it does not currently record what any run consumed.
+    These figures are a model built from a replayed tender, and they are the best available,
+    but they are a projection.
+  </p>
+  <p>
+    <strong>Adding usage metering is the single highest-value next step</strong> if these numbers
+    are going to support a commercial decision. Until then, treat the ±$85–290 range as real
+    and the $120 as a planning figure.
+  </p>
+</div>
+
+<h2>The whole thing on one line</h2>
+
+<div class="formula">
+  <div class="line">5 packages × 80 MB  =  400 MB  →  4.3 million tokens  →  $26 of AI</div>
+  <div class="line">+ retries and revisions (×1.5)                        →  $39</div>
+  <div class="line">+ a server that is idle 99.6% of the time            →  <strong>$119 / month</strong></div>
+</div>
+
+<footer>
+  <p>
+    Constants from <code>docs/pricing/consumption-model.md</code>, measured by replaying a real
+    multi-vendor tender through the production code. Model prices verified against Anthropic's
+    published list rates, 24 June 2026 — <strong>re-check before quoting</strong>.
+    Excludes development, licences, and staff time. Internal document.
+  </p>
+</footer>
+
+</div>
+</body>
+</html>
