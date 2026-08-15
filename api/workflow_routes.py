@@ -34,6 +34,7 @@ from api.auth.deps import current_user
 from api.auth.models import User
 from workflow import clarifications, persistence
 from workflow import bidder_db, disciplines, doc_store, item_vendor_lists
+from workflow.eligibility import assess as assess_eligibility
 from workflow.models.rfq_document import EligibilityCategory, RfqDocument
 from workflow.safe_extract import safe_destination, safe_relative_path
 from workflow.avl_import import parse_avl
@@ -1472,6 +1473,37 @@ def remove_rfq_document(rfq_id: str, document_id: str) -> None:
     except ValueError as exc:
         # A frozen package refusing an edit.
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/rfqs/{rfq_id}/bidders/{vendor_id}/eligibility")
+def bidder_eligibility(rfq_id: str, vendor_id: str) -> dict:
+    """One bidder's checklist against this RFQ's enquiry package.
+
+    Read-only and computed at call time — `workflow.eligibility` is why the
+    verdict is never stored. The split into `issued` and `submitted` happens
+    here, at the boundary, so the pure module never has to know what a
+    document record looks like beyond its two fields.
+
+    An unknown `vendor_id` is not a 404. This route never asks the bidder
+    registry whether the id is real, and a bidder who submitted nothing is
+    straightforwardly missing everything mandatory — reporting that as a
+    verdict rather than a special case is the same "computed at read time,
+    never stored" shape every other derived value in this module keeps.
+
+    This is deliberately the only eligibility route this task adds. The
+    aggregate Vendor List screen — one row per shortlisted bidder — is a later
+    task (T10 / BD-11); this route exists so `eligibility.assess` has one real
+    caller and one slice of coverage at the HTTP boundary, not so a screen can
+    use it yet.
+    """
+    store = _read()
+    if store.get_rfq(rfq_id) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown RFQ: {rfq_id}")
+
+    documents = store.rfq_documents(rfq_id)
+    issued = [d for d in documents if d.submitted_by_vendor_id is None]
+    submitted = [d for d in documents if d.submitted_by_vendor_id == vendor_id]
+    return assess_eligibility(issued, submitted).model_dump(mode="json")
 
 
 # -- artifact editing --------------------------------------------------------
