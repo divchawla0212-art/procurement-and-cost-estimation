@@ -25,8 +25,8 @@ untracked fixture directories are present, never in pass/fail:
 
 | where | baseline |
 |---|---|
-| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1745 passed, 3 skipped, 0 failed** |
-| CI, and any clean checkout | **1725 passed, 23 skipped, 0 failed** |
+| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1812 passed, 3 skipped, 0 failed** |
+| CI, and any clean checkout | **1792 passed, 23 skipped, 0 failed** |
 
 Anything else is a real regression.
 
@@ -66,14 +66,14 @@ parser itself is covered in CI — only the tests that assert against the *real*
 
 So the CI row is the workstation row with the four corpus-coverage passes, the
 three `data/` passes, the two `pdftotext` passes and the eleven AVL passes
-turned into skips — `1725 = 1745 - 4 - 3 - 2 - 11`, `23 = 3 + 4 + 3 + 2 + 11`;
-1748 tests either way. When the counts move, measure the workstation row and derive
+turned into skips — `1792 = 1812 - 4 - 3 - 2 - 11`, `23 = 3 + 4 + 3 + 2 + 11`;
+1815 tests either way. When the counts move, measure the workstation row and derive
 the CI row from it; editing the two rows independently is how they drift
 apart.
 
-**The workstation row is measured, not derived**: **1745 passed, 3 skipped**,
-taken on 2026-08-15 on the `rfq-platform-phase-1` branch, after the stage-codes
-fix below, in an environment
+**The workstation row is measured, not derived**: **1812 passed, 3 skipped**,
+taken on 2026-08-16 on the `rfq-platform-phase-1` branch, after the RFQ
+documents below, in an environment
 with `pdftotext`, `data/` (including the ADNOC export) and an ingested
 multi-vendor `projects/` all present. The **eleven**-skip figure that the
 fourth gate contributes is measured too — by moving `data/bidders_details/`
@@ -262,16 +262,83 @@ it passed the moment it was written. It was verified by adding `approved_by` to
 reason: an absence-assertion nobody has watched fail is not known to be wired to
 anything.
 
-`test_there_is_no_adoption_yet` asserts `WorkflowStore` has no
-`adopt_draft_shortlist`. That is deliberate scope, not an oversight — turning a
-draft into invitations is an attributed act with per-vendor guards, and it
-belongs to the task where the RFQ-raising screen needs it.
+`test_there_is_no_adoption_yet` asserted `WorkflowStore` had no
+`adopt_draft_shortlist`. That was deliberate scope, not an oversight — turning
+a draft into invitations is an attributed act with per-vendor guards, and it
+belonged to the task where the RFQ-raising screen needed it. **BD-6 is that
+task, and it replaced that test with the adoption cases below** rather than
+leaving an absence-assertion nobody could satisfy.
+
+The last **67** are Bid Desk's BD-6, real documents against an RFQ: 14 in
+`test_safe_extract.py`, 43 in `test_rfq_documents.py`, 8 more in
+`test_draft_shortlist.py` (adoption, net of the one deleted above) and 2 in
+`test_draft_shortlist_endpoints.py`. None reads a fixture directory or calls a
+provider, so all 67 land in both rows and the AVL gate is still eleven — none
+of this change touched the three files carrying the marker, which is the
+condition set above for re-measuring it.
+
+Four of those are the ones to keep.
+
+`test_deleting_one_of_two_records_sharing_a_blob_leaves_the_blob` is the whole
+of I-D. Content addressing means two records legitimately point at one file, so
+a delete that dropped the blob unconditionally would destroy a document another
+record still names — and a test with **one** document cannot tell the two
+behaviours apart. Its sibling deletes both and asserts the file goes.
+
+`test_the_sharing_guard_still_holds_after_a_reload` is the two-run one, and the
+same trap `test_the_duplicate_guard_still_holds_after_a_reload` records: the
+guard reads the records beside the one being removed, and on run 2 that list
+came off disk. An `rfq_documents` key lost in serialization reads as "nothing
+else references this" and the delete takes a file another record names.
+
+`test_a_record_whose_rfq_is_gone_does_not_load` is the reachable half of I-E.
+**Nothing in this repository deletes an RFQ** — deleting a project is refused
+while it holds one — so the plan's "deleting an RFQ takes its documents" case
+has no door to knock on, and inventing an RFQ-deletion endpoint to test it
+would have been a user-visible feature nobody asked for. The invariant is held
+at both ends instead: `add_rfq_document` refuses an RFQ that is not there, and
+a record whose RFQ has gone is dropped on load rather than kept as a row
+pointing at nothing.
+
+`test_no_leaf_name_may_carry_a_path_separator` is why `doc_store` needs no
+traversal check of its own. A blob path is built from three leaves — an RFQ
+id, a digest and a file name — each refused if it carries a separator, so
+containment holds by construction. There is exactly one traversal guard in this
+repository and it is `workflow/safe_extract.py`; a second copy in the blob
+store would be the copy that does not get fixed.
 
 The web suite is separate and not part of either row above — both rows are
 `python -m pytest` counts. Run it with `npm test` under `web/` (vitest,
 non-watching, exits non-zero on failure); `npm run build` also type-checks the
 test files, since `web/tsconfig.app.json` includes `src`. CI runs both, in the
-`web` job of the same workflow. It stands at **311 passed** across 22 files.
+`web` job of the same workflow. It stands at **323 passed** across 23 files.
+
+The last **12** are Bid Desk's BD-6, in the new `RaiseRfqStep.test.tsx`. That
+component replaced `TechnicalPackageEditor.tsx`, which is deleted: the register
+of document codes it edited is now the documents themselves. `AttachmentTable`
+stays — `Addendum.attachments` still uses the record, and a package that
+carries lines still renders them — but nothing in the wizard adds one any more,
+so `Save package` sends back the lines already there rather than `[]`.
+
+Two of the twelve are worth knowing about. `offers a folder picker, not just a
+file picker` asserts the `webkitdirectory` **attribute**, because React's
+typings do not carry it and it is set through a ref — the line is one `useEffect`
+wide, and without it "Add a folder" quietly adds one file. And
+`sends no paths at all when only some files carry one` is the positional rule:
+`paths` lines up with `files` server-side, so a partial list attaches a path to
+the wrong file. **That one needed `beforeEach(() => vi.clearAllMocks())` to
+mean anything** — without it `toHaveBeenCalledWith` matches a call an *earlier*
+test made, and it passed against a deliberately broken component. Verified by
+flipping `every` to `some` and watching it go red, which is the only reason the
+gap was found.
+
+**A fifth rendering defect joins the four below, same story again.**
+`.field-label` has asymmetric stacked margins (`0.8rem` over, `0.3rem` under),
+right for a label above its input and wrong inside `.fxrow`, which centres its
+children: "Category" measured 5px below the control it names. `.field-label--inline`
+zeroes them. jsdom applies no stylesheet and does no layout, so nothing in this
+suite can see it — it was found by measuring `getBoundingClientRect` on all four
+children of that row in a real browser, and confirmed fixed the same way.
 
 The **5** web tests before those are Bid Desk's BD-5: reworking the
 Shortlisting step and dropping the item screen's Raise RFQ door. Three in
@@ -340,8 +407,10 @@ is now Shortlisting → Issued → Clarifications, and **the technical-package
 editor moved rather than vanishing**: `_scoping_exit` was the only thing
 requiring a frozen package and the Scoping step was the only place to freeze
 one, so deleting both would have left addenda permanently refused with nothing
-able to unblock them. It now lives in `wizard/TechnicalPackageEditor.tsx`,
-rendered by `IssuedStep` above the VDRL, freeze rule unchanged.
+able to unblock them. It moved to `wizard/TechnicalPackageEditor.tsx`, rendered
+by `IssuedStep` above the VDRL, freeze rule unchanged — and BD-6 then replaced
+that file with `wizard/RaiseRfqStep.tsx`, in the same slot and under the same
+rule, editing real documents rather than a register of codes.
 
 Two gate tests were **deleted, not skipped**, with a comment where they sat:
 they asserted an exit criterion that no longer exists.
@@ -981,7 +1050,65 @@ them, so keeping them apart stops a reader assuming one set covers both.
   are two critical sections, which is the fifth time this repository has needed
   that rule. `source` is stored because it records *where the buyer found them*,
   which is not derivable later; approvals are not, because they are read live
-  through `vendor_id`. There is no `adopt_draft_shortlist` yet, on purpose.
+  through `vendor_id`.
+- **Adoption is what turns the draft into invitations, and it happens when the
+  RFQ is raised.** `adopt_draft_shortlist(rfq_id, item_id)` runs inside
+  `create_rfq`'s own `locked_update`, once per covered item, so an RFQ never
+  exists with its adoption half-done and there is no second screen asking a
+  buyer to confirm the selection they already made. Four rules, none of them
+  new: it **does not clear the draft** (a second RFQ may cover the same item
+  later, and emptying the basket is a surprise nobody can undo); it is
+  **idempotent**, keyed the way the draft is keyed, so a registry row and a
+  hand-typed one sharing a trading name adopt as two rows; a registry pick
+  adopts **through the existing `vendor_id` path**, so the snapshot is derived
+  from the registry by `add_shortlist_entry` rather than copied from a draft
+  that holds none of it; and a **blocked bidder is skipped, not invited** —
+  inviting one requires a recorded reason and adoption has nobody to attribute
+  one to. It returns how many were added, so "found nothing" and "skipped
+  everything" are distinguishable.
+- **An RFQ's documents are real files, and the bytes are content-addressed.**
+  `<ROOT>/rfq-docs/<rfq_id>/<sha256[:2]>/<sha256>/<original filename>`, written
+  by `workflow/doc_store.py` — stdlib only, no `workflow.*` imports, the same
+  rule `procurement/store/layout.py` states. **I-D**: that directory holds
+  exactly the blobs referenced by live `RfqDocument` records, so deleting a
+  record deletes its blob **only when no other record still references it**.
+  Two records legitimately point at one blob — the same bytes uploaded twice —
+  and the answer is computed in `remove_rfq_document`, after the removal and
+  against what is left, because it is a read that gates a write to the
+  filesystem. The key is the digest **and** the leaf name, since the path is
+  built from both: the same bytes under two names are two files, and keying on
+  the digest alone would strand one of them. `BlobRef.rel_path` is
+  storage-relative and never absolute, so a record survives the root moving and
+  an S3 implementation has somewhere to put a key; **S3 is not built**, and the
+  `BlobStore` protocol exists so that adding it is a new class rather than a
+  refactor.
+  **I-E**: `workflow.json` holds exactly the `RfqDocument` records whose RFQ
+  still exists. Nothing deletes an RFQ, so it is held at both ends —
+  `add_rfq_document` refuses an unknown RFQ, and `persistence.from_document`
+  drops a record whose RFQ is gone rather than loading a row pointing at
+  nothing.
+  **One collection serves both halves of the enquiry.** `submitted_by_vendor_id`
+  is `None` for a document the contractor issued and a vendor id for one a
+  bidder returned; the freeze rule guards the **contractor's** half only,
+  because bids arrive after the freeze and refusing them would turn the rule
+  that protects the enquiry into one that destroys the responses to it.
+  `TechnicalPackage.documents` is **rebuilt from the records** by
+  `_relist_package_documents` and `set_technical_package`, never accumulated,
+  so a list of ids on the package cannot disagree with the collection it points
+  into — and a package created after its documents were uploaded still lists
+  them.
+- **There is one traversal guard, and it is `workflow/safe_extract.py`.**
+  Extracted from `procurement/project.py::unpack_vendor_zip`, which now calls
+  it: a second copy of a security check is the copy that does not get fixed.
+  Zip members and a browser's `webkitRelativePath` are the same risk arriving
+  through two doors, so they take the same guard. It is deliberately stricter
+  than the inline version it replaced — a `..` segment is refused **on the
+  segment**, not on where it lands, and both separators are normalised first,
+  so `..\\..\\evil` is refused on Linux where it is a legal filename as well as
+  on Windows where it is traversal. Refusals name the offending entry and never
+  the destination directory: the entry is the uploader's own text and the
+  directory is ours. `doc_store` needs no such check — it builds paths from
+  validated leaves — and adding one there would be the second copy again.
 - **`WorkflowStore` knows nothing about disk.** Serialization lives in
   `workflow/persistence.py`, the one module allowed to touch the store's dicts
   directly. That is what made moving one collection to a database a change to
