@@ -26,8 +26,31 @@ Imports stdlib only, and nothing from `workflow.*` or `procurement.*`, so both
 packages can use it without either importing the other.
 """
 import os
+import re
 
-__all__ = ["safe_destination", "safe_relative_path"]
+__all__ = ["has_drive", "safe_destination", "safe_relative_path"]
+
+#: A Windows drive prefix — `C:`, and `C:foo` too, which is *drive-relative*
+#: rather than rooted and is the sneakier of the two.
+_DRIVE = re.compile(r"^[A-Za-z]:")
+
+
+def has_drive(name: str) -> bool:
+    """Whether `name` opens with a drive letter, asked the same way everywhere.
+
+    **Not `os.path.splitdrive`**, which is `ntpath` on Windows and `posixpath`
+    on Linux — and the POSIX one is a no-op: it answers `('', 'C:/Windows/x')`,
+    so a check built on it silently stops checking on the deployment target and
+    on CI. That is worse than no check at all, because it reads as one. The
+    pattern below is the same answer on every platform, which is what the
+    caller's refusal claims.
+
+    This is not where containment is enforced — `safe_destination` resolves and
+    compares, and `doc_store` builds paths out of leaves. It is here so that a
+    drive letter is refused *by name*, with a sentence saying why, rather than
+    quietly becoming an ordinary directory called `C:` inside the destination.
+    """
+    return bool(_DRIVE.match(name))
 
 
 def _refuse(what: str, name: str, reason: str) -> None:
@@ -52,7 +75,7 @@ def safe_relative_path(name: str, *, what: str = "path") -> str:
         _refuse(what, name.replace("\0", "\\0"), "the name contains a null byte")
 
     normalised = name.replace("\\", "/")
-    if normalised.startswith("/") or os.path.splitdrive(normalised)[0]:
+    if normalised.startswith("/") or has_drive(normalised):
         _refuse(what, name, "an absolute path cannot be stored inside the "
                             "destination directory")
 

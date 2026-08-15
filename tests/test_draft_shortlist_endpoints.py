@@ -247,3 +247,47 @@ def test_the_draft_is_still_there_after_an_rfq_took_it(tmp_path, monkeypatch):
 
     body = client.get(f"/api/workflow/projects/{project_id}").json()
     assert [e["vendor_name"] for e in body["draft_shortlists"][item_id]] == ["Ducab LLC"]
+
+
+def test_a_pick_the_rfq_could_not_invite_is_named_in_the_response(tmp_path, monkeypatch):
+    """A silent skip is the failure here. The buyer picked this vendor; if the
+    RFQ they just raised is one row short they have to be told which row and
+    why, and the sentence is the store's own refusal rather than a summary of
+    it. Same shape as the per-vendor refusals the item screen already renders
+    beside the row that caused them.
+    """
+    client = _client(tmp_path, monkeypatch)
+    project_id, item_id = make_item(client)
+    bidder = client.post("/api/workflow/bidders", json={
+        "name": "Suspended Cables LLC", "prequal_status": "Suspended",
+        "trade_categories": ["CABLES - FIBER OPTICS"],
+    }).json()
+    pick(client, project_id, item_id, vendor_id=bidder["id"],
+         vendor_name=bidder["name"])
+    pick(client, project_id, item_id, vendor_name="Ducab LLC", source="Manual")
+
+    body = client.post("/api/workflow/rfqs", json={
+        "project_id": project_id, "item_ids": [item_id],
+        "reference": "ADP-RFQ-2026-014", "package": "HV cable",
+        "discipline": "Cables", "value_estimate_aed": 900000,
+    }).json()
+
+    assert body["shortlist_adopted"] == 1
+    assert [s["vendor_name"] for s in body["shortlist_skipped"]] == [
+        "Suspended Cables LLC"
+    ]
+    assert "Record a reason to invite them anyway." in body["shortlist_skipped"][0]["reason"]
+
+
+def test_an_rfq_that_adopted_everything_reports_no_refusals(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    project_id, item_id = make_item(client)
+    pick(client, project_id, item_id, vendor_name="Ducab LLC", source="Manual")
+
+    body = client.post("/api/workflow/rfqs", json={
+        "project_id": project_id, "item_ids": [item_id],
+        "reference": "ADP-RFQ-2026-015", "package": "HV cable",
+        "discipline": "Cables", "value_estimate_aed": 900000,
+    }).json()
+
+    assert (body["shortlist_adopted"], body["shortlist_skipped"]) == (1, [])

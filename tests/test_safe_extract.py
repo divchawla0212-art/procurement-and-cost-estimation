@@ -9,10 +9,15 @@ Every refusal names the offending entry, because a refusal that does not say
 which member was wrong leaves the uploader nothing to act on.
 """
 import os
+import posixpath
 
 import pytest
 
-from workflow.safe_extract import safe_destination, safe_relative_path
+from workflow.safe_extract import (
+    has_drive,
+    safe_destination,
+    safe_relative_path,
+)
 
 
 def test_a_normal_relative_path_resolves_inside_the_base(tmp_path):
@@ -48,6 +53,37 @@ def test_a_windows_absolute_path_is_refused(tmp_path):
     reads it."""
     with pytest.raises(ValueError, match="absolute"):
         safe_destination(str(tmp_path), r"C:\Windows\System32\evil.dll")
+
+
+def test_a_drive_relative_path_is_refused(tmp_path):
+    """`C:evil.dll` is drive-relative rather than rooted, so it carries no
+    separator at all and the two checks either side of the drive one do not
+    see it."""
+    with pytest.raises(ValueError, match="absolute"):
+        safe_destination(str(tmp_path), "C:evil.dll")
+
+
+def test_the_drive_check_gives_the_same_answer_on_every_platform():
+    """The regression guard for a check that had **stopped checking on CI**.
+
+    `os.path.splitdrive` is `ntpath` on Windows and `posixpath` on Linux, and
+    the POSIX one is a no-op: it answers `('', 'C:/Windows/x')`. The original
+    spelling of this check was built on it, so it refused a drive letter on a
+    workstation and waved it through on the deployment platform — and the test
+    above passed locally while asserting something false about CI.
+
+    Asserted on the predicate rather than through `safe_destination`, because
+    that is the only way a *Windows* run can tell the two implementations
+    apart: `pytest.raises` is satisfied by both here, and by only one there.
+    """
+    assert has_drive("C:/Windows/x") is True
+    assert has_drive("c:evil.dll") is True
+    assert has_drive("Z:") is True
+    assert has_drive("folder/file.pdf") is False
+    assert has_drive("no-drive:here/file.pdf") is False
+    # The spelling this replaced, evaluated the way CI evaluates it. If these
+    # two ever agree again, the check has gone back to being platform-dependent.
+    assert posixpath.splitdrive("C:/Windows/x")[0] == ""
 
 
 def test_a_backslash_escape_is_refused_on_every_platform(tmp_path):

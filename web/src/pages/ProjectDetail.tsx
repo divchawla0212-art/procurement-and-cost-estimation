@@ -261,7 +261,21 @@ export function ProjectDetail({
             onExtract={extractRfqDoc}
             onCancel={() => setRaising(false)}
             onSubmit={async (body) => {
-              await createRfq(body)
+              const raised = await createRfq(body)
+              // The items' draft picks became invitations server-side. Any the
+              // server refused are named here rather than dropped: the buyer
+              // chose them, and a shortlist silently one row short is the
+              // failure this reports. The same banner the live-period warning
+              // uses — this is a caution, not a failed creation.
+              setWarning(
+                raised.shortlist_skipped.length
+                  ? `${raised.shortlist_adopted} of the vendors you picked were ` +
+                    `shortlisted. ` +
+                    raised.shortlist_skipped
+                      .map((s) => `${s.vendor_name}: ${s.reason}`)
+                      .join(' ')
+                  : null,
+              )
               setRaising(false)
               setSelected(new Set())
               // The user stays on the project — the new RFQ appears in the

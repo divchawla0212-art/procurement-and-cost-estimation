@@ -269,6 +269,24 @@ export interface Rfq {
   history: StageTransition[]
 }
 
+/** A vendor the buyer had picked onto an item's draft that the new RFQ could
+ *  not invite, and the server's own sentence saying why.
+ *
+ *  Adoption is not all-or-nothing — one suspended vendor must not stop the
+ *  other twenty-four being invited — so the ones it could not take are named
+ *  rather than dropped. Same shape as the per-vendor refusals the item screen
+ *  renders beside the row that caused them. */
+export interface SkippedPick {
+  vendor_name: string
+  reason: string
+}
+
+/** What `POST /rfqs` answers: the RFQ, plus what its draft adoption did. */
+export interface RfqRaised extends Rfq {
+  shortlist_adopted: number
+  shortlist_skipped: SkippedPick[]
+}
+
 export interface RfqRoster {
   rfqs: Rfq[]
   stages: string[]

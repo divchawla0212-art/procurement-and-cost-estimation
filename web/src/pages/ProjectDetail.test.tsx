@@ -8,6 +8,7 @@ import {
   detail,
   rfq,
 } from './workflow-fixtures'
+import type { Rfq, RfqRaised, SkippedPick } from '../types'
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
@@ -35,6 +36,19 @@ import {
   fetchWorkflowProject,
   updateWorkflowProject,
 } from '../api'
+
+/** `POST /rfqs` answers with the RFQ *and* what its draft adoption did. The
+ *  default here is the uneventful case — everything the buyer picked was
+ *  invited — so a test only says otherwise when that is its subject. */
+const raised = (
+  record: Rfq,
+  skipped: SkippedPick[] = [],
+  adopted = 0,
+): RfqRaised => ({
+  ...record,
+  shortlist_adopted: adopted,
+  shortlist_skipped: skipped,
+})
 
 function renderDetail(onOpenItem = vi.fn(), onBack = vi.fn()) {
   render(
@@ -258,7 +272,7 @@ describe('ProjectDetail', () => {
     vi.mocked(fetchWorkflowProject).mockResolvedValue(
       detail({ items: [GENERATOR, CABLE] }),
     )
-    vi.mocked(createRfq).mockResolvedValue(rfq('rfq_1', 'ADP-RFQ-2026-014', ['itm_1']))
+    vi.mocked(createRfq).mockResolvedValue(raised(rfq('rfq_1', 'ADP-RFQ-2026-014', ['itm_1'])))
 
     renderDetail()
     fireEvent.click(await screen.findByRole('checkbox', { name: 'Select Gas generator' }))
@@ -551,12 +565,54 @@ describe('ProjectDetail', () => {
     expect(screen.getByLabelText('Reference')).toHaveValue('ADP-RFQ-2026-014')
   })
 
+  it('names a vendor the new RFQ could not shortlist', async () => {
+    // The buyer's draft picks become invitations when the RFQ is raised, and
+    // adoption is not all-or-nothing. A vendor it could not invite is named
+    // with the server's own sentence — a shortlist quietly one row short, with
+    // nothing on screen saying which row or why, is the failure this reports.
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(
+      detail({ items: [GENERATOR, CABLE] }),
+    )
+    vi.mocked(createRfq).mockResolvedValue(
+      raised(
+        rfq('rfq_1', 'ADP-RFQ-2026-014', ['itm_1']),
+        [
+          {
+            vendor_name: 'Suspended Cables LLC',
+            reason:
+              'Suspended Cables LLC is suspended. Record a reason to invite them anyway.',
+          },
+        ],
+        3,
+      ),
+    )
+
+    renderDetail()
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select Gas generator' }))
+    fireEvent.click(screen.getByRole('button', { name: /raise rfq/i }))
+    const type = (label: string, value: string) =>
+      fireEvent.change(screen.getByLabelText(label), { target: { value } })
+    await screen.findByRole('option', { name: /^Cables/ })
+    type('Reference', 'ADP-RFQ-2026-014')
+    type('Package', 'Power generation')
+    type('Discipline', 'Cables')
+    type('Estimated budget (AED)', '18000000')
+    fireEvent.click(screen.getByRole('button', { name: /create rfq/i }))
+
+    const banner = await screen.findByRole('alert')
+    expect(banner).toHaveTextContent('Suspended Cables LLC')
+    expect(banner).toHaveTextContent('Record a reason to invite them anyway.')
+    // What did land, so "nobody was picked" and "everybody was refused" read
+    // differently.
+    expect(banner).toHaveTextContent('3 of the vendors you picked')
+  })
+
   it('can raise one RFQ spanning several items', async () => {
     vi.mocked(fetchWorkflowProject).mockResolvedValue(
       detail({ items: [GENERATOR, CABLE] }),
     )
     vi.mocked(createRfq).mockResolvedValue(
-      rfq('rfq_1', 'ADP-RFQ-2026-014', ['itm_1', 'itm_2']),
+      raised(rfq('rfq_1', 'ADP-RFQ-2026-014', ['itm_1', 'itm_2'])),
     )
 
     renderDetail()

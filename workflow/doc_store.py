@@ -8,8 +8,14 @@ browsing the directory sees names rather than hashes — and two different files
 with the same name cannot collide, because they differ before the leaf.
 
 Modelled on `procurement/store/layout.py`, and it keeps that module's rule:
-**stdlib only, and no imports from `workflow.*`**, so it cannot become
-circular. That rule is also what decides the shape of the guard here. A blob
+**stdlib only, and no imports from `workflow.*`**, with exactly one exception —
+`safe_extract.has_drive`, a two-line predicate in a module that imports nothing
+from either package, so the cycle the rule exists to prevent is not reachable
+through it. The exception is bound to that one predicate and is there because
+the alternative is a second copy of a check about what looks absolute, and the
+first version of *that* check was wrong on the deployment platform: a copy that
+gets fixed while its twin does not is the failure this whole task is shaped
+around. That rule is also what decides the shape of the guard here. A blob
 path is built out of three *leaves* — an RFQ id, a digest and a file name — and
 every one of them is refused if it carries a separator, so containment holds by
 construction rather than by a second path-resolution check. The one traversal
@@ -29,6 +35,8 @@ import os
 import uuid
 from dataclasses import dataclass
 from typing import BinaryIO, Protocol
+
+from workflow.safe_extract import has_drive
 
 #: The one directory this module owns, under the platform root.
 DOCS_DIRNAME = "rfq-docs"
@@ -79,7 +87,12 @@ def _leaf(value: str, what: str) -> str:
         raise ValueError(f"Unsafe {what}: {value} is not a file name")
     if "/" in value or "\\" in value or "\0" in value:
         raise ValueError(f"Unsafe {what}: {value} is not a single path segment")
-    if os.path.splitdrive(value)[0]:
+    if has_drive(value):
+        # `C:foo` — drive-relative, and the one drive spelling the separator
+        # checks above do not already cover. Borrowed from `safe_extract`
+        # rather than rewritten: it used to be `os.path.splitdrive`, which is
+        # a no-op on POSIX, so the copy that got fixed would have been the
+        # only copy that was.
         raise ValueError(f"Unsafe {what}: {value} names a drive")
     return value
 

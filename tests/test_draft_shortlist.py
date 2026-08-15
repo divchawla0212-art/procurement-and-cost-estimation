@@ -28,7 +28,7 @@ import pytest
 from pydantic import ValidationError
 
 from workflow.models.draft_shortlist import DraftShortlistEntry
-from workflow.store import WorkflowStore
+from workflow.store import IncompleteShortlistEntry, WorkflowStore
 
 ADDED_AT = "2026-08-15T09:00:00+00:00"
 
@@ -429,9 +429,9 @@ def test_adoption_copies_the_draft_onto_the_rfq():
     store.add_draft_shortlist_entry(item.id, an_entry(item.id, "Ducab LLC"))
     rfq = an_rfq_over(store, project, item)
 
-    added = store.adopt_draft_shortlist(rfq.id, item.id)
+    result = store.adopt_draft_shortlist(rfq.id, item.id)
 
-    assert added == 1
+    assert (result.added, result.skipped) == (1, [])
     assert [e.vendor_name for e in store.shortlist_for(rfq.id)] == ["Ducab LLC"]
 
 
@@ -478,7 +478,9 @@ def test_adoption_is_idempotent():
     first = store.adopt_draft_shortlist(rfq.id, item.id)
     second = store.adopt_draft_shortlist(rfq.id, item.id)
 
-    assert (first, second) == (1, 0)
+    assert (first.added, second.added) == (1, 0)
+    # A vendor already there is not a refusal, so it is not reported as one.
+    assert second.skipped == []
     assert len(store.shortlist_for(rfq.id)) == 1
 
 
@@ -491,9 +493,9 @@ def test_a_vendor_already_invited_by_hand_is_not_duplicated():
     rfq = an_rfq_over(store, project, item)
     store.add_shortlist_entry(rfq.id, vendor_id=bidder.id)
 
-    added = store.adopt_draft_shortlist(rfq.id, item.id)
+    result = store.adopt_draft_shortlist(rfq.id, item.id)
 
-    assert added == 0
+    assert result.added == 0
     assert len(store.shortlist_for(rfq.id)) == 1
 
 
@@ -509,9 +511,9 @@ def test_a_registry_pick_and_a_hand_typed_one_of_the_same_name_both_adopt():
     store.add_draft_shortlist_entry(item.id, an_entry(item.id, "Ducab LLC"))
     rfq = an_rfq_over(store, project, item)
 
-    added = store.adopt_draft_shortlist(rfq.id, item.id)
+    result = store.adopt_draft_shortlist(rfq.id, item.id)
 
-    assert added == 2
+    assert result.added == 2
     assert [e.vendor_id for e in store.shortlist_for(rfq.id)] == [bidder.id, None]
 
 
@@ -528,17 +530,78 @@ def test_a_blocked_bidder_is_skipped_rather_than_invited_unattributed():
     store.add_draft_shortlist_entry(item.id, an_entry(item.id, "Ducab LLC"))
     rfq = an_rfq_over(store, project, item)
 
-    added = store.adopt_draft_shortlist(rfq.id, item.id)
+    result = store.adopt_draft_shortlist(rfq.id, item.id)
 
-    assert added == 1
+    assert result.added == 1
     assert [e.vendor_name for e in store.shortlist_for(rfq.id)] == ["Ducab LLC"]
+
+
+def test_a_skipped_pick_is_reported_with_the_refusals_own_sentence():
+    """A silent skip is the failure this reports. A buyer who picked a
+    suspended vendor and then raised the RFQ would otherwise get a shortlist
+    one row short with nothing on any screen saying which row, or why.
+
+    The sentence is the store's own refusal, not a summary of it: it names the
+    vendor and what would unblock them, which is what a buyer needs to act."""
+    store, project, item = store_with_an_item()
+    blocked = a_registry_bidder(store, name="Suspended Cables LLC",
+                                prequal_status="Suspended")
+    store.add_draft_shortlist_entry(
+        item.id, an_entry(item.id, blocked.name, vendor_id=blocked.id, source="ADNOC")
+    )
+    rfq = an_rfq_over(store, project, item)
+
+    [skipped] = store.adopt_draft_shortlist(rfq.id, item.id).skipped
+
+    assert skipped.vendor_name == "Suspended Cables LLC"
+    assert "Suspended Cables LLC" in skipped.reason
+    assert "Record a reason to invite them anyway." in skipped.reason
+
+
+def test_a_pick_whose_registry_row_is_gone_is_reported_too():
+    """A draft can outlive the bidder it points at — `delete_bidder` refuses
+    while a *shortlist* references a vendor, and a draft is not one."""
+    store, project, item = store_with_an_item()
+    doomed = a_registry_bidder(store, name="Dissolved Cables LLC")
+    store.add_draft_shortlist_entry(
+        item.id, an_entry(item.id, doomed.name, vendor_id=doomed.id, source="ADNOC")
+    )
+    store.delete_bidder(doomed.id)
+    rfq = an_rfq_over(store, project, item)
+
+    result = store.adopt_draft_shortlist(rfq.id, item.id)
+
+    assert result.added == 0
+    assert [s.vendor_name for s in result.skipped] == ["Dissolved Cables LLC"]
+    assert "no longer in the bidder registry" in result.skipped[0].reason
+
+
+def test_adoption_does_not_swallow_an_unexpected_refusal():
+    """The catch is two named conditions wide, and no wider.
+
+    `IncompleteShortlistEntry` is a `ValueError` subclass, so the blanket
+    `except (ValueError, KeyError)` this replaced absorbed it — and would have
+    absorbed any validation `add_shortlist_entry` grows later, presenting as
+    vendors quietly vanishing from shortlists with nothing to point at.
+    """
+    store, project, item = store_with_an_item()
+    store.add_draft_shortlist_entry(item.id, an_entry(item.id, "Ducab LLC"))
+    rfq = an_rfq_over(store, project, item)
+
+    def refuse(*args, **kwargs):
+        raise IncompleteShortlistEntry("something new went wrong")
+
+    store.add_shortlist_entry = refuse
+
+    with pytest.raises(IncompleteShortlistEntry):
+        store.adopt_draft_shortlist(rfq.id, item.id)
 
 
 def test_adopting_an_empty_draft_adds_nothing():
     store, project, item = store_with_an_item()
     rfq = an_rfq_over(store, project, item)
 
-    assert store.adopt_draft_shortlist(rfq.id, item.id) == 0
+    assert store.adopt_draft_shortlist(rfq.id, item.id) == (0, [])
     assert store.shortlist_for(rfq.id) == []
 
 

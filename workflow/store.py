@@ -1,5 +1,6 @@
 from collections.abc import Iterable
 from datetime import date, datetime, timezone
+from typing import NamedTuple
 
 from workflow import clarifications
 from workflow.bidders import evaluate
@@ -45,6 +46,47 @@ _BIDDER_IMMUTABLE = frozenset({"id"})
 # fields that record issuance. An update that could set `issued_at` would let a
 # draft claim it went to bidders without the package ever moving.
 _ADDENDUM_IMMUTABLE = frozenset({"id", "rfq_id", "number", "issued_at", "issued_by"})
+
+
+class BlockedBidder(ValueError):
+    """A registry bidder whose own record refuses the invitation until somebody
+    records a reason.
+
+    A distinct type for the same reason `IncompleteShortlistEntry` is one: a
+    caller that has to tell this refusal apart from every other `ValueError`
+    `add_shortlist_entry` can raise would otherwise have to match on the
+    wording, and the wording is the part most likely to improve.
+
+    It stays a `ValueError` subclass so the routes' existing 409 mapping is
+    unchanged — this widens what a caller *can* distinguish, not what the
+    refusal is.
+    """
+
+
+class SkippedPick(NamedTuple):
+    """One draft pick adoption did not invite, and the sentence that says why.
+
+    The reason is the refusal's own text, never a summary of it: it is what a
+    buyer needs in order to act, and it is already written in the one place
+    that knows the rule.
+    """
+
+    vendor_name: str
+    reason: str
+
+
+class DraftAdoption(NamedTuple):
+    """What `adopt_draft_shortlist` did.
+
+    Not a bare count. A count says how many arrived and is silent about the
+    ones that did not, and this repository's rule is that a refusal is never
+    silent — `CLAUDE.md`: a gate never returns a bare `False`. A buyer who
+    picked a suspended vendor and then raised the RFQ would otherwise get a
+    shortlist quietly one row short, with nothing on any screen saying so.
+    """
+
+    added: int
+    skipped: list[SkippedPick]
 
 
 class IncompleteShortlistEntry(ValueError):
@@ -813,7 +855,7 @@ class WorkflowStore:
                 raise KeyError(f"Unknown bidder: {vendor_id}")
             suitability = evaluate(bidder, self._rfqs[rfq_id], as_of or date.today())
             if suitability.blockers and not (override_reason or "").strip():
-                raise ValueError(
+                raise BlockedBidder(
                     " ".join(suitability.blockers)
                     + " Record a reason to invite them anyway."
                 )
@@ -844,7 +886,7 @@ class WorkflowStore:
         self._revoke_shortlist_approval(rfq_id)
         return entry
 
-    def adopt_draft_shortlist(self, rfq_id: str, item_id: str) -> int:
+    def adopt_draft_shortlist(self, rfq_id: str, item_id: str) -> DraftAdoption:
         """Turn an item's draft picks into invitations on this RFQ.
 
         This is the moment a draft stops being a draft, and it is called when
@@ -868,13 +910,21 @@ class WorkflowStore:
           derived from the registry at adoption time by `add_shortlist_entry`
           rather than copied from the draft, which holds none of them. That
           derivation is not reimplemented here; there is one of it.
-        - **A blocked bidder is skipped, not invited.** Inviting one requires
-          a recorded reason and adoption has nobody to attribute one to, so
-          they are left for the buyer to invite deliberately — which is the
-          entire point of that guard.
+        - **A blocked bidder is skipped, not invited, and the skip is
+          reported.** Inviting one requires a recorded reason and adoption has
+          nobody to attribute one to, so they are left for the buyer to invite
+          deliberately — which is the entire point of that guard. What must
+          *not* happen is that they disappear quietly: the returned
+          `DraftAdoption` carries every skipped vendor and the refusal's own
+          sentence, and the RFQ-creation route sends them back with the 201.
 
-        Returns how many entries were actually added, so a caller can tell an
-        adoption that found nothing from one that skipped everything.
+        Exactly two conditions are caught, and both are named: a bidder the
+        registry no longer holds, checked here before the call, and
+        `BlockedBidder`, which is a distinct type precisely so this catch can be
+        narrow. Everything else — `IncompleteShortlistEntry`, a validation error
+        `add_shortlist_entry` grows later — propagates. A blanket
+        `except (ValueError, KeyError)` here would turn any future regression
+        into vendors quietly vanishing from shortlists with nothing to point at.
         """
         if rfq_id not in self._rfqs:
             raise KeyError(f"Unknown RFQ: {rfq_id}")
@@ -888,8 +938,21 @@ class WorkflowStore:
             key(e.vendor_id, e.vendor_name) for e in self._shortlists.get(rfq_id, [])
         }
         added = 0
+        skipped: list[SkippedPick] = []
         for pick in self.draft_shortlist(item_id):
             if key(pick.vendor_id, pick.vendor_name) in seen:
+                continue
+            if pick.vendor_id and pick.vendor_id not in self._bidders:
+                # The draft outlived the registry row it pointed at. Checked
+                # rather than caught, so the `KeyError` that means "unknown
+                # RFQ" upstairs stays an error rather than a skip.
+                skipped.append(SkippedPick(
+                    vendor_name=pick.vendor_name,
+                    reason=(
+                        f"{pick.vendor_name} is no longer in the bidder "
+                        f"registry, so there was nothing to invite."
+                    ),
+                ))
                 continue
             try:
                 if pick.vendor_id:
@@ -906,15 +969,15 @@ class WorkflowStore:
                         prequal_status="Under review",
                         scope_code_fit=True,
                     )
-            except (ValueError, KeyError):
-                # Blocked, or pointing at a bidder the registry no longer
-                # holds. Skipped rather than raised: one such pick must not
-                # stop the other twenty-four being invited, and raising here
-                # would fail the RFQ creation this runs inside.
+            except BlockedBidder as exc:
+                # One such pick must not stop the other twenty-four being
+                # invited, and raising would fail the RFQ creation this runs
+                # inside. The refusal's own sentence travels with it.
+                skipped.append(SkippedPick(pick.vendor_name, str(exc)))
                 continue
             seen.add(key(pick.vendor_id, pick.vendor_name))
             added += 1
-        return added
+        return DraftAdoption(added=added, skipped=skipped)
 
     def remove_shortlist_entry(self, rfq_id: str, entry_id: str) -> None:
         """Refused while the entry has raised any clarification.

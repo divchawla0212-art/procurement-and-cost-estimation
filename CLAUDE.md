@@ -25,8 +25,8 @@ untracked fixture directories are present, never in pass/fail:
 
 | where | baseline |
 |---|---|
-| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1812 passed, 3 skipped, 0 failed** |
-| CI, and any clean checkout | **1792 passed, 23 skipped, 0 failed** |
+| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1819 passed, 3 skipped, 0 failed** |
+| CI, and any clean checkout | **1799 passed, 23 skipped, 0 failed** |
 
 Anything else is a real regression.
 
@@ -66,12 +66,12 @@ parser itself is covered in CI — only the tests that assert against the *real*
 
 So the CI row is the workstation row with the four corpus-coverage passes, the
 three `data/` passes, the two `pdftotext` passes and the eleven AVL passes
-turned into skips — `1792 = 1812 - 4 - 3 - 2 - 11`, `23 = 3 + 4 + 3 + 2 + 11`;
-1815 tests either way. When the counts move, measure the workstation row and derive
+turned into skips — `1799 = 1819 - 4 - 3 - 2 - 11`, `23 = 3 + 4 + 3 + 2 + 11`;
+1822 tests either way. When the counts move, measure the workstation row and derive
 the CI row from it; editing the two rows independently is how they drift
 apart.
 
-**The workstation row is measured, not derived**: **1812 passed, 3 skipped**,
+**The workstation row is measured, not derived**: **1819 passed, 3 skipped**,
 taken on 2026-08-16 on the `rfq-platform-phase-1` branch, after the RFQ
 documents below, in an environment
 with `pdftotext`, `data/` (including the ADNOC export) and an ingested
@@ -311,7 +311,7 @@ The web suite is separate and not part of either row above — both rows are
 `python -m pytest` counts. Run it with `npm test` under `web/` (vitest,
 non-watching, exits non-zero on failure); `npm run build` also type-checks the
 test files, since `web/tsconfig.app.json` includes `src`. CI runs both, in the
-`web` job of the same workflow. It stands at **323 passed** across 23 files.
+`web` job of the same workflow. It stands at **324 passed** across 23 files.
 
 The last **12** are Bid Desk's BD-6, in the new `RaiseRfqStep.test.tsx`. That
 component replaced `TechnicalPackageEditor.tsx`, which is deleted: the register
@@ -1064,8 +1064,20 @@ them, so keeping them apart stops a reader assuming one set covers both.
   from the registry by `add_shortlist_entry` rather than copied from a draft
   that holds none of it; and a **blocked bidder is skipped, not invited** —
   inviting one requires a recorded reason and adoption has nobody to attribute
-  one to. It returns how many were added, so "found nothing" and "skipped
-  everything" are distinguishable.
+  one to.
+  **A skip is reported, never dropped.** It returns a `DraftAdoption` — the
+  count *and* every skipped vendor with the refusal's own sentence — and
+  `POST /rfqs` sends both back as `shortlist_adopted` / `shortlist_skipped`,
+  which the project screen renders in its warning banner. A count alone is
+  silent about what did not arrive, and a buyer whose shortlist is quietly one
+  row short has nothing to act on; that is the same rule as "a gate never
+  returns a bare `False`". Exactly **two** conditions are absorbed and both are
+  named — a registry row that has gone, checked before the call, and
+  `BlockedBidder`, which exists as a distinct `ValueError` subclass precisely
+  so this catch can be narrow. The blanket `except (ValueError, KeyError)` this
+  replaced also swallowed `IncompleteShortlistEntry`, and would have swallowed
+  any validation `add_shortlist_entry` grows later: a regression there would
+  have presented as vendors quietly vanishing from shortlists.
 - **An RFQ's documents are real files, and the bytes are content-addressed.**
   `<ROOT>/rfq-docs/<rfq_id>/<sha256[:2]>/<sha256>/<original filename>`, written
   by `workflow/doc_store.py` — stdlib only, no `workflow.*` imports, the same
@@ -1109,6 +1121,20 @@ them, so keeping them apart stops a reader assuming one set covers both.
   the destination directory: the entry is the uploader's own text and the
   directory is ours. `doc_store` needs no such check — it builds paths from
   validated leaves — and adding one there would be the second copy again.
+  **`os.path.splitdrive` is not how you ask whether something is absolute.**
+  It is `ntpath` on Windows and `posixpath` on Linux, and the POSIX one is a
+  no-op: `posixpath.splitdrive('C:/Windows/x')` answers `('', 'C:/Windows/x')`.
+  The drive check shipped built on it, so it refused a drive letter on a
+  workstation and waved it through on the deployment platform and on CI — a
+  check that reads as one and is not, which is worse than none. It is now
+  `safe_extract.has_drive`, a regex, and `doc_store` imports *that* rather than
+  keeping its own copy: the one exception to that module's no-`workflow.*` rule,
+  bound to that one predicate, because the alternative is two copies of a check
+  that has already been wrong once. `test_the_drive_check_gives_the_same_answer_on_every_platform`
+  asserts the predicate rather than the refusal, since that is the only way a
+  Windows run can tell the two implementations apart — `pytest.raises` is
+  satisfied by both here and by only one on CI, which is how it passed locally
+  while asserting something false.
 - **`WorkflowStore` knows nothing about disk.** Serialization lives in
   `workflow/persistence.py`, the one module allowed to touch the store's dicts
   directly. That is what made moving one collection to a database a change to

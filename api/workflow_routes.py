@@ -1030,17 +1030,35 @@ def create_rfq(body: RfqIn) -> dict:
     Inside the same `locked_update` as the creation, so an RFQ never exists
     with its adoption half-done. `adopt_draft_shortlist` is idempotent and
     leaves the draft alone — the item may be covered again later.
+
+    **A pick adoption could not invite is reported, never dropped.** A buyer
+    who picked a suspended vendor would otherwise get a shortlist quietly one
+    row short. `shortlist_skipped` carries each one with the refusal's own
+    sentence — the same shape the item screen already renders beside a row it
+    could not shortlist — and `shortlist_adopted` counts what did land, so
+    "nobody was picked" and "everybody was refused" are different answers.
     """
+    skipped: list[dict] = []
+    adopted = 0
     try:
         with persistence.locked_update(_root()) as store:
             rfq = store.create_rfq(**body.model_dump())
             for item_id in rfq.item_ids:
-                store.adopt_draft_shortlist(rfq.id, item_id)
+                result = store.adopt_draft_shortlist(rfq.id, item_id)
+                adopted += result.added
+                skipped.extend(
+                    {"vendor_name": s.vendor_name, "reason": s.reason}
+                    for s in result.skipped
+                )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return rfq.model_dump(mode="json")
+    return {
+        **rfq.model_dump(mode="json"),
+        "shortlist_adopted": adopted,
+        "shortlist_skipped": skipped,
+    }
 
 
 @router.post("/rfqs/extract")

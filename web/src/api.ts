@@ -15,6 +15,7 @@ import type {
   Rfq,
   RfqDetail,
   RfqDocument,
+  RfqRaised,
   RfqRoster,
   ShortlistEntry,
   TbeTemplate,
@@ -341,7 +342,11 @@ export function deleteWorkflowItem(
   ).then(expectNoContent)
 }
 
-export function createRfq(body: RfqInput): Promise<Rfq> {
+/** Raise an RFQ. The answer carries what its draft adoption did: the item's
+ *  picks become invitations here, and any the server could not invite come
+ *  back named, with its own refusal sentence. Dropping them would leave a
+ *  buyer with a shortlist quietly one row short. */
+export function createRfq(body: RfqInput): Promise<RfqRaised> {
   return sendJson('/api/workflow/rfqs', 'POST', body)
 }
 
