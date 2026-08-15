@@ -17,10 +17,12 @@ import { Card, ErrorState, LoadingState } from '../components/primitives'
 export function RfqDetail({
   rfqId,
   stages,
+  stageCodes,
   onBack,
 }: {
   rfqId: string
   stages: string[]
+  stageCodes: Record<string, string>
   onBack: () => void
 }): JSX.Element {
   const { data, error, loading } = useAsync(() => fetchRfq(rfqId), [rfqId])
@@ -48,7 +50,7 @@ export function RfqDetail({
 
       {/* counts are meaningless for a single RFQ — the strip is showing
           position here, not a roster tally */}
-      <StageStrip stages={stages} counts={{}} current={rfq.stage} />
+      <StageStrip stages={stages} counts={{}} codes={stageCodes} current={rfq.stage} />
 
       <div className={`banner ${gate.passed ? 'banner--ok' : 'banner--warn'}`}>
         {gate.passed

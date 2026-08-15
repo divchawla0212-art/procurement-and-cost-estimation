@@ -21,6 +21,17 @@ const STAGES = [
   'PO Issued',
 ]
 
+const STAGE_CODES: Record<string, string> = {
+  Shortlisting: 'RFQ-02',
+  Issued: 'RFQ-03',
+  Clarifications: 'RFQ-04',
+  'Bids Received': 'RFQ-04A',
+  Evaluation: 'RFQ-05',
+  Negotiation: 'RFQ-06',
+  Awarded: 'RFQ-06',
+  'PO Issued': 'RFQ-07',
+}
+
 function detail(over: Partial<RfqDetailData> = {}): RfqDetailData {
   return {
     rfq: {
@@ -65,7 +76,7 @@ function detail(over: Partial<RfqDetailData> = {}): RfqDetailData {
 
 async function show(data: RfqDetailData) {
   vi.mocked(fetchRfq).mockResolvedValue(data)
-  render(<RfqDetail rfqId="rfq_abc" stages={STAGES} onBack={() => {}} />)
+  render(<RfqDetail rfqId="rfq_abc" stages={STAGES} stageCodes={STAGE_CODES} onBack={() => {}} />)
   await waitFor(() => {
     expect(screen.queryByText(/Loading RFQ…/i)).not.toBeInTheDocument()
   })

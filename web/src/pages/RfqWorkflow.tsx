@@ -42,7 +42,7 @@ export function RfqWorkflow(): JSX.Element {
 
       {/* No `current` on the roster: the strip is a tally of every RFQ here,
           and marking one of nine stages would misread as "the" stage. */}
-      <StageStrip stages={data.stages} counts={data.stage_counts} />
+      <StageStrip stages={data.stages} counts={data.stage_counts} codes={data.stage_codes} />
 
       {data.rfqs.length === 0 ? (
         <EmptyState title="No RFQs yet">

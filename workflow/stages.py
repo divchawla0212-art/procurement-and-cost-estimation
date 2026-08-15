@@ -8,16 +8,19 @@ class Stage(str, Enum):
 
     An RFQ begins at SHORTLISTING. The stage that used to come before it is in
     `RETIRED_STAGES`, not here: a member nobody transitions to is still a
-    member somebody can store."""
+    member somebody can store.
 
-    SHORTLISTING = "Shortlisting"      # RFQ-02
-    ISSUED = "Issued"                  # RFQ-03
-    CLARIFICATIONS = "Clarifications"  # RFQ-04
-    BIDS_RECEIVED = "Bids Received"    # RFQ-04A
-    EVALUATION = "Evaluation"          # RFQ-05
-    NEGOTIATION = "Negotiation"        # RFQ-06
-    AWARDED = "Awarded"                # RFQ-06
-    PO_ISSUED = "PO Issued"            # RFQ-07
+    Each member's process code lives in `STAGE_CODES`, not in a comment here —
+    the codes are served to the browser, and a comment cannot be."""
+
+    SHORTLISTING = "Shortlisting"
+    ISSUED = "Issued"
+    CLARIFICATIONS = "Clarifications"
+    BIDS_RECEIVED = "Bids Received"
+    EVALUATION = "Evaluation"
+    NEGOTIATION = "Negotiation"
+    AWARDED = "Awarded"
+    PO_ISSUED = "PO Issued"
 
 
 STAGE_ORDER: list[Stage] = [
@@ -30,6 +33,31 @@ STAGE_ORDER: list[Stage] = [
     Stage.AWARDED,
     Stage.PO_ISSUED,
 ]
+
+# Where each stage sits in the client's process document.
+#
+# **These are references, not ordinals.** Nothing here can be computed from a
+# stage's position, and two members say so plainly: bids arrive at RFQ-04A,
+# which no counter produces, and RFQ-06 covers both NEGOTIATION and AWARDED
+# because agreeing terms and completing the approval chain are two states of
+# one process step. A screen that numbered the stages it was sent would have
+# been wrong about four of these eight even before `Scoping` left — removing it
+# only moved the first error to the top of the strip, where it showed.
+#
+# Served by `/api/workflow/stages` and by the RFQ roster, for the same reason
+# `selectable_approvers` and `client_approver` are: the browser must not spell
+# the process's own vocabulary, or a re-lettered step becomes an edit in two
+# repositories.
+STAGE_CODES: dict[Stage, str] = {
+    Stage.SHORTLISTING: "RFQ-02",
+    Stage.ISSUED: "RFQ-03",
+    Stage.CLARIFICATIONS: "RFQ-04",
+    Stage.BIDS_RECEIVED: "RFQ-04A",
+    Stage.EVALUATION: "RFQ-05",
+    Stage.NEGOTIATION: "RFQ-06",
+    Stage.AWARDED: "RFQ-06",
+    Stage.PO_ISSUED: "RFQ-07",
+}
 
 # Deny by default: a transition absent from this table is rejected.
 # Backward edges are the documented recoveries — retender and renegotiate.

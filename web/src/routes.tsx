@@ -239,8 +239,17 @@ function RfqRoute() {
   const open = data.rfqs.find((r) => r.id === rfqId)
   // An RFQ we cannot find a stage for gets the wizard, matching what
   // `RfqWorkflow` did with the same unknown.
-  const Screen = !open || WIZARD_RANGE.includes(open.stage) ? RfqWizard : RfqDetail
-  return <Screen rfqId={rfqId} stages={data.stages} onBack={() => navigate('/rfqs')} />
+  if (!open || WIZARD_RANGE.includes(open.stage)) {
+    return <RfqWizard rfqId={rfqId} stages={data.stages} onBack={() => navigate('/rfqs')} />
+  }
+  return (
+    <RfqDetail
+      rfqId={rfqId}
+      stages={data.stages}
+      stageCodes={data.stage_codes}
+      onBack={() => navigate('/rfqs')}
+    />
+  )
 }
 
 function DashboardRoute({ projects, loading, error }: AppRoutesProps) {

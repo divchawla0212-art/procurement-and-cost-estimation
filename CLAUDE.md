@@ -25,8 +25,8 @@ untracked fixture directories are present, never in pass/fail:
 
 | where | baseline |
 |---|---|
-| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1741 passed, 3 skipped, 0 failed** |
-| CI, and any clean checkout | **1721 passed, 23 skipped, 0 failed** |
+| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1745 passed, 3 skipped, 0 failed** |
+| CI, and any clean checkout | **1725 passed, 23 skipped, 0 failed** |
 
 Anything else is a real regression.
 
@@ -66,13 +66,14 @@ parser itself is covered in CI — only the tests that assert against the *real*
 
 So the CI row is the workstation row with the four corpus-coverage passes, the
 three `data/` passes, the two `pdftotext` passes and the eleven AVL passes
-turned into skips — `1721 = 1741 - 4 - 3 - 2 - 11`, `23 = 3 + 4 + 3 + 2 + 11`;
-1744 tests either way. When the counts move, measure the workstation row and derive
+turned into skips — `1725 = 1745 - 4 - 3 - 2 - 11`, `23 = 3 + 4 + 3 + 2 + 11`;
+1748 tests either way. When the counts move, measure the workstation row and derive
 the CI row from it; editing the two rows independently is how they drift
 apart.
 
-**The workstation row is measured, not derived**: **1741 passed, 3 skipped**,
-taken on 2026-08-15 on the `rfq-platform-phase-1` branch, in an environment
+**The workstation row is measured, not derived**: **1745 passed, 3 skipped**,
+taken on 2026-08-15 on the `rfq-platform-phase-1` branch, after the stage-codes
+fix below, in an environment
 with `pdftotext`, `data/` (including the ADNOC export) and an ingested
 multi-vendor `projects/` all present. The **eleven**-skip figure that the
 fourth gate contributes is measured too — by moving `data/bidders_details/`
@@ -270,7 +271,20 @@ The web suite is separate and not part of either row above — both rows are
 `python -m pytest` counts. Run it with `npm test` under `web/` (vitest,
 non-watching, exits non-zero on failure); `npm run build` also type-checks the
 test files, since `web/tsconfig.app.json` includes `src`. CI runs both, in the
-`web` job of the same workflow. It stands at **315 passed** across 22 files.
+`web` job of the same workflow. It stands at **316 passed** across 22 files.
+
+The **4** Python tests and **1** web test before those fix `StageStrip`'s
+process-code labelling — the gap the BD-4 paragraph below once flagged as known
+and not fixed. Two in `test_workflow_stages.py` assert `STAGE_CODES` against the
+client document's own references rather than a position; two in
+`test_workflow_endpoints.py` assert the two endpoints that now serve it,
+`/api/workflow/stages` and the RFQ roster. None touches a fixture directory or a
+provider key, so all four land in both rows. The web test extends
+`StageStrip.test.tsx` to assert Negotiation and Awarded render the *same* code —
+the case a positional strip cannot get right. `StageStrip` now renders whatever
+`codes` it is sent instead of computing `RFQ-${i + 1}`; the codes travel from
+`workflow.stages.STAGE_CODES` through both endpoints to both call sites,
+`RfqWorkflow` and `RfqDetail`.
 
 The **8** Python tests and **1** web test before those are Bid Desk's BD-4,
 removing the `Scoping` stage — see the retired-stage invariant above. The wizard
@@ -284,12 +298,16 @@ rendered by `IssuedStep` above the VDRL, freeze rule unchanged.
 Two gate tests were **deleted, not skipped**, with a comment where they sat:
 they asserted an exit criterion that no longer exists.
 
-Known and not fixed: `StageStrip` computes each stage's process code as
-`RFQ-{i+1}`, but those codes are **fixed references, not positional** — there is
-an `RFQ-04A`, and Negotiation and Awarded deliberately share `RFQ-06`. It was
-already mislabelling those two before BD-4; removing Scoping just moved the
-error to the first stage where it is visible. `docs/rfq-process.html` still
-documents nine stages. Both are tracked separately.
+Known and not fixed by that phase, **since fixed separately**: `StageStrip`
+computed each stage's process code as `RFQ-{i+1}`, but those codes are **fixed
+references, not positional** — there is an `RFQ-04A`, and Negotiation and
+Awarded deliberately share `RFQ-06`. It was already mislabelling those two
+before BD-4; removing Scoping just moved the error to the first stage where it
+was visible. The fix is above, out of chronological order in this file because
+it landed after BD-4 rather than as part of it: `api/workflow_routes.py` now
+serves `STAGE_CODES` from `workflow/stages.py` on both endpoints the strip
+reads, and `StageStrip` renders the sent code instead of computing one.
+`docs/rfq-process.html` still documents nine stages and is tracked separately.
 
 The last **3** are `table-scroll.test.ts`, and it is the odd one in this suite:
 it reads the **source tree off disk** rather than rendering anything. That is

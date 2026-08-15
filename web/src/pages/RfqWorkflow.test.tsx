@@ -31,6 +31,7 @@ function roster(overrides: Partial<RfqRoster> = {}): RfqRoster {
     rfqs: [],
     stages: STAGES,
     stage_counts: Object.fromEntries(STAGES.map((s) => [s, 0])),
+    stage_codes: Object.fromEntries(STAGES.map((s, i) => [s, `RFQ-${String(i).padStart(2, '0')}`])),
     ...overrides,
   }
 }

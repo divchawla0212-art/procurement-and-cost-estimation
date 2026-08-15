@@ -83,6 +83,25 @@ def test_stages_endpoint_lists_all_eight_in_order(tmp_path, monkeypatch):
     assert "Scoping" not in r.json()["stages"]
 
 
+def test_stages_endpoint_sends_each_stage_s_process_code(tmp_path, monkeypatch):
+    """Sent, never derived in the browser. The codes are the client's process
+    document, and two of them cannot be produced from a position: `RFQ-04A`,
+    and the one code `RFQ-06` that Negotiation and Awarded share."""
+    client = _client(tmp_path, monkeypatch)
+    body = client.get("/api/workflow/stages").json()
+    assert body["stage_codes"] == {
+        "Shortlisting": "RFQ-02",
+        "Issued": "RFQ-03",
+        "Clarifications": "RFQ-04",
+        "Bids Received": "RFQ-04A",
+        "Evaluation": "RFQ-05",
+        "Negotiation": "RFQ-06",
+        "Awarded": "RFQ-06",
+        "PO Issued": "RFQ-07",
+    }
+    assert set(body["stage_codes"]) == set(body["stages"]), "every stage sent gets a code"
+
+
 def test_new_rfq_starts_at_shortlisting_with_a_blocking_gate(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     rfq_id = create_rfq(client)
@@ -310,6 +329,19 @@ def test_rfq_roster_counts_every_stage_including_the_empty_ones(tmp_path, monkey
     assert body["stage_counts"]["Shortlisting"] == 1
     assert body["stage_counts"]["Awarded"] == 0
     assert sum(body["stage_counts"].values()) == len(body["rfqs"])
+
+
+def test_rfq_roster_sends_the_process_codes_beside_the_counts(tmp_path, monkeypatch):
+    """The roster is what the stage strip renders, so the codes travel with the
+    stage names rather than leaving the strip to number them."""
+    client = _client(tmp_path, monkeypatch)
+    create_rfq(client)
+
+    body = client.get("/api/workflow/rfqs").json()
+    assert set(body["stage_codes"]) == set(body["stages"])
+    assert body["stage_codes"]["Shortlisting"] == "RFQ-02", "the first stage is not RFQ-01"
+    assert body["stage_codes"]["Bids Received"] == "RFQ-04A"
+    assert body["stage_codes"]["Negotiation"] == body["stage_codes"]["Awarded"] == "RFQ-06"
 
 
 def test_rfq_roster_filters_by_project(tmp_path, monkeypatch):

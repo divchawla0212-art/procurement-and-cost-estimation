@@ -67,7 +67,7 @@ from workflow.models.rfq import Attachment, ShortlistEntry
 from workflow.rfq_extractor import extract_rfq_info
 from workflow.vendor_suggestions import suggest as suggest_vendors
 from shared.llm.factory import get_client
-from workflow.stages import STAGE_ORDER, Stage
+from workflow.stages import STAGE_CODES, STAGE_ORDER, Stage
 from workflow.store import IncompleteShortlistEntry, WorkflowStore
 
 router = APIRouter(prefix="/api/workflow", tags=["workflow"])
@@ -293,9 +293,22 @@ class IssueIn(BaseModel):
     """Empty on purpose: who issued it comes from the session, not the body."""
 
 
+def _stage_codes() -> dict[str, str]:
+    """Each stage's place in the client's process document, keyed by stage name
+    exactly as `stage_counts` is.
+
+    Sent for the same reason `selectable_approvers` and `client_approver` are:
+    the browser must not spell the process's own vocabulary. It could not do so
+    correctly here in any case — `RFQ-04A` follows no counter, and Negotiation
+    and Awarded deliberately share `RFQ-06` — which is precisely what a strip
+    numbering its own stages got wrong.
+    """
+    return {stage.value: STAGE_CODES[stage] for stage in STAGE_ORDER}
+
+
 @router.get("/stages")
 def get_stages() -> dict:
-    return {"stages": [s.value for s in STAGE_ORDER]}
+    return {"stages": [s.value for s in STAGE_ORDER], "stage_codes": _stage_codes()}
 
 
 def _item_payload(store: WorkflowStore, item: Item) -> dict:
@@ -986,12 +999,17 @@ def list_rfqs(project_id: str | None = None) -> dict:
     `stage_counts` covers every stage, including the empty ones — a strip that
     silently dropped a stage with no RFQs in it would change shape as work
     moved through, which is exactly when a reader needs it to hold still.
+
+    `stage_codes` rides along for the same reason the counts do: the strip
+    renders both beside each stage name, and neither is something a screen can
+    work out for itself.
     """
     rfqs = _read().list_rfqs(project_id=project_id)
     return {
         "rfqs": [r.model_dump(mode="json") for r in rfqs],
         "stages": [s.value for s in STAGE_ORDER],
         "stage_counts": {s.value: sum(1 for r in rfqs if r.stage is s) for s in STAGE_ORDER},
+        "stage_codes": _stage_codes(),
     }
 
 

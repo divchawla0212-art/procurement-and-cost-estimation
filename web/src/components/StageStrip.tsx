@@ -12,8 +12,14 @@ import type { StageStripProps } from '../types'
  *
  * `current` is the stage an RFQ sits at. Omit it on a roster view, where the
  * strip is a set of counts rather than one RFQ's position.
+ *
+ * `codes` are references into the client's process document, not ordinals —
+ * `RFQ-04A` has no position to be computed from, and Negotiation and Awarded
+ * deliberately share `RFQ-06`. The server is the one place that vocabulary
+ * lives, so the strip renders whatever it sent rather than numbering stages
+ * itself.
  */
-export function StageStrip({ stages, counts, current }: StageStripProps) {
+export function StageStrip({ stages, counts, codes, current }: StageStripProps) {
   const currentIndex = current ? stages.indexOf(current) : -1
 
   return (
@@ -29,7 +35,7 @@ export function StageStrip({ stages, counts, current }: StageStripProps) {
         return (
           <li key={stage} className={cls} aria-current={isCurrent ? 'step' : undefined}>
             <span className="stagestep-code mono">
-              {`RFQ-${String(i + 1).padStart(2, '0')}`}
+              {codes[stage] ?? ''}
               {/* The tick is decorative — `aria-current` already tells a
                   screen reader where the RFQ is, and "✓" read aloud on every
                   earlier stage is noise. */}

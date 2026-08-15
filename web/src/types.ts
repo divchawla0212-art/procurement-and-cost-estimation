@@ -238,6 +238,10 @@ export type RfqStage =
 export interface StageStripProps {
   stages: string[]
   counts: Record<string, number>
+  /** Each stage's reference in the client's process document, keyed by stage
+   *  name. Sent by the server rather than computed here — see `StageStrip`'s
+   *  docstring for why a position cannot produce these. */
+  codes: Record<string, string>
   /** The stage one RFQ sits at. Omit on a roster view. */
   current?: string | null
 }
@@ -269,6 +273,10 @@ export interface RfqRoster {
   rfqs: Rfq[]
   stages: string[]
   stage_counts: Record<string, number>
+  /** Each stage's process-document reference, sent alongside the counts for
+   *  the same reason `client_approver` rides on the shortlist: the browser
+   *  must not spell the process's own vocabulary. */
+  stage_codes: Record<string, string>
 }
 
 export interface Attachment {

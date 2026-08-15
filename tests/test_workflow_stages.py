@@ -10,6 +10,7 @@ import pytest
 from workflow.gates import check_gate
 from workflow.models.rfq import Attachment
 from workflow.stages import (
+    STAGE_CODES,
     STAGE_ORDER,
     TRANSITIONS,
     Stage,
@@ -85,6 +86,32 @@ def test_unlisted_transition_is_denied_by_default():
 def test_every_stage_has_a_transition_entry():
     """Deny-by-default is only safe if `is_allowed` cannot KeyError on a stage."""
     assert set(TRANSITIONS) == set(STAGE_ORDER)
+
+
+def test_process_codes_are_the_client_document_s_own_and_not_a_position():
+    """The codes are references into the client's process document, not an
+    ordinal. Two of them cannot be computed from a position at all: bids arrive
+    at RFQ-04A, and RFQ-06 covers both Negotiation and Awarded — terms are
+    agreed at one and the approval chain completes at the other, under the same
+    process step. Anything deriving a code from an index gets four of these
+    eight wrong."""
+    assert [STAGE_CODES[stage] for stage in STAGE_ORDER] == [
+        "RFQ-02",   # Shortlisting
+        "RFQ-03",   # Issued
+        "RFQ-04",   # Clarifications
+        "RFQ-04A",  # Bids Received
+        "RFQ-05",   # Evaluation
+        "RFQ-06",   # Negotiation
+        "RFQ-06",   # Awarded — the same step
+        "RFQ-07",   # PO Issued
+    ]
+
+
+def test_every_stage_has_a_process_code():
+    """A stage with no code renders as a blank cell on the strip, so a stage
+    added to `STAGE_ORDER` without one here is a defect the type system cannot
+    catch."""
+    assert set(STAGE_CODES) == set(STAGE_ORDER)
 
 
 def test_stage_values_are_human_readable_strings():
