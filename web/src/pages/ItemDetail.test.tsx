@@ -14,7 +14,12 @@ import {
   vendorEntry,
   vendorLists,
 } from './workflow-fixtures'
-import type { AvailableBidders } from '../types'
+import type {
+  AvailableBidders,
+  ItemVendorEntry,
+  VendorListSource,
+  WorkflowProjectDetail,
+} from '../types'
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
@@ -23,6 +28,9 @@ vi.mock('../api', async (importOriginal) => {
     fetchWorkflowProject: vi.fn(),
     updateWorkflowItem: vi.fn(),
     fetchAvailableBidders: vi.fn(),
+    // A curated row has no `vendor_id`, so it is shortlisted by name through
+    // the free-text path — never through `inviteRegisteredBidder`.
+    addShortlistEntry: vi.fn(),
     createRfq: vi.fn(),
     // The Raise-RFQ form's Discipline field is a picker over the vocabulary.
     fetchDisciplines: vi.fn(),
@@ -38,6 +46,7 @@ vi.mock('../api', async (importOriginal) => {
 
 import {
   addItemVendor,
+  addShortlistEntry,
   createRfq,
   fetchAvailableBidders,
   fetchDisciplines,
@@ -1518,6 +1527,369 @@ describe('ItemDetail', () => {
 
       expect(await within(card).findByText(/named nobody/i)).toBeInTheDocument()
       expect(within(card).queryByRole('alert')).not.toBeInTheDocument()
+    })
+  })
+
+  /* ------------------------------------------ the four-source vendor pool */
+
+  describe('the four-source vendor pool', () => {
+    /** A company somebody typed in. No `vendor_id`, ever: the server never
+     *  looks a curated name up, because a match would attach a real company's
+     *  approvals to whatever was typed. */
+    const GULF = vendorEntry({
+      id: 'ive_gulf',
+      source: 'Manual',
+      vendor_id: null,
+      vendor_name: 'Gulf Crescent Fabricators',
+      trade_categories: ['STRUCTURAL STEEL FABRICATION'],
+      source_document: 'added by hand by buyer@example.com',
+    })
+
+    /** A company a model named, kept labelled as one after a person accepted
+     *  it — that it originated with a model is the thing a later reader would
+     *  most want to know. */
+    const MODELLED = vendorEntry({
+      id: 'ive_ducab',
+      source: 'Suggested',
+      vendor_id: null,
+      vendor_name: 'DUCAB HV CABLE',
+      trade_categories: ['CABLES - HV POWER TRANSMISSION'],
+      source_document: 'suggested by the model',
+    })
+
+    function serveItem(
+      lists: Partial<Record<VendorListSource, ItemVendorEntry[]>> = {},
+      over: Partial<WorkflowProjectDetail> = {},
+    ) {
+      vi.mocked(fetchWorkflowProject).mockResolvedValue(
+        detail({
+          items: [GENERATOR],
+          item_vendor_lists: { itm_1: vendorLists(lists) },
+          ...over,
+        }),
+      )
+      vi.mocked(fetchAvailableBidders).mockResolvedValue(
+        availableList({ bidders: [APPROVED_BIDDER] }),
+      )
+    }
+
+    /** The available-vendor card, once its first registry read has landed. */
+    async function pool(): Promise<HTMLElement> {
+      renderItem()
+      const card = await screen.findByRole('region', { name: /available vendor/i })
+      await within(card).findByText('Al Munara Switchgear LLC')
+      return card
+    }
+
+    const chip = (card: HTMLElement, name: string) =>
+      within(card).getByRole('button', { name })
+
+    it('offers a chip for each of the four sources', async () => {
+      serveItem()
+      const card = await pool()
+
+      // Two registry approvals and two curated lists. Different universes, and
+      // the chips are the only place they meet.
+      for (const label of ['ADNOC', 'Astra', 'Added by hand', 'Suggested vendors']) {
+        expect(chip(card, label)).toBeInTheDocument()
+      }
+    })
+
+    it('spells the curated chips as written rather than in title case', async () => {
+      // `.chip` carries `text-transform: capitalize`, which is right for the
+      // single-word verdict chips it was written for and renders "Added by
+      // hand" as "Added By Hand". jsdom applies no stylesheet, so the class is
+      // the only stand-in a test has for the rendering.
+      serveItem()
+      const card = await pool()
+
+      expect(chip(card, 'Added by hand')).toHaveClass('chip--asis')
+      expect(chip(card, 'Suggested vendors')).toHaveClass('chip--asis')
+    })
+
+    it('opens with the curated chips off, so the registry list is unchanged', async () => {
+      serveItem({ Manual: [GULF] })
+      const card = await pool()
+
+      expect(chip(card, 'Added by hand')).not.toHaveClass('on')
+      expect(
+        within(card).queryByText('Gulf Crescent Fabricators'),
+      ).not.toBeInTheDocument()
+    })
+
+    it('appends a curated list without asking the server for anything', async () => {
+      // Additive, not ANDed: a hand-added company has no registry row to
+      // approve it, and the rows are already on the page — filtering them is a
+      // `.filter()`, never a request.
+      serveItem({ Manual: [GULF] })
+      const card = await pool()
+      const before = vi.mocked(fetchAvailableBidders).mock.calls.length
+
+      fireEvent.click(chip(card, 'Added by hand'))
+
+      expect(
+        await within(card).findByText('Gulf Crescent Fabricators'),
+      ).toBeInTheDocument()
+      expect(within(card).getByText('Al Munara Switchgear LLC')).toBeInTheDocument()
+      expect(vi.mocked(fetchAvailableBidders).mock.calls.length).toBe(before)
+
+      fireEvent.click(chip(card, 'Added by hand'))
+      expect(
+        within(card).queryByText('Gulf Crescent Fabricators'),
+      ).not.toBeInTheDocument()
+    })
+
+    it('asks the server for nothing when both registry chips are unticked', async () => {
+      serveItem({ Manual: [GULF] })
+      const card = await pool()
+
+      fireEvent.click(chip(card, 'Added by hand'))
+      fireEvent.click(chip(card, 'ADNOC'))
+      await waitFor(() =>
+        expect(fetchAvailableBidders).toHaveBeenCalledWith('Electrical', ['Astra']),
+      )
+      vi.mocked(fetchAvailableBidders).mockClear()
+
+      fireEvent.click(chip(card, 'Astra'))
+
+      // The endpoint 422s on an empty approver list and that refusal is right:
+      // the browser contributes no registry rows rather than asking for none.
+      expect(
+        await within(card).findByText('Gulf Crescent Fabricators'),
+      ).toBeInTheDocument()
+      await waitFor(() =>
+        expect(
+          within(card).queryByText('Al Munara Switchgear LLC'),
+        ).not.toBeInTheDocument(),
+      )
+      expect(fetchAvailableBidders).not.toHaveBeenCalled()
+    })
+
+    it('shows a company held by the registry and by hand twice, once per source', async () => {
+      // No deduplication by name, ever. This repository has recorded name
+      // matching as a shipped defect twice, and merging the two rows in the
+      // view is that defect wearing a different hat.
+      serveItem({
+        Manual: [
+          vendorEntry({
+            id: 'ive_twin',
+            source: 'Manual',
+            vendor_id: null,
+            vendor_name: 'Al Munara Switchgear LLC',
+          }),
+        ],
+      })
+      const card = await pool()
+
+      fireEvent.click(chip(card, 'Added by hand'))
+
+      const both = await within(card).findAllByText('Al Munara Switchgear LLC')
+      expect(both).toHaveLength(2)
+      // As a set, not positionally. Which half is drawn first is a separate
+      // rule with its own test below, and pinning it here as well would make
+      // one change break two tests for two unrelated reasons.
+      const labels = both.map(
+        (cell) =>
+          within(cell.closest('tr')!).getByText(
+            /^(Registry|Added by hand|Suggested vendors)$/,
+          ).textContent,
+      )
+      expect([...labels].sort()).toEqual(['Added by hand', 'Registry'])
+    })
+
+    it('draws a curated row even when the registry fills the cap', async () => {
+      // The ordering rule, and the reason it is not a matter of taste. The
+      // table draws 25 rows of a registry list that runs to 79 for one
+      // discipline and 1 346 unnarrowed. Appended *after* that, an item's one
+      // or two hand-added companies fall past the cap and are never drawn — so
+      // ticking the chip reads as doing nothing at all.
+      //
+      // Found by ticking the chip in a browser against a real 79-vendor list.
+      // jsdom sees no cap it was not handed, which is exactly why this test
+      // hands it one: with the default single-bidder fixture, curated-last
+      // passes and the defect ships.
+      serveItem({ Manual: [GULF] })
+      vi.mocked(fetchAvailableBidders).mockResolvedValue(
+        availableList({
+          bidders: Array.from({ length: 40 }, (_, i) => ({
+            ...APPROVED_BIDDER,
+            id: `bdr_${i}`,
+            name: `Registry Vendor ${i}`,
+          })),
+        }),
+      )
+      renderItem()
+      const card = await screen.findByRole('region', { name: /available vendor/i })
+      await within(card).findByText('Registry Vendor 0')
+
+      fireEvent.click(chip(card, 'Added by hand'))
+
+      expect(
+        await within(card).findByText('Gulf Crescent Fabricators'),
+      ).toBeInTheDocument()
+    })
+
+    it('states the source of every row', async () => {
+      serveItem({ Manual: [GULF], Suggested: [MODELLED] })
+      const card = await pool()
+
+      fireEvent.click(chip(card, 'Added by hand'))
+      fireEvent.click(chip(card, 'Suggested vendors'))
+
+      const gulf = (
+        await within(card).findByText('Gulf Crescent Fabricators')
+      ).closest('tr')!
+      expect(within(gulf).getByText('Added by hand')).toBeInTheDocument()
+      const ducab = within(card).getByText('DUCAB HV CABLE').closest('tr')!
+      expect(within(ducab).getByText('Suggested vendors')).toBeInTheDocument()
+      const registry = within(card)
+        .getByText('Al Munara Switchgear LLC')
+        .closest('tr')!
+      expect(within(registry).getByText('Registry')).toBeInTheDocument()
+    })
+
+    it('will not let the last chip of any kind be unticked', async () => {
+      // Four unticked chips is not a query — it is an empty screen that reads
+      // as "no vendor qualifies".
+      serveItem({ Manual: [GULF] })
+      const card = await pool()
+
+      fireEvent.click(chip(card, 'Added by hand'))
+      fireEvent.click(chip(card, 'ADNOC'))
+      fireEvent.click(chip(card, 'Astra'))
+
+      await waitFor(() => expect(chip(card, 'Added by hand')).toBeDisabled())
+      expect(chip(card, 'Added by hand')).toHaveAttribute(
+        'title',
+        expect.stringMatching(/at least one/i),
+      )
+    })
+
+    it('searches across the union, not just the registry half', async () => {
+      serveItem({ Manual: [GULF] })
+      const card = await pool()
+
+      fireEvent.click(chip(card, 'Added by hand'))
+      await within(card).findByText('Gulf Crescent Fabricators')
+      fireEvent.change(within(card).getByLabelText('Search vendors'), {
+        target: { value: 'Munara' },
+      })
+
+      // The load-bearing direction: a needle matching the registry row must
+      // take the curated row away. A search applied to the registry half alone
+      // would leave it sitting there.
+      expect(
+        within(card).queryByText('Gulf Crescent Fabricators'),
+      ).not.toBeInTheDocument()
+      expect(within(card).getByText('Al Munara Switchgear LLC')).toBeInTheDocument()
+    })
+
+    it('shortlists a curated vendor by name, never by id', async () => {
+      serveItem({ Manual: [GULF] }, { rfqs: [rfq('rfq_1', 'ADP-RFQ-2026-014', ['itm_1'])] })
+      vi.mocked(fetchRfq).mockResolvedValue({ ...RFQ_DETAIL, shortlist: [] })
+      vi.mocked(addShortlistEntry).mockResolvedValue(
+        shortlistEntry({ vendor_id: null, vendor_name: 'Gulf Crescent Fabricators' }),
+      )
+      const card = await pool()
+
+      fireEvent.click(chip(card, 'Added by hand'))
+      fireEvent.click(
+        await within(card).findByRole('button', { name: /shortlist gulf crescent/i }),
+      )
+
+      await waitFor(() =>
+        expect(addShortlistEntry).toHaveBeenCalledWith(
+          'rfq_1',
+          expect.objectContaining({
+            vendor_name: 'Gulf Crescent Fabricators',
+            included: true,
+          }),
+        ),
+      )
+      // `inviteRegisteredBidder` sends a `vendor_id`, and a curated row has
+      // none — sending one would attach a real company's approvals to a name
+      // somebody typed.
+      expect(inviteRegisteredBidder).not.toHaveBeenCalled()
+    })
+
+    it('sends each row of a mixed batch through its own call', async () => {
+      serveItem({ Manual: [GULF] }, { rfqs: [rfq('rfq_1', 'ADP-RFQ-2026-014', ['itm_1'])] })
+      vi.mocked(fetchRfq).mockResolvedValue({ ...RFQ_DETAIL, shortlist: [] })
+      vi.mocked(inviteRegisteredBidder).mockResolvedValue(shortlistEntry())
+      vi.mocked(addShortlistEntry).mockResolvedValue(
+        shortlistEntry({ vendor_id: null, vendor_name: 'Gulf Crescent Fabricators' }),
+      )
+      const card = await pool()
+
+      fireEvent.click(chip(card, 'Added by hand'))
+      await within(card).findByText('Gulf Crescent Fabricators')
+      fireEvent.click(within(card).getByRole('button', { name: /select these 2/i }))
+      fireEvent.click(
+        within(card).getByRole('button', { name: /shortlist selected \(2\)/i }),
+      )
+
+      await waitFor(() =>
+        expect(inviteRegisteredBidder).toHaveBeenCalledWith('rfq_1', {
+          vendor_id: 'bdr_almunara',
+        }),
+      )
+      expect(addShortlistEntry).toHaveBeenCalledWith(
+        'rfq_1',
+        expect.objectContaining({ vendor_name: 'Gulf Crescent Fabricators' }),
+      )
+    })
+
+    it('keys a selection by source as well as by id', async () => {
+      // A bidder id and a vendor-list entry id are different id spaces. Keyed
+      // on the bare id these two rows would be one selection.
+      serveItem({
+        Manual: [
+          vendorEntry({
+            id: 'bdr_almunara',
+            source: 'Manual',
+            vendor_id: null,
+            vendor_name: 'Gulf Crescent Fabricators',
+          }),
+        ],
+      })
+      const card = await pool()
+
+      fireEvent.click(chip(card, 'Added by hand'))
+      fireEvent.click(
+        await within(card).findByRole('checkbox', {
+          name: 'Select Gulf Crescent Fabricators',
+        }),
+      )
+      fireEvent.click(
+        within(card).getByRole('checkbox', { name: 'Select Al Munara Switchgear LLC' }),
+      )
+
+      expect(within(card).getByText(/2 selected/)).toBeInTheDocument()
+    })
+
+    it("caps a curated row's product groups at two", async () => {
+      // Rendered in full, an eleven-group discipline expansion ran that cell to
+      // 595px, crushed the vendor name to 67px and made every row 170px tall.
+      // jsdom sees none of that; the structure is what a test can hold.
+      serveItem({
+        Manual: [
+          vendorEntry({
+            id: 'ive_wide',
+            source: 'Manual',
+            vendor_id: null,
+            vendor_name: 'Wide Load Trading',
+            trade_categories: Array.from({ length: 11 }, (_, i) => `GROUP ${i}`),
+          }),
+        ],
+      })
+      const card = await pool()
+
+      fireEvent.click(chip(card, 'Added by hand'))
+
+      const row = (await within(card).findByText('Wide Load Trading')).closest('tr')!
+      expect(
+        within(row).getByText('GROUP 0 · GROUP 1 · +9 more'),
+      ).toBeInTheDocument()
     })
   })
 

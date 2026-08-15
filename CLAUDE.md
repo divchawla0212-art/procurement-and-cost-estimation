@@ -234,9 +234,59 @@ The web suite is separate and not part of either row above — both rows are
 `python -m pytest` counts. Run it with `npm test` under `web/` (vitest,
 non-watching, exits non-zero on failure); `npm run build` also type-checks the
 test files, since `web/tsconfig.app.json` includes `src`. CI runs both, in the
-`web` job of the same workflow. It stands at **290 passed** across 21 files.
+`web` job of the same workflow. It stands at **304 passed** across 21 files.
 
-The last **5** are the sign-in screen's admin-account chip, in the new
+The last **14** are Bid Desk's BD-1, the four-source vendor pool on the item
+screen — see [`feature-request.md`](feature-request.md). The card was registry
+rows only, filtered by the two approval chips; it is now a union over four
+sources with four chips, and **the two halves take different operators on
+purpose**. `ADNOC` and `Astra` stay ANDed, because one approval is the common
+case and precisely what is being excluded. `Added by hand` and `Suggested` are
+*additive* — a curated row has no registry row to approve it, and folding them
+into `GET /bidders/available` as a fifth approver would be a lie.
+
+Three of those fourteen are the ones to keep.
+
+`asks the server for nothing when both registry chips are unticked` asserts the
+fetcher is **not called**. The endpoint 422s on an empty approver list and that
+refusal is right, so the browser has to contribute no registry rows rather than
+ask for none.
+
+`shows a company held by the registry and by hand twice, once per source`
+asserts **two** rows for one name. No deduplication, ever — name matching is a
+shipped defect this file records twice, and merging the rows in the view is that
+defect wearing a different hat. It reads the two source badges as a *set*, not
+positionally, because the ordering is a separate rule with its own test.
+
+`draws a curated row even when the registry fills the cap` is that separate
+rule, and it exists because **the defect shipped and a browser found it**. The
+table draws 25 rows of a registry list that runs to 79 for one discipline;
+appended after that, an item's one or two hand-added companies fall past the cap
+and are never drawn, so ticking the chip reads as doing nothing at all. Hence
+`pool = [...curatedRows, ...registryRows]`. With the default single-bidder
+fixture, curated-last passes — so the test hands jsdom a 40-bidder list, and it
+was verified by flipping the order back and watching exactly that one test go
+red.
+
+**A fourth rendering defect joins the three below, and it is the same story
+again.** `.chip` had no `white-space` rule and sits in `.fxrow`, which is
+`display: flex` with no `flex-wrap`, so a multi-word chip beside a text input
+was shrunk under its label and wrapped *inside* the pill: "Added by hand" and
+"Suggested vendors" measured 47px tall against 29px for "ADNOC" and "Astra", 9px
+out of line in the same row. The fix is `white-space: nowrap` **and**
+`flex-shrink: 0` on `.chip` — `nowrap` alone still lets flex squeeze the pill
+and overflow its own text. jsdom applies no stylesheet and does no layout, so
+there is no structural stand-in to assert here at all: this one is caught only by
+measuring `getBoundingClientRect`, which is the whole argument for launching the
+app.
+
+Known and **not** fixed by that phase: the available-vendor table is 787px
+inside a 614px card at a 940px viewport, so the document scrolls sideways rather
+than the table scrolling in its own container. Its seven columns are
+byte-identical before and after BD-1, so it predates the change; it is tracked
+separately rather than folded in.
+
+The **5** before those are the sign-in screen's admin-account chip, in the new
 `Auth.test.tsx` — that screen had no test file at all.
 
 **That chip fills both credentials, and `ADMIN_PASSWORD` is therefore a

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { JSX } from 'react'
 import {
   addItemVendor,
+  addShortlistEntry,
   createRfq,
   extractRfqDoc,
   fetchAvailableBidders,
@@ -16,6 +17,7 @@ import type { CoveringShortlist } from './covering-shortlists'
 import { summarise, useCoveringShortlists } from './covering-shortlists'
 import { ItemForm, RaiseRfqForm } from './forms'
 import type {
+  BidderSummary,
   ItemVendorEntry,
   ItemVendorInput,
   Rfq,
@@ -24,6 +26,7 @@ import type {
   WorkflowItem,
   WorkflowItemInput,
 } from '../types'
+import { CURATED_SOURCES } from '../types'
 import {
   ApprovalPills,
   Breadcrumb,
@@ -60,6 +63,37 @@ import {
 const BIDDER_CAP = 25
 
 /**
+ * One row of the pool, tagged with the universe it came from.
+ *
+ * The discriminant is not decoration: a registry row is invited by
+ * `vendor_id` and a curated row by `vendor_name` with no id, and those are two
+ * different calls. Modelling the row as a union is what stops the wrong one
+ * being made — a shared shape with an optional id would let a curated row send
+ * `vendor_id: undefined` and silently take the registry path.
+ */
+type PoolRow =
+  | { kind: 'registry'; bidder: BidderSummary }
+  | { kind: 'curated'; entry: ItemVendorEntry }
+
+/**
+ * What identifies a row for selection and for a per-row refusal.
+ *
+ * A bidder id and a vendor-list entry id are different id spaces, so the kind
+ * has to be part of the key: keyed on the bare id, a registry row and a
+ * curated row that happened to share one would be a single tick. Never the row
+ * index — the table re-sorts under a search and re-fetches under a chip.
+ */
+function rowKey(row: PoolRow): string {
+  return row.kind === 'registry'
+    ? `registry:${row.bidder.id}`
+    : `curated:${row.entry.id}`
+}
+
+function rowName(row: PoolRow): string {
+  return row.kind === 'registry' ? row.bidder.name : row.entry.vendor_name
+}
+
+/**
  * The vendors that may be invited, narrowed to this item's discipline.
  *
  * "Available" is both approvals at once: the client's Approved Vendor List says
@@ -78,6 +112,7 @@ const BIDDER_CAP = 25
  */
 function AvailableVendorList({
   discipline,
+  curated,
   covering,
   shortlists,
   target,
@@ -85,6 +120,13 @@ function AvailableVendorList({
   onInvited,
 }: {
   discipline: string
+  /** This item's curated vendor lists — the `Manual` and `Suggested` entries,
+   *  already on the page as part of the project payload. Filtering them is a
+   *  `.filter()`, never a request: they are item-scoped rows in
+   *  `workflow.json`, not registry approvals, and folding them into
+   *  `GET /bidders/available` as a fifth approver would be a lie, because
+   *  nobody approved anything. */
+  curated: ItemVendorEntry[]
   /** The RFQs covering this item, passed rather than fetched: the screen has
    *  already filtered them out of the project payload, and a second read could
    *  disagree with the table rendered below this card. */
@@ -106,11 +148,11 @@ function AvailableVendorList({
   onInvited: () => void
 }): JSX.Element {
   const [query, setQuery] = useState('')
-  // Keyed by bidder id, never by row index: the table re-sorts under a search,
+  // Keyed by `rowKey`, never by row index: the table re-sorts under a search,
   // and a stale index would attach a refusal to a different company. The same
   // rule the project screen keeps for a refused delete.
   const [rowError, setRowError] = useState<Record<string, string>>({})
-  // Bidder ids, never row indices — the table re-sorts under a search and
+  // Row keys, never row indices — the table re-sorts under a search and
   // re-fetches under a chip, and an index would move a tick onto a different
   // company. Third instance of that rule on this screen.
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -124,29 +166,70 @@ function AvailableVendorList({
   // card therefore opens showing exactly what it showed before the chips
   // existed, and only a deliberate untick changes it.
   const [required, setRequired] = useState<string[] | null>(null)
+  // Which of this item's own lists are appended. Empty by default, so the card
+  // opens on exactly the ADNOC ∩ Astra list it showed before these two chips
+  // existed and only a deliberate tick widens it.
+  const [sources, setSources] = useState<VendorListSource[]>([])
+  // Remembered rather than read off the latest response, because there may not
+  // be one: with both registry chips unticked nothing is fetched, and the
+  // chips still have to be there to tick back on.
+  const [selectable, setSelectable] = useState<string[]>([])
+
+  // Both registry chips off. The endpoint refuses an empty approver list with
+  // a 422 and that refusal is correct — a HAVING count of zero matches nobody
+  // — so the browser contributes no registry rows rather than asking for none.
+  const registryOff = required !== null && required.length === 0
+
+  /** Keep the approver vocabulary the server named, without re-rendering on
+   *  every response that repeats it. */
+  function remember<T extends { selectable_approvers: string[] }>(answer: T): T {
+    setSelectable((prev) =>
+      prev.join(',') === answer.selectable_approvers.join(',')
+        ? prev
+        : answer.selectable_approvers,
+    )
+    return answer
+  }
+
   const scoped = useAsync(
-    () => fetchAvailableBidders(discipline, required ?? undefined),
+    () =>
+      registryOff
+        ? Promise.resolve(null)
+        : fetchAvailableBidders(discipline, required ?? undefined).then(remember),
     // Joined, not the array: it is rebuilt every render, and passing it here
-    // would re-run the fetch forever.
-    [discipline, (required ?? []).join(',')],
+    // would re-run the fetch forever. `registryOff` rides along because an
+    // empty `required` and an absent one join to the same empty string.
+    [discipline, (required ?? []).join(','), registryOff],
   )
   const whole = useAsync(
-    () => fetchAvailableBidders(undefined, required ?? undefined),
-    [(required ?? []).join(',')],
+    () =>
+      registryOff
+        ? Promise.resolve(null)
+        : fetchAvailableBidders(undefined, required ?? undefined).then(remember),
+    [(required ?? []).join(','), registryOff],
   )
 
-  const selectable = scoped.data?.selectable_approvers ?? []
   const approvers = required ?? selectable
+  // Chips of any kind, not approvals: four unticked is not a query, it is an
+  // empty screen that reads as "no vendor qualifies".
+  const ticked = approvers.length + sources.length
 
   function toggleApprover(org: string) {
     const next = approvers.includes(org)
       ? approvers.filter((o) => o !== org)
       : [...approvers, org]
     // Guarded here as well as by `disabled` on the control, so neither a
-    // keyboard nor a test can reach the state the query has no expression for:
-    // a HAVING count of zero matches nobody, and the server refuses it.
-    if (next.length === 0) return
+    // keyboard nor a test can reach the state with nothing ticked at all.
+    if (next.length + sources.length === 0) return
     setRequired(next)
+  }
+
+  function toggleSource(source: VendorListSource) {
+    const next = sources.includes(source)
+      ? sources.filter((s) => s !== source)
+      : [...sources, source]
+    if (next.length + approvers.length === 0) return
+    setSources(next)
   }
 
   // Read from the *target* RFQ's shortlist, not from all of them: a vendor
@@ -174,15 +257,47 @@ function AvailableVendorList({
    * the batch, and there is nothing to roll the successful writes back with —
    * they have already landed.
    */
+  /**
+   * Put one row on the target RFQ's shortlist, through the call its kind
+   * demands.
+   *
+   * Two calls rather than one with an optional id. A registry row sends
+   * `vendor_id` and nothing else — the name, prequalification and scope fit are
+   * the registry's, snapshotted server-side at the moment of the decision, and
+   * a screen that sent them would be claiming they were its to decide. A
+   * curated row has no registry row at all, so it goes through the free-text
+   * path with the same defaults the wizard's hand-typed row posts. Sending a
+   * `vendor_id` for it would attach a real company's approvals to a name
+   * somebody typed, which is the defect this repository has recorded twice.
+   */
+  async function shortlist(row: PoolRow): Promise<void> {
+    if (row.kind === 'registry') {
+      await inviteRegisteredBidder(target, { vendor_id: row.bidder.id })
+      return
+    }
+    await addShortlistEntry(target, {
+      vendor_name: row.entry.vendor_name,
+      prequal_status: 'Under review',
+      scope_code_fit: true,
+      included: true,
+    })
+  }
+
   async function inviteSelected() {
     const failed = new Map<string, string>()
     let invited = 0
-    for (const id of selected) {
+    for (const key of selected) {
+      // Resolved against the whole pool, not the drawn rows: a selection
+      // survives a search that hides it. A key that no longer resolves belongs
+      // to a chip that has since been unticked, and there is nothing left to
+      // say about it.
+      const row = pool.find((r) => rowKey(r) === key)
+      if (!row) continue
       try {
-        await inviteRegisteredBidder(target, { vendor_id: id })
+        await shortlist(row)
         invited += 1
       } catch (err) {
-        failed.set(id, (err as Error).message)
+        failed.set(key, (err as Error).message)
       }
     }
     setRowError((prev) => ({ ...prev, ...Object.fromEntries(failed) }))
@@ -197,21 +312,19 @@ function AvailableVendorList({
     onInvited()
   }
 
-  async function invite(bidderId: string) {
+  async function invite(row: PoolRow) {
+    const key = rowKey(row)
     setRowError((prev) => {
-      const { [bidderId]: _gone, ...rest } = prev
+      const { [key]: _gone, ...rest } = prev
       return rest
     })
     try {
-      // `vendor_id` and nothing else. The name, prequalification and scope fit
-      // are the registry's, snapshotted server-side at the moment of the
-      // decision; a screen that sent them would be claiming they were its to
-      // decide. Nothing here checks eligibility either — the server owns that,
-      // and its refusal is what the reader sees.
-      await inviteRegisteredBidder(target, { vendor_id: bidderId })
+      // Nothing here checks eligibility — the server owns that, and its
+      // refusal is what the reader sees.
+      await shortlist(row)
       onInvited()
     } catch (err) {
-      setRowError((prev) => ({ ...prev, [bidderId]: (err as Error).message }))
+      setRowError((prev) => ({ ...prev, [key]: (err as Error).message }))
     }
   }
 
@@ -232,23 +345,58 @@ function AvailableVendorList({
     ? `Available vendors for ${discipline}`
     : 'Available vendors list'
 
+  // The registry half is only in flight, and only capable of failing, while it
+  // is being asked at all.
+  const registryPending = !registryOff && loading
+  const registryError = registryOff || loading
+    ? null
+    : (error ?? (!data ? 'No bidder data was returned.' : null))
+
+  // The two halves of the pool, concatenated and never merged. A company the
+  // registry holds *and* somebody typed in appears twice, once per source:
+  // silently folding them together would attach a real company's approvals to
+  // a hand-typed string, which is name matching — the defect this repository
+  // has recorded twice.
+  const registryRows: PoolRow[] = (registryOff ? [] : (data?.bidders ?? [])).map(
+    (bidder) => ({ kind: 'registry', bidder }),
+  )
+  const curatedRows: PoolRow[] = curated
+    .filter((entry) => sources.includes(entry.source))
+    .map((entry) => ({ kind: 'curated', entry }))
+  // Curated rows first, and that ordering is load-bearing rather than a taste.
+  // The table draws BIDDER_CAP rows of a registry list that runs to 79 for one
+  // discipline and 1 346 unnarrowed; appended after it, an item's one or two
+  // hand-added companies fall past the cap and are never drawn, so ticking the
+  // chip reads as doing nothing at all. They are also the few deliberate ones —
+  // somebody typed them against this item. Found by ticking the chip in a
+  // browser on a real 79-vendor list; jsdom sees no cap it was not given.
+  const pool: PoolRow[] = [...curatedRows, ...registryRows]
+
   // Client-side, over a list already in memory: 1 300 rows filter in well under
   // a frame, and a round trip per keystroke would be slower and no more
   // correct. Name and represented manufacturers both, because a buyer as often
-  // knows the principal ("Rosemount") as the local agent.
+  // knows the principal ("Rosemount") as the local agent. Applied to the whole
+  // union, not the registry half — a needle that matches nothing on a curated
+  // row has to take that row away too, or the search reads as broken on
+  // exactly the rows it did not reach.
   const needle = query.trim().toLowerCase()
-  const shown = !data
-    ? []
-    : !needle
-      ? data.bidders
-      : data.bidders.filter(
-          (b) =>
-            b.name.toLowerCase().includes(needle) ||
-            b.trade_categories.some((c) => c.toLowerCase().includes(needle)) ||
-            b.represented_manufacturers.some((m) =>
-              m.toLowerCase().includes(needle),
-            ),
-        )
+  const matches = (row: PoolRow): boolean => {
+    if (!needle) return true
+    if (row.kind === 'curated') {
+      const e = row.entry
+      return (
+        e.vendor_name.toLowerCase().includes(needle) ||
+        e.trade_categories.some((c) => c.toLowerCase().includes(needle))
+      )
+    }
+    const b = row.bidder
+    return (
+      b.name.toLowerCase().includes(needle) ||
+      b.trade_categories.some((c) => c.toLowerCase().includes(needle)) ||
+      b.represented_manufacturers.some((m) => m.toLowerCase().includes(needle))
+    )
+  }
+  const shown = pool.filter(matches)
 
   // The rows actually drawn. `Select these N` adds only these, because the
   // table caps at BIDDER_CAP of up to 1 346 and an invitation has no undo —
@@ -257,76 +405,117 @@ function AvailableVendorList({
   // Ticked but not currently drawn. Reported rather than pruned: a selection
   // the reader made is theirs to keep, and a count they cannot see is exactly
   // the thing worth saying out loud.
-  const hidden = [...selected].filter(
-    (id) => !rendered.some((b) => b.id === id),
-  )
+  const drawn = new Set(rendered.map(rowKey))
+  const hidden = [...selected].filter((key) => !drawn.has(key))
+
+  // The registry's own total, which is not `registryRows.length` once the
+  // server caps what it sends; plus the curated rows, which are all here.
+  const registryTotal = registryOff ? 0 : (data?.total ?? 0)
+  const poolTotal = registryTotal + curatedRows.length
 
   return (
     <Card title={title}>
-      {loading ? (
+      {/* Only worth saying when the fallback actually produced something —
+          beside an empty registry it would explain a narrowing that made no
+          difference. */}
+      {!registryPending && !registryOff && !registryError && !narrowed && registryTotal > 0 && (
+        <p className="muted">
+          {discipline.trim() === ''
+            ? 'This item has no discipline, so every available vendor is shown.'
+            : `No available vendor is registered for "${discipline}", so every one is shown. Set the item's discipline to one of the listed ones to narrow it.`}
+        </p>
+      )}
+
+      {/* One field, not a label wearing an input's clothes. `.field` is
+          the input class; on the wrapping label it gave the label a
+          border and padding and left the real input with the browser's
+          raw user-agent chrome, so the control read as two nested boxes.
+          `.input` is the inline variant the wizard's filter rows use, and
+          this is now a filter row.
+
+          The chips are always drawn, even when the half below them is
+          empty or failed: they are the only way back to a list, and an
+          empty state that hid them would be a dead end. */}
+      <div className="fxrow">
+        <input
+          className="input"
+          type="search"
+          aria-label="Search vendors"
+          value={query}
+          placeholder="Vendor, product group or manufacturer"
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        {/* The approvals required, not a choice between them. Both ticked
+            is the list this card has always shown; unticking one widens it
+            to the client's whole register or narrows it to ours. AND
+            across these two, and only these two — a curated chip is not
+            an approval and is never ANDed with one. */}
+        {selectable.map((org) => (
+          <button
+            key={org}
+            type="button"
+            className={`chip${approvers.includes(org) ? ' on' : ''}`}
+            // The last chip standing, of any kind, cannot be turned off —
+            // see `toggleApprover`.
+            disabled={ticked === 1 && approvers.includes(org)}
+            title={
+              ticked === 1 && approvers.includes(org)
+                ? 'At least one source is required.'
+                : undefined
+            }
+            onClick={() => toggleApprover(org)}
+          >
+            {org}
+          </button>
+        ))}
+        {/* This item's own lists, appended rather than intersected. A
+            hand-added company has no registry row to approve it, so ANDing
+            these with the two above would empty the table every time.
+
+            `chip--asis` because `.chip` capitalises every word, which is
+            right for the single-word verdict chips it was written for and
+            renders "Added by hand" as "Added By Hand". */}
+        {CURATED_SOURCES.map((source) => (
+          <button
+            key={source}
+            type="button"
+            className={`chip chip--asis${sources.includes(source) ? ' on' : ''}`}
+            disabled={ticked === 1 && sources.includes(source)}
+            title={
+              ticked === 1 && sources.includes(source)
+                ? 'At least one source is required.'
+                : undefined
+            }
+            onClick={() => toggleSource(source)}
+          >
+            {SOURCE_LABEL[source]}
+          </button>
+        ))}
+        {/* The disabled "From the internet" chip that used to sit here is
+            gone rather than enabled. Nothing browses, so the chip promised
+            a search no code performs; what replaced it is the Suggested
+            vendors card, which says what it actually does. */}
+      </div>
+
+      {registryPending ? (
         <p className="muted">Loading the vendor list…</p>
-      ) : error ? (
-        <p className="warn">{error}</p>
-      ) : !data ? (
-        <p className="warn">No bidder data was returned.</p>
-      ) : data.total === 0 ? (
-        <EmptyState title="No vendor carries both approvals">
-          A vendor is available once it is on the client's Approved Vendor List
-          and on ours. Load both lists and the vendors carrying each appear
-          here.
-        </EmptyState>
+      ) : registryError ? (
+        <p className="warn">{registryError}</p>
+      ) : pool.length === 0 ? (
+        !registryOff && sources.length === 0 ? (
+          <EmptyState title="No vendor carries both approvals">
+            A vendor is available once it is on the client's Approved Vendor
+            List and on ours. Load both lists and the vendors carrying each
+            appear here.
+          </EmptyState>
+        ) : (
+          <EmptyState title="Nothing on the sources you have ticked">
+            Tick another chip above. The two approvals narrow the registry;
+            the other two append this item's own lists.
+          </EmptyState>
+        )
       ) : (
         <>
-          {!narrowed && (
-            <p className="muted">
-              {discipline.trim() === ''
-                ? 'This item has no discipline, so every available vendor is shown.'
-                : `No available vendor is registered for "${discipline}", so every one is shown. Set the item's discipline to one of the listed ones to narrow it.`}
-            </p>
-          )}
-
-          {/* One field, not a label wearing an input's clothes. `.field` is
-              the input class; on the wrapping label it gave the label a
-              border and padding and left the real input with the browser's
-              raw user-agent chrome, so the control read as two nested boxes.
-              `.input` is the inline variant the wizard's filter rows use, and
-              this is now a filter row. */}
-          <div className="fxrow">
-            <input
-              className="input"
-              type="search"
-              aria-label="Search vendors"
-              value={query}
-              placeholder="Vendor, product group or manufacturer"
-              onChange={(e) => setQuery(e.target.value)}
-            />
-            {/* The approvals required, not a choice between them. Both ticked
-                is the list this card has always shown; unticking one widens it
-                to the client's whole register or narrows it to ours. */}
-            {selectable.map((org) => (
-              <button
-                key={org}
-                type="button"
-                className={`chip${approvers.includes(org) ? ' on' : ''}`}
-                // The last one standing cannot be turned off — see
-                // `toggleApprover`.
-                disabled={approvers.length === 1 && approvers.includes(org)}
-                title={
-                  approvers.length === 1 && approvers.includes(org)
-                    ? 'At least one approval is required.'
-                    : undefined
-                }
-                onClick={() => toggleApprover(org)}
-              >
-                {org}
-              </button>
-            ))}
-            {/* The disabled "From the internet" chip that used to sit here is
-                gone rather than enabled. Nothing browses, so the chip promised
-                a search no code performs; what replaced it is the Suggested
-                vendors card, which says what it actually does. */}
-          </div>
-
           {/* Which RFQ an invitation lands on. Only asked when the answer is
               not obvious — one covering RFQ needs no question, and none means
               there is nothing to invite anybody to. */}
@@ -365,7 +554,7 @@ function AvailableVendorList({
               className="btn btn-sm"
               onClick={() =>
                 setSelected(
-                  (prev) => new Set([...prev, ...rendered.map((b) => b.id)]),
+                  (prev) => new Set([...prev, ...rendered.map(rowKey)]),
                 )
               }
             >
@@ -408,6 +597,16 @@ function AvailableVendorList({
                 <th scope="col">
                   <span className="sr-only">Select</span>
                 </th>
+                {/* The source rides under the name in this column rather than
+                    in one of its own. It was a column first, and a column cost
+                    61px of an 902px table that the three wrapping columns
+                    beside it were already short of: the worst rows went from
+                    146px to 194px tall and the whole table 16% longer.
+                    Measured in a browser, both ways, on the real 79-vendor
+                    Cables list — jsdom applies no stylesheet and does no
+                    layout, so it sees none of this. Under the name it is back
+                    to 146px, and it reads better besides: the provenance
+                    belongs to the company, not to a column beside it. */}
                 <th scope="col">Vendor</th>
                 <th scope="col">Approvals</th>
                 <th scope="col">Product groups</th>
@@ -419,85 +618,139 @@ function AvailableVendorList({
               </tr>
             </thead>
             <tbody>
-              {rendered.map((b) => (
-                <tr key={b.id}>
-                  <td>
-                    <input
-                      type="checkbox"
-                      aria-label={`Select ${b.name}`}
-                      checked={selected.has(b.id)}
-                      onChange={(e) =>
-                        setSelected((prev) => {
-                          const next = new Set(prev)
-                          if (e.target.checked) next.add(b.id)
-                          else next.delete(b.id)
-                          return next
-                        })
-                      }
-                    />
-                  </td>
-                  <td>
-                    {b.name}
-                    {/* The refusal lives in the row that caused it. */}
-                    {rowError[b.id] && (
-                      <div className="banner banner--error" role="alert">
-                        {rowError[b.id]}
+              {rendered.map((row) => {
+                const key = rowKey(row)
+                const name = rowName(row)
+                // Registry rows only. A curated row has no `vendor_id`, so
+                // there is nothing to match a shortlist entry on — and
+                // matching on the name would be the very lookup this screen
+                // refuses to make.
+                const already =
+                  row.kind === 'registry' && invited.has(row.bidder.id)
+                const groups =
+                  row.kind === 'registry'
+                    ? row.bidder.trade_categories
+                    : row.entry.trade_categories
+                return (
+                  <tr key={key}>
+                    <td>
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${name}`}
+                        checked={selected.has(key)}
+                        onChange={(e) =>
+                          setSelected((prev) => {
+                            const next = new Set(prev)
+                            if (e.target.checked) next.add(key)
+                            else next.delete(key)
+                            return next
+                          })
+                        }
+                      />
+                    </td>
+                    <td>
+                      {/* Wrapped, so the name is still an element of its own:
+                          with the source line beside it as a bare text node
+                          the cell's text would read "Al Munara Switchgear
+                          LLCRegistry" and nothing could match the name alone. */}
+                      <span>{name}</span>
+                      {/* Every row says which universe it came from, because
+                          two rows can carry the same company name and which of
+                          the two this is decides what may be done to it. */}
+                      <div className="muted">
+                        {row.kind === 'registry'
+                          ? 'Registry'
+                          : SOURCE_LABEL[row.entry.source]}
                       </div>
-                    )}
-                  </td>
-                  <td>
-                    <ApprovalPills approvers={b.approved_by} />
-                  </td>
-                  <td className="muted">
-                    {b.trade_categories.slice(0, 2).join(' · ') || '—'}
-                    {b.trade_categories.length > 2 &&
-                      ` · +${b.trade_categories.length - 2} more`}
-                  </td>
-                  <td className="muted">
-                    {b.represented_manufacturers.slice(0, 2).join(' · ') || '—'}
-                  </td>
-                  {/* The derived status, not `prequal_status`: a lapsed
-                      approval is still stored as "Approved". */}
-                  <td>{b.effective_prequal}</td>
-                  <td>
-                    {invited.has(b.id) ? (
-                      <span className="muted">Invited</span>
-                    ) : target ? (
-                      <button
-                        type="button"
-                        className="btn btn-sm"
-                        // The vendor's name belongs in the accessible name,
-                        // not the visible label: in the label it wrapped to
-                        // three lines and made every row 89px tall, while a
-                        // screen reader needs it either way to tell one row's
-                        // button from another's.
-                        aria-label={`Shortlist ${b.name}`}
-                        onClick={() => void invite(b.id)}
-                      >
-                        Shortlist
-                      </button>
-                    ) : null}
-                  </td>
-                </tr>
-              ))}
+                      {/* The refusal lives in the row that caused it. */}
+                      {rowError[key] && (
+                        <div className="banner banner--error" role="alert">
+                          {rowError[key]}
+                        </div>
+                      )}
+                    </td>
+                    {/* "Not checked" rather than empty pills or a dash: a
+                        curated row has no registry row, so there is no finding
+                        either way — the `null` vs `false` distinction the
+                        shortlist's client-approval column keeps. */}
+                    <td>
+                      {row.kind === 'registry' ? (
+                        <ApprovalPills approvers={row.bidder.approved_by} />
+                      ) : (
+                        <span className="muted">Not checked</span>
+                      )}
+                    </td>
+                    {/* Capped at two: an eleven-group discipline expansion
+                        rendered in full ran this cell to 595px and made every
+                        row 170px tall. */}
+                    <td className="muted">
+                      {groups.slice(0, 2).join(' · ') || '—'}
+                      {groups.length > 2 && ` · +${groups.length - 2} more`}
+                    </td>
+                    <td className="muted">
+                      {row.kind === 'registry'
+                        ? row.bidder.represented_manufacturers
+                            .slice(0, 2)
+                            .join(' · ') || '—'
+                        : '—'}
+                    </td>
+                    {/* The derived status, not `prequal_status`: a lapsed
+                        approval is still stored as "Approved". */}
+                    <td>
+                      {row.kind === 'registry' ? (
+                        row.bidder.effective_prequal
+                      ) : (
+                        <span className="muted">Not checked</span>
+                      )}
+                    </td>
+                    <td>
+                      {already ? (
+                        <span className="muted">Invited</span>
+                      ) : target ? (
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          // The vendor's name belongs in the accessible name,
+                          // not the visible label: in the label it wrapped to
+                          // three lines and made every row 89px tall, while a
+                          // screen reader needs it either way to tell one row's
+                          // button from another's.
+                          aria-label={`Shortlist ${name}`}
+                          onClick={() => void invite(row)}
+                        >
+                          Shortlist
+                        </button>
+                      ) : null}
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
 
           <p className="muted">
             {needle
-              ? `${shown.length} of ${data.total} vendors match "${query.trim()}".`
-              : narrowed
-                ? `${data.total} available ${data.total === 1 ? 'vendor is' : 'vendors are'} registered for ${discipline}.`
-                : `${data.total} vendors approved by ${data.approvers.join(' and ')}.`}
+              ? `${shown.length} of ${poolTotal} vendors match "${query.trim()}".`
+              : registryOff
+                ? `${curatedRows.length} from this item's own lists.`
+                : narrowed
+                  ? `${registryTotal} available ${registryTotal === 1 ? 'vendor is' : 'vendors are'} registered for ${discipline}.`
+                  : `${registryTotal} vendors approved by ${(data?.approvers ?? []).join(' and ')}.`}
+            {!needle && !registryOff && curatedRows.length > 0 && (
+              <>
+                {' '}
+                {curatedRows.length} more from this item's own lists.
+              </>
+            )}
             {shown.length > BIDDER_CAP && (
               <>
                 {' '}
                 Showing the first {BIDDER_CAP} — search to narrow the rest.
               </>
             )}
-          </p>
-        </>
-      )}
+        </p>
+      </>
+    )}
     </Card>
   )
 }
@@ -1188,6 +1441,14 @@ export function ItemDetail({
           go next. */}
       <AvailableVendorList
         discipline={item.discipline}
+        // The two curated lists, from the payload this screen already read.
+        // Passed rather than fetched: a second read could disagree with the
+        // two cards rendered above, and there is nothing to ask the server
+        // that it has not already answered.
+        curated={[
+          ...(data.item_vendor_lists?.[itemId]?.Manual ?? []),
+          ...(data.item_vendor_lists?.[itemId]?.Suggested ?? []),
+        ]}
         covering={covering}
         shortlists={shortlists.data}
         // Falls back to the first covering RFQ rather than being seeded by an

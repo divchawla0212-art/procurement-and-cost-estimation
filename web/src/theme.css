@@ -427,6 +427,20 @@ a { color: var(--accent-ink); text-underline-offset: 2px; }
   color: var(--muted);
   cursor: pointer;
   text-transform: capitalize;
+  /* A pill never breaks its own label, and never gets shrunk into doing so.
+     Chips sit in `.fxrow`, which is `display: flex` with no `flex-wrap`, so a
+     multi-word chip beside a text input was shrunk below its label's width and
+     wrapped *inside* the pill: "Added by hand" and "Suggested vendors" rendered
+     47px tall against 29px for "ADNOC" and "Astra", 9px out of line with them
+     in the same row. Third instance of this family after the 89px shortlist
+     button and the 170px trade-category row, and like both of those **jsdom
+     cannot see it** — no stylesheet, no layout. Found by measuring
+     getBoundingClientRect in a real browser. `flex-shrink: 0` is the half that
+     matters: `nowrap` alone would still let flex squeeze the pill and overflow
+     its own text. The input beside it absorbs the shrinking instead, which is
+     what should give. */
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 /* A chip whose label is a phrase, not a token. The rule above capitalises
    every word, which suits the single-word verdict chips it was written for
