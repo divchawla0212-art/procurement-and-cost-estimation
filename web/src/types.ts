@@ -295,8 +295,34 @@ export interface TechnicalPackage {
   revision: string
   basis_of_design: string
   attachments: Attachment[]
+  /** Ids into `RfqDetail.documents` — the files the contractor issued. Rebuilt
+   *  server-side from the records, so it cannot disagree with them. */
+  documents: string[]
   frozen_at: string | null
   frozen_by: string | null
+}
+
+/** One real file stored against the RFQ.
+ *
+ *  `filename` is the leaf and `rel_path` is where it sat inside the folder or
+ *  archive it arrived in — `enquiry/drawings/sld.dwg` against a leaf of
+ *  `sld.dwg`. A plain single-file upload has the same text in both.
+ *
+ *  `submitted_by_vendor_id` is `null` for a document the contractor issued and
+ *  a vendor id for one a bidder returned; one collection serves both halves of
+ *  the enquiry. */
+export interface RfqDocument {
+  id: string
+  rfq_id: string
+  filename: string
+  rel_path: string
+  sha256: string
+  size_bytes: number
+  content_type: string | null
+  category: string | null
+  uploaded_by: string
+  uploaded_at: string
+  submitted_by_vendor_id: string | null
 }
 
 export interface ShortlistEntry {
@@ -383,6 +409,11 @@ export interface RfqDetail {
   /** Whose approval `client_approved` on each entry refers to. From the server
    *  so the shortlist table does not spell the client's name itself. */
   client_approver: string
+  /** Every file stored against this RFQ, both halves of the enquiry. */
+  documents: RfqDocument[]
+  /** The eligibility vocabulary, from the server, so the upload card does not
+   *  spell the categories itself. */
+  document_categories: string[]
   tbe_template: TbeTemplate | null
   vdrl: VdrlLine[]
   bids: BidWithVdrl[]

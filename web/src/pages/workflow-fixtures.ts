@@ -203,6 +203,8 @@ export const RFQ_DETAIL: RfqDetail = {
   shortlist: [],
   shortlist_approved: false,
   client_approver: 'ADNOC',
+  documents: [],
+  document_categories: [],
   tbe_template: null,
   vdrl: [],
   bids: [],

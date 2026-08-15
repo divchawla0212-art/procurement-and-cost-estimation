@@ -14,6 +14,7 @@ import type {
   Attachment,
   Rfq,
   RfqDetail,
+  RfqDocument,
   RfqRoster,
   ShortlistEntry,
   TbeTemplate,
@@ -473,6 +474,42 @@ export function setTechnicalPackage(
     'PUT',
     body,
   )
+}
+
+/** Store real files against the RFQ: several at once, a folder, or a zip.
+ *
+ *  One call for the whole selection, unlike the per-vendor invitation routes —
+ *  there is no per-file guard to attribute, and a browser that posted forty
+ *  files one at a time would leave a half-uploaded package behind on the first
+ *  refusal. The server refuses the lot instead, naming the offending entry.
+ *
+ *  `paths` is positional against `files`, and is the browser's own
+ *  `webkitRelativePath` for a folder upload. It is sent only when there is one:
+ *  a plain multi-select has no paths, and inventing them here would put a
+ *  folder structure on the record that the uploader never had. */
+export function uploadRfqDocuments(
+  rfqId: string,
+  files: File[],
+  options: { paths?: string[]; category?: string | null } = {},
+): Promise<{ documents: RfqDocument[] }> {
+  const form = new FormData()
+  for (const file of files) form.append('files', file)
+  for (const path of options.paths ?? []) form.append('paths', path)
+  if (options.category) form.append('category', options.category)
+  return fetch(`/api/workflow/rfqs/${encodeURIComponent(rfqId)}/documents`, {
+    method: 'POST',
+    body: form,
+  }).then((res) => unwrap<{ documents: RfqDocument[] }>(res))
+}
+
+/** Take one document off, **by id**. The server drops the bytes only when no
+ *  other record still names them — two records legitimately share one blob. */
+export function removeRfqDocument(rfqId: string, documentId: string): Promise<void> {
+  return fetch(
+    `/api/workflow/rfqs/${encodeURIComponent(rfqId)}/documents/` +
+      `${encodeURIComponent(documentId)}`,
+    { method: 'DELETE' },
+  ).then(expectNoContent)
 }
 
 export function freezeTechnicalPackage(rfqId: string): Promise<TechnicalPackage> {

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { addVdrlLine, removeVdrlLine } from '../../api'
-import { TechnicalPackageEditor } from './TechnicalPackageEditor'
+import { RaiseRfqStep } from './RaiseRfqStep'
 import type { StepProps } from './types'
 
 /**
@@ -8,8 +8,11 @@ import type { StepProps } from './types'
  *
  * Two halves. The technical package comes first, because it is what vendors
  * bid against and it is the thing that gets frozen; it arrived here from the
- * Scoping step when that stage was removed from the process. The VDRL follows:
- * the documents each vendor must return with their bid.
+ * Scoping step when that stage was removed from the process, and BD-6 turned
+ * it from a register of document codes into the documents themselves —
+ * `RaiseRfqStep`. The VDRL follows: the documents each vendor must return with
+ * their bid, which is a list of requirements rather than a list of files and
+ * so stays a register.
  */
 export function IssuedStep({ data, run, busy }: Omit<StepProps, 'tick'>) {
   const [code, setCode] = useState('')
@@ -20,7 +23,7 @@ export function IssuedStep({ data, run, busy }: Omit<StepProps, 'tick'>) {
   return (
     <>
       <h3>Technical package</h3>
-      <TechnicalPackageEditor data={data} run={run} busy={busy} />
+      <RaiseRfqStep data={data} run={run} busy={busy} />
 
       <h3>Documents required with the bid</h3>
       {data.vdrl.length === 0 ? (

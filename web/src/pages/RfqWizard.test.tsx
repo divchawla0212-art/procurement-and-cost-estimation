@@ -78,6 +78,8 @@ function detail(over: Partial<RfqDetail> = {}): RfqDetail {
     shortlist: [],
     shortlist_approved: false,
     client_approver: 'ADNOC',
+    documents: [],
+    document_categories: [],
     tbe_template: null,
     vdrl: [],
     bids: [],
@@ -166,6 +168,7 @@ describe('RfqWizard', () => {
           revision: 'Rev. B',
           basis_of_design: 'basis',
           attachments: [],
+          documents: [],
           frozen_at: '2026-08-13T10:00:00Z',
           frozen_by: 'lead@adp.ae',
         },
@@ -303,14 +306,16 @@ describe('RfqWizard', () => {
   it('freezes the package', async () => {
     vi.mocked(freezeTechnicalPackage).mockResolvedValue({
       rfq_id: 'rfq_abc', revision: 'Rev. B', basis_of_design: 'b',
-      attachments: [], frozen_at: '2026-08-13T10:00:00Z', frozen_by: 'admin@gmail.com',
+      attachments: [],
+      documents: [], frozen_at: '2026-08-13T10:00:00Z', frozen_by: 'admin@gmail.com',
     })
     await show(
       detail({
         rfq: { ...detail().rfq, stage: 'Issued' },
         technical_package: {
           rfq_id: 'rfq_abc', revision: 'Rev. B', basis_of_design: 'basis',
-          attachments: [], frozen_at: null, frozen_by: null,
+          attachments: [],
+          documents: [], frozen_at: null, frozen_by: null,
         },
       }),
     )
@@ -327,6 +332,7 @@ describe('RfqWizard', () => {
         technical_package: {
           rfq_id: 'rfq_abc', revision: 'Rev. B', basis_of_design: 'basis',
           attachments: [{ doc_code: 'HAL-PID-001', title: 'P&ID', revision: 'Rev. C' }],
+          documents: [],
           frozen_at: '2026-08-13T10:00:00Z', frozen_by: 'lead@adp.ae',
         },
       }),
@@ -343,6 +349,7 @@ describe('RfqWizard', () => {
         technical_package: {
           rfq_id: 'rfq_abc', revision: 'Rev. B', basis_of_design: 'basis',
           attachments: [{ doc_code: 'HAL-PID-001', title: 'P&ID', revision: null }],
+          documents: [],
           frozen_at: null, frozen_by: null,
         },
       }),

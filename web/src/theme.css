@@ -1107,6 +1107,12 @@ p.warn { margin: 0.5rem 0 0; }
   font-weight: 600;
   color: var(--muted);
 }
+/* The same label beside its control rather than above it. The stacked margins
+   above are asymmetric — 0.8rem over, 0.3rem under — and inside `.fxrow`,
+   which centres its children, that difference lands the text 5px below the
+   control it names. Measured in a browser; jsdom applies no stylesheet and
+   does no layout, so nothing in the web suite can see it. */
+.field-label--inline { margin: 0; }
 
 
 /* ------------------------------------------------- project cards (roster) */
