@@ -25,8 +25,8 @@ untracked fixture directories are present, never in pass/fail:
 
 | where | baseline |
 |---|---|
-| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1694 passed, 3 skipped, 0 failed** |
-| CI, and any clean checkout | **1674 passed, 23 skipped, 0 failed** |
+| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1735 passed, 3 skipped, 0 failed** |
+| CI, and any clean checkout | **1715 passed, 23 skipped, 0 failed** |
 
 Anything else is a real regression.
 
@@ -66,13 +66,13 @@ parser itself is covered in CI — only the tests that assert against the *real*
 
 So the CI row is the workstation row with the four corpus-coverage passes, the
 three `data/` passes, the two `pdftotext` passes and the eleven AVL passes
-turned into skips — `1674 = 1694 - 4 - 3 - 2 - 11`, `23 = 3 + 4 + 3 + 2 + 11`;
-1697 tests either way. When the counts move, measure the workstation row and derive
+turned into skips — `1715 = 1735 - 4 - 3 - 2 - 11`, `23 = 3 + 4 + 3 + 2 + 11`;
+1738 tests either way. When the counts move, measure the workstation row and derive
 the CI row from it; editing the two rows independently is how they drift
 apart.
 
-**The workstation row is measured, not derived**: **1694 passed, 3 skipped**,
-taken on 2026-08-14 on the `rfq-platform-phase-1` branch, in an environment
+**The workstation row is measured, not derived**: **1735 passed, 3 skipped**,
+taken on 2026-08-15 on the `rfq-platform-phase-1` branch, in an environment
 with `pdftotext`, `data/` (including the ADNOC export) and an ingested
 multi-vendor `projects/` all present. The **eleven**-skip figure that the
 fourth gate contributes is measured too — by moving `data/bidders_details/`
@@ -229,6 +229,42 @@ and watching it go red. An absence-assertion nobody has watched fail is not
 known to be wired to anything, and this one guards the rule that
 `client_approved` and `approved_by` are derived on read and stored nowhere —
 the assertion that fails if either is ever "optimised" into the document.
+
+The last **41** are Bid Desk's BD-2, the draft shortlist an **item** owns: 24 in
+`test_draft_shortlist.py`, 12 in `test_draft_shortlist_endpoints.py` and 5 in
+`test_workflow_persistence.py`. None reads a fixture directory or calls a
+provider, so all 41 land in both rows and the AVL gate is still eleven — none of
+this change touched the three files carrying the marker, which is the condition
+set above for re-measuring it.
+
+Three of those are the ones to keep.
+
+`test_the_duplicate_guard_still_holds_after_a_reload` is the only two-run one.
+The guard reads the list it is appending to, and on run 2 that list came off
+disk rather than out of the call that built it — a regrouping that lost
+`item_id` leaves the draft empty and the duplicate lands as a second row, which
+no single-run test sees.
+
+`test_a_registry_row_and_a_hand_typed_one_of_the_same_name_are_two_rows` is the
+no-dedupe rule stated inside the store rather than in the view. The key is the
+registry id where there is one and the name where there is not, and the two
+spaces are tagged apart rather than merged — collapsing them attaches a real
+company's approvals to a string somebody typed, which is the defect this file
+records twice. Matching is exact and never folded: case-insensitive company-name
+matching does not become safe because the scope narrowed to one item.
+
+`test_no_draft_entry_stores_the_approvals_it_reports` asserts an **absence**, so
+it passed the moment it was written. It was verified by adding `approved_by` to
+`DraftShortlistEntry` and watching it — and its sibling in
+`test_draft_shortlist.py` — go red. Second instance of that discipline after
+`test_no_shortlist_entry_stores_the_approvals_it_reports`, and for the same
+reason: an absence-assertion nobody has watched fail is not known to be wired to
+anything.
+
+`test_there_is_no_adoption_yet` asserts `WorkflowStore` has no
+`adopt_draft_shortlist`. That is deliberate scope, not an oversight — turning a
+draft into invitations is an attributed act with per-vendor guards, and it
+belongs to the task where the RFQ-raising screen needs it.
 
 The web suite is separate and not part of either row above — both rows are
 `python -m pytest` counts. Run it with `npm test` under `web/` (vitest,
@@ -788,6 +824,23 @@ them, so keeping them apart stops a reader assuming one set covers both.
   that somebody was *asked* to bid while a query records what somebody *said*,
   and only the first is a fact a mock may make up about a real company.
   `test_no_invented_vendor_claims_the_clients_approval` is what holds it now.
+- **An item owns a draft shortlist, and it is a draft — nothing there has been
+  invited.** A buyer assembles picks out of the four-source pool before any RFQ
+  covers the item, so it is stored rather than carried in browser navigation
+  state: this API restarts on every code change and clears sessions when it
+  does, and a twenty-five vendor selection lost to that is the failure the
+  collection exists to prevent. Two rules hold it. **`workflow.json` holds
+  exactly the draft entries whose item still exists** — `delete_item` pops the
+  draft and `delete_project` reaches through the item cascade, materialising its
+  id list before the first deletion. And **an item's draft holds exactly one
+  entry per vendor**, keyed on `vendor_id` where there is one and `vendor_name`
+  where there is not, so a registry row and a hand-typed one sharing a trading
+  name are deliberately **two** rows. That duplicate check lives in the store
+  method, never in the route — a check in the caller and a write in the store
+  are two critical sections, which is the fifth time this repository has needed
+  that rule. `source` is stored because it records *where the buyer found them*,
+  which is not derivable later; approvals are not, because they are read live
+  through `vendor_id`. There is no `adopt_draft_shortlist` yet, on purpose.
 - **`WorkflowStore` knows nothing about disk.** Serialization lives in
   `workflow/persistence.py`, the one module allowed to touch the store's dicts
   directly. That is what made moving one collection to a database a change to

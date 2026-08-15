@@ -25,6 +25,7 @@ from workflow import bidder_db
 from workflow.models.bid import Bid, BidShortlist, VdrlReceipt
 from workflow.models.bidder import Bidder
 from workflow.models.clarification import Addendum, ClarificationQuery
+from workflow.models.draft_shortlist import DraftShortlistEntry
 from workflow.models.project import Item, ItemVendorEntry, Project
 from workflow.models.rfq import (
     RfqRecord,
@@ -101,6 +102,15 @@ def to_document(store: WorkflowStore) -> dict:
             for entries in store._item_vendor_lists.values()
             for e in entries
         ],
+        # The vendors a buyer has picked against an item, before any RFQ covers
+        # it. Flat, grouped back by `item_id` on the way in. Only what is
+        # stored: `source` is where the buyer found them, and the approvals
+        # behind a `vendor_id` are read live and never written here.
+        "draft_shortlists": [
+            e.model_dump(mode="json")
+            for entries in store._draft_shortlists.values()
+            for e in entries
+        ],
     }
 
 
@@ -141,6 +151,11 @@ def from_document(doc: dict) -> WorkflowStore:
     for record in doc.get("item_vendor_lists", []):
         entry = ItemVendorEntry(**record)
         store._item_vendor_lists.setdefault(entry.item_id, []).append(entry)
+    # Same `.get` default, same reason: a document written before drafts existed
+    # loads as items with none, and `VERSION` stays where it is.
+    for record in doc.get("draft_shortlists", []):
+        pick = DraftShortlistEntry(**record)
+        store._draft_shortlists.setdefault(pick.item_id, []).append(pick)
     for record in doc.get("receipts", []):
         receipt = VdrlReceipt(**record)
         store._receipts.setdefault(receipt.bid_id, []).append(receipt)

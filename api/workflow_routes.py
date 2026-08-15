@@ -42,6 +42,7 @@ from workflow.bidders import (
 from workflow.gates import GateResult, check_gate
 from workflow.models.bidder import Bidder, PrequalStatus
 from workflow.models.clarification import Addendum, ClarificationQuery, QueryCategory
+from workflow.models.draft_shortlist import DraftShortlistEntry, DraftShortlistSource
 from workflow.models.project import (
     ItemVendorEntry,
     Item,
@@ -384,6 +385,17 @@ def get_project(project_id: str) -> dict:
             }
             for item in items
         },
+        # The vendors picked against each item before any RFQ covers it. Flat
+        # per item rather than grouped by source: the buyer picked one basket,
+        # and `source` on each row says where each came from. Every item gets a
+        # key, so the browser reads a list rather than guarding for a missing
+        # one on every render.
+        "draft_shortlists": {
+            item.id: [
+                e.model_dump(mode="json") for e in store.draft_shortlist(item.id)
+            ]
+            for item in items
+        },
     }
 
 
@@ -581,6 +593,81 @@ def add_item_vendor(
         # instead — re-uploading the corrected export.
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return stored.model_dump(mode="json")
+
+
+class DraftShortlistIn(BaseModel):
+    """One vendor a buyer is picking against an item, out of the four-source
+    pool on the item screen.
+
+    `source` is a `DraftShortlistSource`, not a `VendorListSource`: it names the
+    chip the buyer was looking at, and `Client` — the uploaded export's name for
+    the client's own list — is deliberately not a member. A wrong value is a 422
+    from pydantic rather than a stored source no screen renders.
+
+    There is no `added_by` on this body. Attribution comes from the session, so
+    a screen cannot name somebody else as the picker.
+    """
+
+    vendor_name: str
+    source: DraftShortlistSource
+    vendor_id: str | None = None
+
+
+@router.post(
+    "/projects/{project_id}/items/{item_id}/draft-shortlist", status_code=201
+)
+def add_draft_shortlist_pick(
+    project_id: str,
+    item_id: str,
+    body: DraftShortlistIn,
+    user: User = Depends(current_user),
+) -> dict:
+    """Pick a vendor against this item, before any RFQ covers it.
+
+    Picking the same vendor twice is a **no-op that returns the row already
+    there**, so a browser firing one call per ticked row cannot produce
+    duplicates by double-submitting. The guard itself lives in the store, inside
+    this `locked_update` — a check made here and a write made there would be two
+    critical sections, and two concurrent picks would each read "not there yet".
+
+    **`vendor_id` is taken from the body and never derived from the name.** A
+    registry row is picked by id because the pool knew its id; a curated row has
+    none, and looking one up would attach a real company's approvals to whatever
+    somebody typed. Nothing here creates a bidder or grants an approval.
+    """
+    name = body.vendor_name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="A vendor needs a name.")
+
+    try:
+        with persistence.locked_update(_root()) as store:
+            _owned_item(store, project_id, item_id)
+            stored = store.add_draft_shortlist_entry(item_id, DraftShortlistEntry(
+                item_id=item_id,
+                vendor_id=body.vendor_id,
+                vendor_name=name,
+                source=body.source,
+                added_by=user.email,
+                added_at=datetime.now(timezone.utc).isoformat(),
+            ))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc).strip("'")) from exc
+    return stored.model_dump(mode="json")
+
+
+@router.delete(
+    "/projects/{project_id}/items/{item_id}/draft-shortlist/{entry_id}",
+    status_code=204,
+)
+def remove_draft_shortlist_pick(project_id: str, item_id: str, entry_id: str) -> None:
+    """Unpick a vendor, **by id** — two suppliers can share a trading name, and
+    the pool re-sorts under its own search."""
+    try:
+        with persistence.locked_update(_root()) as store:
+            _owned_item(store, project_id, item_id)
+            store.remove_draft_shortlist_entry(item_id, entry_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc).strip("'")) from exc
 
 
 @router.delete(

@@ -10,6 +10,7 @@ from workflow.models.clarification import (
     QueryCategory,
 )
 from workflow.models.bidder import Bidder, PrequalStatus
+from workflow.models.draft_shortlist import DraftShortlistEntry
 from workflow.models.project import (
     CURATED_SOURCES,
     UPLOADED_SOURCES,
@@ -106,6 +107,10 @@ class WorkflowStore:
         # source is on each record, so grouping by it here would be a second
         # place for the key to disagree with what it groups.
         self._item_vendor_lists: dict[str, list[ItemVendorEntry]] = {}
+        # Keyed by item id. The grouping key is not stored on the way out —
+        # `persistence` flattens this to one array and regroups on the way in,
+        # the same shape as `_item_vendor_lists` above.
+        self._draft_shortlists: dict[str, list[DraftShortlistEntry]] = {}
 
     # -- projects ---------------------------------------------------------
 
@@ -225,6 +230,81 @@ class WorkflowStore:
         # replaces the document wholesale, so an entry left here is an entry
         # pointing at an item that is gone — and it survives the restart.
         self._item_vendor_lists.pop(item_id, None)
+        # Same rule, same call: a draft pointing at an item that is gone is an
+        # orphan, and it survives the restart.
+        self._draft_shortlists.pop(item_id, None)
+
+    # -- the draft shortlist an item owns ---------------------------------
+
+    @staticmethod
+    def _draft_key(entry: DraftShortlistEntry) -> tuple[str, str]:
+        """What makes two picks the same vendor.
+
+        The registry id where there is one, so a company renamed between two
+        picks is still one row; the name where there is not, because a curated
+        entry has no id and the name is the only key there is.
+
+        The two spaces are kept apart by the tag rather than merged: a registry
+        row and a hand-typed one sharing a trading name are **two** rows, and
+        collapsing them would attach a real company's approvals to a string
+        somebody typed. Exact match, never folded — case-insensitive matching
+        of company names is the defect this repository has recorded twice, and
+        it does not become safe because the scope is one item.
+        """
+        if entry.vendor_id:
+            return ("id", entry.vendor_id)
+        return ("name", entry.vendor_name)
+
+    def add_draft_shortlist_entry(
+        self, item_id: str, entry: DraftShortlistEntry
+    ) -> DraftShortlistEntry:
+        """Pick a vendor against this item. Adding one twice is a no-op.
+
+        The duplicate check is **here**, not in the route, and that is the whole
+        reason this method exists rather than a bare append. A check made by the
+        caller and a write made by the store are two critical sections: two
+        concurrent picks of the same vendor would each read "not there yet" and
+        both write. The route runs this inside `persistence.locked_update`, so
+        the read and the write are one. Fifth instance of that rule in this
+        repository — `api/auth/store.py::grant` is where it is stated.
+
+        The existing row is returned rather than the rejected one, so a caller
+        that stores the returned id addresses a row that exists.
+        """
+        if item_id not in self._items:
+            raise KeyError(f"Unknown item: {item_id}")
+        draft = self._draft_shortlists.setdefault(item_id, [])
+        key = self._draft_key(entry)
+        for existing in draft:
+            if self._draft_key(existing) == key:
+                return existing
+        draft.append(entry)
+        return entry
+
+    def remove_draft_shortlist_entry(self, item_id: str, entry_id: str) -> None:
+        """Unpick a vendor, addressed by **id** — never by name or position.
+
+        Two suppliers can share a trading name, and the list re-sorts under the
+        pool's search, so both of the other two addresses are wrong. The same
+        rule `remove_shortlist_entry` and `remove_item_vendor_entry` keep.
+
+        An id belonging to another item's draft is not found here: drafts are
+        per item, and resolving it globally would let one item's screen empty
+        another's basket.
+        """
+        draft = self._draft_shortlists.get(item_id, [])
+        kept = [e for e in draft if e.id != entry_id]
+        if len(kept) == len(draft):
+            raise KeyError(f"Unknown draft shortlist entry: {entry_id}")
+        self._draft_shortlists[item_id] = kept
+
+    def draft_shortlist(self, item_id: str) -> list[DraftShortlistEntry]:
+        """This item's picks, in the order they were made. Absent reads as
+        empty — the screen asks before the buyer has picked anybody."""
+        return list(self._draft_shortlists.get(item_id, []))
+
+    def clear_draft_shortlist(self, item_id: str) -> None:
+        self._draft_shortlists.pop(item_id, None)
 
     # -- an item's own vendor lists ---------------------------------------
 
@@ -328,6 +408,7 @@ class WorkflowStore:
             # Reaches through the item cascade: an item's vendor lists go with
             # the item, whichever door deleted it.
             self._item_vendor_lists.pop(item_id, None)
+            self._draft_shortlists.pop(item_id, None)
         del self._projects[project_id]
 
     def validate_against_live_period(self, project_id: str, when: date) -> str | None:

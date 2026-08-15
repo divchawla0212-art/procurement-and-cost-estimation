@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from workflow import bidder_db, clarifications, persistence
+from workflow.models.draft_shortlist import DraftShortlistEntry
 from workflow.models.rfq import Attachment
 from workflow.stages import Stage
 from workflow.store import WorkflowStore
@@ -482,6 +483,119 @@ def test_a_curated_entry_survives_a_round_trip(tmp_path):
     entries = loaded.item_vendor_list(item.id, "Suggested")
     assert [e.vendor_name for e in entries] == ["Model Co"]
     assert entries[0].source == "Suggested"
+
+
+# -- the draft shortlist an item owns -----------------------------------------
+#
+# I-A on disk. The store half of the same rule is in
+# `tests/test_draft_shortlist.py`; these read the document back, because a
+# single-run assertion against the store that made the change passes while the
+# document is already wrong.
+
+
+def a_draft(item_id: str, name: str, *, vendor_id=None, source="Manual"):
+    return DraftShortlistEntry(
+        item_id=item_id,
+        vendor_id=vendor_id,
+        vendor_name=name,
+        source=source,
+        added_by="buyer@example.com",
+        added_at="2026-08-15T09:00:00+00:00",
+    )
+
+
+def test_a_draft_shortlist_survives_a_round_trip(tmp_path):
+    """The whole reason this collection is stored rather than carried in the
+    browser: a selection has to outlive a restart, and this API restarts on
+    every code change."""
+    store, _ = populated_store()
+    item = _uncovered_item(store)
+    store.add_draft_shortlist_entry(
+        item.id, a_draft(item.id, "Al Munara Cables LLC", vendor_id="bdr_1", source="ADNOC")
+    )
+    store.add_draft_shortlist_entry(item.id, a_draft(item.id, "Typed By Hand LLC"))
+    persistence.save(str(tmp_path), store)
+
+    loaded = persistence.load(str(tmp_path))
+
+    draft = loaded.draft_shortlist(item.id)
+    assert [e.vendor_name for e in draft] == ["Al Munara Cables LLC", "Typed By Hand LLC"]
+    # `source` is the fact that cannot be re-derived later, so it is the one
+    # worth asserting came back off disk as it went on.
+    assert [e.source for e in draft] == ["ADNOC", "Manual"]
+    assert [e.vendor_id for e in draft] == ["bdr_1", None]
+
+
+def test_the_duplicate_guard_still_holds_after_a_reload(tmp_path):
+    """Two runs, because the guard reads the list it is appending to — and on
+    run 2 that list came off disk rather than out of the call that made it. A
+    regrouping that lost `item_id` would leave the draft empty here and the
+    duplicate would land as a second row."""
+    store, _ = populated_store()
+    item = _uncovered_item(store)
+    store.add_draft_shortlist_entry(
+        item.id, a_draft(item.id, "Al Munara Cables LLC", vendor_id="bdr_1", source="ADNOC")
+    )
+    persistence.save(str(tmp_path), store)
+
+    loaded = persistence.load(str(tmp_path))
+    loaded.add_draft_shortlist_entry(
+        item.id, a_draft(item.id, "Al Munara Cables LLC", vendor_id="bdr_1", source="Astra")
+    )
+
+    assert len(loaded.draft_shortlist(item.id)) == 1
+
+
+def test_deleting_an_item_takes_its_draft_shortlist(tmp_path):
+    store, _ = populated_store()
+    item = _uncovered_item(store)
+    store.add_draft_shortlist_entry(item.id, a_draft(item.id, "First Co"))
+    persistence.save(str(tmp_path), store)
+
+    store.delete_item(item.id)
+    persistence.save(str(tmp_path), store)
+
+    doc = json.loads((tmp_path / "workflow.json").read_text(encoding="utf-8"))
+    assert [e for e in doc["draft_shortlists"] if e["item_id"] == item.id] == []
+
+
+def test_a_document_written_before_drafts_existed_loads_as_none(tmp_path):
+    """`.get` with a default. A missing key is the correct reading of an older
+    document, not a migration — which is why `VERSION` does not move."""
+    store, _ = populated_store()
+    item = _uncovered_item(store)
+    persistence.save(str(tmp_path), store)
+    path = tmp_path / "workflow.json"
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    del doc["draft_shortlists"]
+    path.write_text(json.dumps(doc), encoding="utf-8")
+
+    loaded = persistence.load(str(tmp_path))
+
+    assert loaded.draft_shortlist(item.id) == []
+
+
+def test_no_draft_entry_stores_the_approvals_it_reports(tmp_path):
+    """An absence, so it passed the moment it was written — and was verified by
+    adding `approved_by` to `DraftShortlistEntry` and watching it go red.
+
+    Approvals are read live through `vendor_id`, the same rule
+    `client_approved` keeps on a shortlist row. A copy on the draft would be
+    wrong the moment the registry is corrected, and it would be the copy the
+    screen rendered.
+    """
+    store, _ = populated_store()
+    item = _uncovered_item(store)
+    store.add_draft_shortlist_entry(
+        item.id, a_draft(item.id, "Al Munara Cables LLC", vendor_id="bdr_1", source="ADNOC")
+    )
+    persistence.save(str(tmp_path), store)
+
+    doc = json.loads((tmp_path / "workflow.json").read_text(encoding="utf-8"))
+
+    stored = doc["draft_shortlists"][0]
+    for derived in ("approved_by", "client_approved", "prequal_status", "scope_code_fit"):
+        assert derived not in stored
 
 
 def test_deleting_a_project_takes_every_items_vendor_lists(tmp_path):
