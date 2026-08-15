@@ -293,101 +293,103 @@ export function ProjectDetail({
           </EmptyState>
         ) : (
           items.length > 0 && (
-            <table className="table">
-              <thead>
-                <tr>
-                  <th scope="col">
-                    <span className="sr-only">Select</span>
-                  </th>
-                  <th scope="col">Type</th>
-                  <th scope="col">Description</th>
-                  <th scope="col">Qty</th>
-                  <th scope="col">UOM</th>
-                  <th scope="col">Discipline</th>
-                  <th scope="col">Est. value (AED)</th>
-                  <th scope="col">On site</th>
-                  <th scope="col">Long lead</th>
-                  <th scope="col">
-                    <span className="sr-only">Actions</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((item) => (
-                  <tr key={item.id}>
-                    <td>
-                      <input
-                        type="checkbox"
-                        aria-label={`Select ${item.item_type}`}
-                        checked={selected.has(item.id)}
-                        onChange={(e) =>
-                          setSelected((prev) => {
-                            const next = new Set(prev)
-                            if (e.target.checked) next.add(item.id)
-                            else next.delete(item.id)
-                            return next
-                          })
-                        }
-                      />
-                    </td>
-                    <td>
-                      <button
-                        type="button"
-                        className="linkish"
-                        onClick={() => onOpenItem(item.id)}
-                      >
-                        {item.item_type}
-                      </button>
-                      {/* The refusal lives in the row that refused it. */}
-                      {rowError[item.id] && (
-                        <div className="banner banner--error" role="alert">
-                          {rowError[item.id]}
-                        </div>
-                      )}
-                    </td>
-                    <td>{item.description}</td>
-                    <td className="mono">{item.qty}</td>
-                    <td>{item.uom}</td>
-                    <td>{item.discipline}</td>
-                    <td className="mono">
-                      {item.estimated_value_aed.toLocaleString('en-AE')}
-                    </td>
-                    <td className="mono">{item.required_on_site ?? '—'}</td>
-                    <td>{item.is_long_lead ? 'Yes' : '—'}</td>
-                    <td>
-                      {confirmingItem === item.id ? (
-                        <>
+            <div className="table-scroll">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th scope="col">
+                      <span className="sr-only">Select</span>
+                    </th>
+                    <th scope="col">Type</th>
+                    <th scope="col">Description</th>
+                    <th scope="col">Qty</th>
+                    <th scope="col">UOM</th>
+                    <th scope="col">Discipline</th>
+                    <th scope="col">Est. value (AED)</th>
+                    <th scope="col">On site</th>
+                    <th scope="col">Long lead</th>
+                    <th scope="col">
+                      <span className="sr-only">Actions</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((item) => (
+                    <tr key={item.id}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${item.item_type}`}
+                          checked={selected.has(item.id)}
+                          onChange={(e) =>
+                            setSelected((prev) => {
+                              const next = new Set(prev)
+                              if (e.target.checked) next.add(item.id)
+                              else next.delete(item.id)
+                              return next
+                            })
+                          }
+                        />
+                      </td>
+                      <td>
+                        <button
+                          type="button"
+                          className="linkish"
+                          onClick={() => onOpenItem(item.id)}
+                        >
+                          {item.item_type}
+                        </button>
+                        {/* The refusal lives in the row that refused it. */}
+                        {rowError[item.id] && (
+                          <div className="banner banner--error" role="alert">
+                            {rowError[item.id]}
+                          </div>
+                        )}
+                      </td>
+                      <td>{item.description}</td>
+                      <td className="mono">{item.qty}</td>
+                      <td>{item.uom}</td>
+                      <td>{item.discipline}</td>
+                      <td className="mono">
+                        {item.estimated_value_aed.toLocaleString('en-AE')}
+                      </td>
+                      <td className="mono">{item.required_on_site ?? '—'}</td>
+                      <td>{item.is_long_lead ? 'Yes' : '—'}</td>
+                      <td>
+                        {confirmingItem === item.id ? (
+                          <>
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-danger"
+                              aria-label={`Confirm delete of ${item.item_type}`}
+                              onClick={() => removeItem(item.id)}
+                            >
+                              Delete
+                            </button>{' '}
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-ghost"
+                              onClick={() => setConfirmingItem(null)}
+                            >
+                              Cancel
+                            </button>
+                          </>
+                        ) : (
                           <button
                             type="button"
                             className="btn btn-sm btn-danger"
-                            aria-label={`Confirm delete of ${item.item_type}`}
-                            onClick={() => removeItem(item.id)}
+                            aria-label={`Delete ${item.item_type}`}
+                            onClick={() => setConfirmingItem(item.id)}
                           >
                             Delete
-                          </button>{' '}
-                          <button
-                            type="button"
-                            className="btn btn-sm btn-ghost"
-                            onClick={() => setConfirmingItem(null)}
-                          >
-                            Cancel
                           </button>
-                        </>
-                      ) : (
-                        <button
-                          type="button"
-                          className="btn btn-sm btn-danger"
-                          aria-label={`Delete ${item.item_type}`}
-                          onClick={() => setConfirmingItem(item.id)}
-                        >
-                          Delete
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )
         )}
       </Card>
@@ -398,28 +400,30 @@ export function ProjectDetail({
             An RFQ is raised against one or more of this project's items.
           </EmptyState>
         ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th scope="col">Reference</th>
-                <th scope="col">Package</th>
-                <th scope="col">Discipline</th>
-                <th scope="col">Items</th>
-                <th scope="col">Stage</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rfqs.map((rfq) => (
-                <tr key={rfq.id}>
-                  <td className="mono">{rfq.reference}</td>
-                  <td>{rfq.package}</td>
-                  <td>{rfq.discipline}</td>
-                  <td className="mono">{rfq.item_ids.length}</td>
-                  <td>{rfq.stage}</td>
+          <div className="table-scroll">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th scope="col">Reference</th>
+                  <th scope="col">Package</th>
+                  <th scope="col">Discipline</th>
+                  <th scope="col">Items</th>
+                  <th scope="col">Stage</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {rfqs.map((rfq) => (
+                  <tr key={rfq.id}>
+                    <td className="mono">{rfq.reference}</td>
+                    <td>{rfq.package}</td>
+                    <td>{rfq.discipline}</td>
+                    <td className="mono">{rfq.item_ids.length}</td>
+                    <td>{rfq.stage}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </Card>
     </>

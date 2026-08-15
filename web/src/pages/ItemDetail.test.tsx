@@ -8,6 +8,7 @@ import {
   HALIBA_PROJECT,
   RFQ_DETAIL,
   detail,
+  draftPick,
   rfq,
   shortlistEntry,
   suggestion,
@@ -41,13 +42,18 @@ vi.mock('../api', async (importOriginal) => {
     addItemVendor: vi.fn(),
     removeItemVendor: vi.fn(),
     suggestItemVendors: vi.fn(),
+    // The item's own shortlist draft — one call per vendor, no bulk route.
+    addDraftShortlistPick: vi.fn(),
+    removeDraftShortlistPick: vi.fn(),
   }
 })
 
 import {
+  addDraftShortlistPick,
   addItemVendor,
   addShortlistEntry,
   createRfq,
+  removeDraftShortlistPick,
   fetchAvailableBidders,
   fetchDisciplines,
   fetchRfq,
@@ -251,7 +257,10 @@ describe('ItemDetail', () => {
     expect(search.closest('label')).toBeNull()
   })
 
-  it('invites every selected vendor', async () => {
+  it('shortlists every selected vendor, one call each', async () => {
+    // The batch targets the **item's** draft, not an RFQ — BD-2 moved it there
+    // so a selection can be assembled before anything is raised. Still one call
+    // per vendor and still sequential: there is no bulk route, deliberately.
     vi.mocked(fetchWorkflowProject).mockResolvedValue(
       detail({ items: [GENERATOR], rfqs: [rfq('rfq_1', 'ADP-RFQ-2026-014', ['itm_1'])] }),
     )
@@ -264,57 +273,28 @@ describe('ItemDetail', () => {
       }),
     )
     vi.mocked(fetchRfq).mockResolvedValue({ ...RFQ_DETAIL, shortlist: [] })
-    vi.mocked(inviteRegisteredBidder).mockResolvedValue(shortlistEntry())
+    vi.mocked(addDraftShortlistPick).mockImplementation(async (_p, _i, body) =>
+      draftPick({ ...body, vendor_id: body.vendor_id ?? null }),
+    )
 
     renderItem()
     fireEvent.click(await screen.findByRole('button', { name: /select these 2/i }))
     fireEvent.click(screen.getByRole('button', { name: /shortlist selected \(2\)/i }))
 
-    // One call per vendor, through the same route the row button uses, so the
-    // server's per-vendor guards still run on each.
-    await waitFor(() => expect(inviteRegisteredBidder).toHaveBeenCalledTimes(2))
-    expect(inviteRegisteredBidder).toHaveBeenCalledWith('rfq_1', {
+    await waitFor(() => expect(addDraftShortlistPick).toHaveBeenCalledTimes(2))
+    expect(addDraftShortlistPick).toHaveBeenCalledWith('prj_1', 'itm_1', {
       vendor_id: 'bdr_almunara',
+      vendor_name: 'Al Munara Switchgear LLC',
+      source: 'ADNOC',
     })
-    expect(inviteRegisteredBidder).toHaveBeenCalledWith('rfq_1', {
+    expect(addDraftShortlistPick).toHaveBeenCalledWith('prj_1', 'itm_1', {
       vendor_id: 'bdr_other',
+      vendor_name: 'Gulf Crescent Fabricators',
+      source: 'ADNOC',
     })
-  })
-
-  it('keeps a refused vendor ticked and invites the rest', async () => {
-    vi.mocked(fetchWorkflowProject).mockResolvedValue(
-      detail({ items: [GENERATOR], rfqs: [rfq('rfq_1', 'ADP-RFQ-2026-014', ['itm_1'])] }),
-    )
-    vi.mocked(fetchAvailableBidders).mockResolvedValue(
-      availableList({
-        bidders: [
-          APPROVED_BIDDER,
-          { ...APPROVED_BIDDER, id: 'bdr_other', name: 'Gulf Crescent Fabricators' },
-        ],
-      }),
-    )
-    vi.mocked(fetchRfq).mockResolvedValue({ ...RFQ_DETAIL, shortlist: [] })
-    vi.mocked(inviteRegisteredBidder).mockImplementation((_rfqId, body) =>
-      body.vendor_id === 'bdr_other'
-        ? Promise.reject(
-            new Error(
-              'Gulf Crescent Fabricators is on hold — an override reason is required.',
-            ),
-          )
-        : Promise.resolve(shortlistEntry()),
-    )
-
-    renderItem()
-    fireEvent.click(await screen.findByRole('button', { name: /select these 2/i }))
-    fireEvent.click(screen.getByRole('button', { name: /shortlist selected \(2\)/i }))
-
-    // Not all-or-nothing: the successful write has already landed through
-    // `locked_update` and there is nothing to roll it back with.
-    expect(await screen.findByText(/1 invited · 1 refused/i)).toBeInTheDocument()
-    const row = screen.getByText('Gulf Crescent Fabricators').closest('tr')!
-    expect(within(row).getByText(/an override reason is required/i)).toBeInTheDocument()
-    // Still ticked, so the reader retries exactly what failed.
-    expect(screen.getByText(/^1 selected/)).toBeInTheDocument()
+    // Nothing is invited by shortlisting. An invitation is an attributed act
+    // that happens when an RFQ is raised over the draft.
+    expect(inviteRegisteredBidder).not.toHaveBeenCalled()
   })
 
   it('still shows the refusals after the batch reloads the screen', async () => {
@@ -344,11 +324,12 @@ describe('ItemDetail', () => {
       }),
     )
     vi.mocked(fetchRfq).mockResolvedValue({ ...RFQ_DETAIL, shortlist: [] })
-    vi.mocked(inviteRegisteredBidder).mockImplementation((_rfqId, body) =>
-      body.vendor_id === 'bdr_other'
-        ? Promise.reject(new Error('Gulf Crescent Fabricators is on hold.'))
-        : Promise.resolve(shortlistEntry()),
-    )
+    vi.mocked(addDraftShortlistPick).mockImplementation(async (_p, _i, body) => {
+      if (body.vendor_id === 'bdr_other') {
+        throw new Error('Gulf Crescent Fabricators is on hold.')
+      }
+      return draftPick({ ...body, vendor_id: body.vendor_id ?? null })
+    })
 
     renderItem()
     fireEvent.click(await screen.findByRole('button', { name: /select these 2/i }))
@@ -358,25 +339,17 @@ describe('ItemDetail', () => {
     // After the reload has actually landed.
     await screen.findByText('Gulf Crescent Fabricators')
 
-    expect(screen.getByText(/1 invited · 1 refused/i)).toBeInTheDocument()
+    expect(screen.getByText(/1 shortlisted · 1 refused/i)).toBeInTheDocument()
     const row = screen.getByText('Gulf Crescent Fabricators').closest('tr')!
     expect(within(row).getByText(/is on hold/i)).toBeInTheDocument()
     expect(screen.getByText(/^1 selected/)).toBeInTheDocument()
   })
 
-  it('has no bulk control when no RFQ covers the item', async () => {
-    vi.mocked(fetchWorkflowProject).mockResolvedValue(
-      detail({ items: [GENERATOR], rfqs: [] }),
-    )
-    vi.mocked(fetchAvailableBidders).mockResolvedValue(
-      availableList({ bidders: [APPROVED_BIDDER] }),
-    )
-
-    renderItem()
-    fireEvent.click(await screen.findByRole('button', { name: /select these 1/i }))
-
-    expect(screen.queryByRole('button', { name: /shortlist selected/i })).toBeNull()
-  })
+  // `has no bulk control when no RFQ covers the item` was deleted here, not
+  // skipped: BD-2 inverts the rule it asserted. The batch now writes to the
+  // item's own draft, so it is offered whether or not an RFQ covers the item —
+  // `shortlists the selected vendors with no RFQ covering the item`, in the
+  // draft suite at the foot of this file, is the assertion that replaced it.
 
   it('selects the vendors that are actually on screen', async () => {
     vi.mocked(fetchWorkflowProject).mockResolvedValue(detail({ items: [GENERATOR] }))
@@ -535,8 +508,12 @@ describe('ItemDetail', () => {
     renderItem()
     await screen.findByText('Al Munara Switchgear LLC')
 
+    // The *per-row* control is still absent — it invites into a covering RFQ,
+    // and there is none. What changed is the copy beside it: shortlisting is
+    // now something you can do here first, so telling the reader to raise an
+    // RFQ before picking anybody would send them the wrong way round.
     expect(screen.queryByRole('button', { name: /shortlist al munara/i })).toBeNull()
-    expect(screen.getByText(/raise an RFQ first/i)).toBeInTheDocument()
+    expect(screen.getByText(/No RFQ is needed yet/i)).toBeInTheDocument()
   })
 
   it('asks which RFQ when several cover the item', async () => {
@@ -1812,12 +1789,15 @@ describe('ItemDetail', () => {
       expect(inviteRegisteredBidder).not.toHaveBeenCalled()
     })
 
-    it('sends each row of a mixed batch through its own call', async () => {
+    it('sends each row of a mixed batch with the right shape for its kind', async () => {
+      // The discriminated union, asserted through the batch. A registry row
+      // carries its `vendor_id`; a curated one carries `null` and its name.
+      // Deriving an id for the curated row would attach a real company's
+      // approvals to whatever somebody typed.
       serveItem({ Manual: [GULF] }, { rfqs: [rfq('rfq_1', 'ADP-RFQ-2026-014', ['itm_1'])] })
       vi.mocked(fetchRfq).mockResolvedValue({ ...RFQ_DETAIL, shortlist: [] })
-      vi.mocked(inviteRegisteredBidder).mockResolvedValue(shortlistEntry())
-      vi.mocked(addShortlistEntry).mockResolvedValue(
-        shortlistEntry({ vendor_id: null, vendor_name: 'Gulf Crescent Fabricators' }),
+      vi.mocked(addDraftShortlistPick).mockImplementation(async (_p, _i, body) =>
+        draftPick({ ...body, vendor_id: body.vendor_id ?? null }),
       )
       const card = await pool()
 
@@ -1829,14 +1809,17 @@ describe('ItemDetail', () => {
       )
 
       await waitFor(() =>
-        expect(inviteRegisteredBidder).toHaveBeenCalledWith('rfq_1', {
+        expect(addDraftShortlistPick).toHaveBeenCalledWith('prj_1', 'itm_1', {
           vendor_id: 'bdr_almunara',
+          vendor_name: 'Al Munara Switchgear LLC',
+          source: 'ADNOC',
         }),
       )
-      expect(addShortlistEntry).toHaveBeenCalledWith(
-        'rfq_1',
-        expect.objectContaining({ vendor_name: 'Gulf Crescent Fabricators' }),
-      )
+      expect(addDraftShortlistPick).toHaveBeenCalledWith('prj_1', 'itm_1', {
+        vendor_id: null,
+        vendor_name: 'Gulf Crescent Fabricators',
+        source: 'Manual',
+      })
     })
 
     it('keys a selection by source as well as by id', async () => {
@@ -1925,5 +1908,195 @@ describe('ItemDetail', () => {
 
       expect(onOpenRfq).toHaveBeenCalledWith('rfq_1')
     })
+  })
+})
+
+describe('the shortlist draft an item owns', () => {
+  // BD-2 front end. Ticking vendors in the pool and shortlisting them writes
+  // against the **item**, not against an RFQ — the buyer assembles a selection
+  // before raising anything, and it has to survive a reload.
+  beforeEach(() => {
+    vi.mocked(fetchDisciplines).mockResolvedValue([
+      { name: 'Cables', product_groups: ['CABLES - LV POWER DISTRIBUTION'] },
+    ])
+    vi.mocked(addDraftShortlistPick).mockImplementation(async (_p, _i, body) =>
+      draftPick({ ...body, vendor_id: body.vendor_id ?? null }),
+    )
+    vi.mocked(removeDraftShortlistPick).mockResolvedValue(undefined)
+  })
+
+  function serve(over: Partial<WorkflowProjectDetail> = {}, bidders = [APPROVED_BIDDER]) {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(
+      detail({ items: [GENERATOR], item_vendor_lists: { itm_1: vendorLists() }, ...over }),
+    )
+    vi.mocked(fetchAvailableBidders).mockResolvedValue(availableList({ bidders }))
+  }
+
+  async function poolCard(): Promise<HTMLElement> {
+    renderItem()
+    const card = await screen.findByRole('region', { name: /available vendor/i })
+    await within(card).findByText('Al Munara Switchgear LLC')
+    return card
+  }
+
+  it('shortlists the selected vendors with no RFQ covering the item', async () => {
+    // The requirement in one test: shortlisting happens *before* an RFQ exists.
+    // The card used to withhold the control entirely without a covering RFQ.
+    serve({ rfqs: [] })
+    const card = await poolCard()
+
+    fireEvent.click(within(card).getByLabelText('Select Al Munara Switchgear LLC'))
+    fireEvent.click(within(card).getByRole('button', { name: /Shortlist selected/ }))
+
+    await waitFor(() => expect(addDraftShortlistPick).toHaveBeenCalledTimes(1))
+    expect(addDraftShortlistPick).toHaveBeenCalledWith('prj_1', 'itm_1', {
+      vendor_id: 'bdr_almunara',
+      vendor_name: 'Al Munara Switchgear LLC',
+      source: 'ADNOC',
+    })
+  })
+
+  it('sends a curated pick by name, with no registry id', async () => {
+    // A hand-added company has no registry row. Sending a `vendor_id` for it
+    // would attach a real company's approvals to a name somebody typed.
+    serve({
+      item_vendor_lists: {
+        itm_1: vendorLists({
+          Manual: [
+            vendorEntry({
+              id: 'ive_gulf',
+              source: 'Manual',
+              vendor_id: null,
+              vendor_name: 'Gulf Crescent Fabricators',
+            }),
+          ],
+        }),
+      },
+    })
+    const card = await poolCard()
+    fireEvent.click(within(card).getByRole('button', { name: 'Added by hand' }))
+
+    fireEvent.click(
+      await within(card).findByLabelText('Select Gulf Crescent Fabricators'),
+    )
+    fireEvent.click(within(card).getByRole('button', { name: /Shortlist selected/ }))
+
+    await waitFor(() => expect(addDraftShortlistPick).toHaveBeenCalled())
+    expect(addDraftShortlistPick).toHaveBeenCalledWith('prj_1', 'itm_1', {
+      vendor_id: null,
+      vendor_name: 'Gulf Crescent Fabricators',
+      source: 'Manual',
+    })
+  })
+
+  it('keeps a refused vendor ticked and shortlists the rest', async () => {
+    // Not all-or-nothing, and there is nothing to roll the successes back with
+    // — those writes have already landed through `locked_update`.
+    const second = { ...APPROVED_BIDDER, id: 'bdr_two', name: 'Second Co' }
+    serve({}, [APPROVED_BIDDER, second])
+    vi.mocked(addDraftShortlistPick).mockImplementation(async (_p, _i, body) => {
+      if (body.vendor_id === 'bdr_two') throw new Error('That vendor is on hold.')
+      return draftPick({ ...body, vendor_id: body.vendor_id ?? null })
+    })
+    const card = await poolCard()
+
+    fireEvent.click(within(card).getByLabelText('Select Al Munara Switchgear LLC'))
+    fireEvent.click(within(card).getByLabelText('Select Second Co'))
+    fireEvent.click(within(card).getByRole('button', { name: /Shortlist selected/ }))
+
+    expect(await within(card).findByText('That vendor is on hold.')).toBeInTheDocument()
+    expect(within(card).getByLabelText('Select Second Co')).toBeChecked()
+    expect(
+      within(card).getByLabelText('Select Al Munara Switchgear LLC'),
+    ).not.toBeChecked()
+  })
+
+  it('shows what has been shortlisted so far in its own card', async () => {
+    // Without this the button appears to do nothing — the same class of defect
+    // as curated rows falling past the row cap.
+    serve({ draft_shortlists: { itm_1: [draftPick()] } })
+    renderItem()
+
+    const card = await screen.findByRole('region', { name: /shortlist draft/i })
+    expect(within(card).getByText('Al Munara Switchgear LLC')).toBeInTheDocument()
+  })
+
+  it('says the draft is empty rather than showing a blank table', async () => {
+    serve({ draft_shortlists: { itm_1: [] } })
+    renderItem()
+
+    const card = await screen.findByRole('region', { name: /shortlist draft/i })
+    expect(within(card).getByText(/nobody shortlisted yet/i)).toBeInTheDocument()
+  })
+
+  it('removes a pick by id', async () => {
+    serve({ draft_shortlists: { itm_1: [draftPick({ id: 'dse_keep' })] } })
+    renderItem()
+    const card = await screen.findByRole('region', { name: /shortlist draft/i })
+
+    fireEvent.click(
+      within(card).getByRole('button', { name: /Remove Al Munara Switchgear LLC/i }),
+    )
+
+    await waitFor(() =>
+      expect(removeDraftShortlistPick).toHaveBeenCalledWith('prj_1', 'itm_1', 'dse_keep'),
+    )
+  })
+
+  it('states where each pick came from', async () => {
+    // `source` is the fact that cannot be re-derived later — a registry
+    // vendor's approvals can be corrected and a curated row can be deleted.
+    serve({
+      draft_shortlists: {
+        itm_1: [
+          draftPick({ id: 'dse_a', source: 'ADNOC' }),
+          draftPick({
+            id: 'dse_b',
+            source: 'Suggested',
+            vendor_id: null,
+            vendor_name: 'DUCAB HV CABLE',
+          }),
+        ],
+      },
+    })
+    renderItem()
+    const card = await screen.findByRole('region', { name: /shortlist draft/i })
+
+    const ducab = within(card).getByText('DUCAB HV CABLE').closest('tr')!
+    expect(within(ducab).getByText('Suggested')).toBeInTheDocument()
+  })
+
+  it('keeps the draft on screen after a shortlisting reloads it', async () => {
+    // The second project read resolves on a **macrotask**, on purpose. Resolved
+    // immediately, the loading state and the resolution batch into one commit,
+    // the card never unmounts, and this passes whether or not the guard is
+    // there. The same trap as `keeps the chosen RFQ after an invitation`.
+    const before = detail({
+      items: [GENERATOR],
+      item_vendor_lists: { itm_1: vendorLists() },
+      draft_shortlists: { itm_1: [] },
+    })
+    const after = detail({
+      items: [GENERATOR],
+      item_vendor_lists: { itm_1: vendorLists() },
+      draft_shortlists: { itm_1: [draftPick()] },
+    })
+    let call = 0
+    vi.mocked(fetchWorkflowProject).mockImplementation(() => {
+      call += 1
+      return call === 1
+        ? Promise.resolve(before)
+        : new Promise((resolve) => setTimeout(() => resolve(after), 0))
+    })
+    vi.mocked(fetchAvailableBidders).mockResolvedValue(
+      availableList({ bidders: [APPROVED_BIDDER] }),
+    )
+    const card = await poolCard()
+
+    fireEvent.click(within(card).getByLabelText('Select Al Munara Switchgear LLC'))
+    fireEvent.click(within(card).getByRole('button', { name: /Shortlist selected/ }))
+
+    const draft = await screen.findByRole('region', { name: /shortlist draft/i })
+    expect(await within(draft).findByText('Al Munara Switchgear LLC')).toBeInTheDocument()
   })
 })

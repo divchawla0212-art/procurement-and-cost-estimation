@@ -14,37 +14,39 @@ export function IssuedStep({ data, run, busy }: Omit<StepProps, 'tick'>) {
       {data.vdrl.length === 0 ? (
         <p className="muted">No documents required yet.</p>
       ) : (
-        <table className="table">
-          <thead>
-            <tr>
-              <th scope="col">Code</th>
-              <th scope="col">Title</th>
-              <th scope="col">Type</th>
-              <th scope="col">Mandatory</th>
-              <th scope="col" />
-            </tr>
-          </thead>
-          <tbody>
-            {data.vdrl.map((line) => (
-              <tr key={line.id}>
-                <td className="mono">{line.doc_code}</td>
-                <td>{line.title}</td>
-                <td>{line.doc_type}</td>
-                <td>{line.mandatory ? 'yes' : 'no'}</td>
-                <td>
-                  <button
-                    type="button"
-                    className="linkish"
-                    disabled={busy}
-                    onClick={() => run(() => removeVdrlLine(data.rfq.id, line.id))}
-                  >
-                    Remove
-                  </button>
-                </td>
+        <div className="table-scroll">
+          <table className="table">
+            <thead>
+              <tr>
+                <th scope="col">Code</th>
+                <th scope="col">Title</th>
+                <th scope="col">Type</th>
+                <th scope="col">Mandatory</th>
+                <th scope="col" />
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {data.vdrl.map((line) => (
+                <tr key={line.id}>
+                  <td className="mono">{line.doc_code}</td>
+                  <td>{line.title}</td>
+                  <td>{line.doc_type}</td>
+                  <td>{line.mandatory ? 'yes' : 'no'}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="linkish"
+                      disabled={busy}
+                      onClick={() => run(() => removeVdrlLine(data.rfq.id, line.id))}
+                    >
+                      Remove
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
 
       <div className="fxrow">

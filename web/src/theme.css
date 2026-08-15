@@ -508,6 +508,37 @@ a { color: var(--accent-ink); text-underline-offset: 2px; }
   border-radius: var(--radius);
   box-shadow: var(--shadow-1);
 }
+
+/* The same rule .stagestrip keeps, for the same reason: a wide table scrolls
+   inside its own box rather than widening the page. Seven columns do not fit a
+   narrow viewport, and a horizontally scrolling *page* is the worse of the two
+   failures — the card, the rail and the header all slide sideways with it.
+
+   Distinct from .tbl-wrap, which also paints the surface. These tables sit
+   inside a .card that has already drawn the border, radius and shadow, so this
+   wrapper adds scrolling and nothing else; nesting .tbl-wrap here would draw a
+   second box inside the first.
+
+   `auto`, not `scroll`, so a table that already fits shows no scrollbar and
+   looks untouched. Wrap every .table in one, not just the ones measured wide
+   today: which tables overflow depends on the data and the viewport, so an
+   as-needed rule is one that silently stops holding. Enforced by
+   `table-scroll.test.ts` — jsdom does no layout and cannot see the overflow
+   itself, but it can see a missing wrapper.
+
+   `position: relative` is load-bearing, not tidiness. Several of these tables
+   label a control-only column with a `.sr-only` span, and `.sr-only` is
+   `position: absolute`. Absolute descendants are laid out against their
+   nearest *positioned* ancestor, so with a static wrapper they resolve against
+   the initial containing block instead — outside the scroll container, immune
+   to its clipping, and free to push the document's scrollWidth to their own
+   right edge. Measured at a 940px viewport on the item screen: overflow-x
+   alone scrolled the table correctly and still left the page 1062px wide
+   against a 925px client, because one hidden "Shortlist" span sat at x=1061.
+   Adding this makes the wrapper the containing block, and the page stops at
+   925. Removing it silently restores the page-level scroll while every table
+   still looks fixed. */
+.table-scroll { overflow-x: auto; position: relative; }
 table.grid { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.88rem; }
 table.grid th, table.grid td {
   border-bottom: 1px solid var(--border);

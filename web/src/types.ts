@@ -671,6 +671,42 @@ export interface WorkflowProjectDetail {
    *  screen already reads this payload, and a second fetch could disagree with
    *  the items rendered beside it. */
   item_vendor_lists: Record<string, Record<VendorListSource, ItemVendorEntry[]>>
+  /** Keyed by item id. The vendors a buyer has picked against each item before
+   *  any RFQ covers it. Flat per item rather than grouped by source — the buyer
+   *  picked one basket, and `source` on each row says where each came from.
+   *  Every item gets a key, so this is never `undefined` for a live item. */
+  draft_shortlists: Record<string, DraftShortlistEntry[]>
+}
+
+/** The four chips on the item screen's vendor pool.
+ *
+ *  Deliberately not `VendorListSource`: that one's `Client` is the uploaded
+ *  export's name for the client's own list, while this names the chip the buyer
+ *  was looking at. The server refuses `Client` here with a 422. */
+export type DraftShortlistSource = 'ADNOC' | 'Astra' | 'Manual' | 'Suggested'
+
+/** One vendor picked against an item, before any RFQ covers it.
+ *
+ *  `vendor_id` is set for a registry row and `null` for a curated one, and the
+ *  server never derives it from the name. There is no `approved_by` and no
+ *  `prequal_status`: those are read live through `vendor_id`, so a copy here
+ *  would be wrong the moment the registry is corrected. */
+export interface DraftShortlistEntry {
+  id: string
+  item_id: string
+  vendor_id: string | null
+  vendor_name: string
+  source: DraftShortlistSource
+  added_by: string
+  added_at: string
+}
+
+/** What the browser sends to pick a vendor. No `added_by` — attribution comes
+ *  from the session, so a screen cannot name somebody else as the picker. */
+export interface DraftShortlistInput {
+  vendor_name: string
+  source: DraftShortlistSource
+  vendor_id?: string | null
 }
 
 export interface RfqInput {

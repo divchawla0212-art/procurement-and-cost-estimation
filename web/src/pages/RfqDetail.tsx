@@ -100,96 +100,100 @@ function ClarificationsCard({ data }: { data: RfqDetailData }) {
       {data.queries.length === 0 ? (
         <Empty>No clarifications were raised.</Empty>
       ) : (
-        <table className="table">
-          <thead>
-            <tr>
-              <th scope="col">Query</th>
-              <th scope="col">Raised by</th>
-              <th scope="col">Question</th>
-              <th scope="col">Answer</th>
-              <th scope="col">Circulation</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.queries.map((q) => (
-              <tr key={q.id}>
-                <td className="mono">
-                  {q.number}
-                  <div className="muted">{q.state}</div>
-                </td>
-                <td>
-                  {/* The name as it was when they asked, not as the registry
-                      reads today — the same snapshot rule as the shortlist. */}
-                  {q.raised_by_name}
-                  <div className="muted">
-                    {q.category} · {q.raised_on}
-                  </div>
-                </td>
-                <td>{q.question}</td>
-                <td>
-                  {q.answer ?? <span className="muted">—</span>}
-                  {q.answered_by ? (
-                    <div className="muted">{q.answered_by}</div>
-                  ) : null}
-                  {q.withdrawn_reason ? (
-                    <div className="muted">Withdrawn: {q.withdrawn_reason}</div>
-                  ) : null}
-                </td>
-                <td>
-                  {!q.answer ? (
-                    <span className="muted">—</span>
-                  ) : q.circulated ? (
-                    'circulated'
-                  ) : (
-                    <span className="warn">
-                      not circulated: {q.restricted_reason}
-                    </span>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-
-      {data.addenda.length === 0 ? null : (
-        <>
-          <h3>Addenda</h3>
+        <div className="table-scroll">
           <table className="table">
             <thead>
               <tr>
-                <th scope="col">Addendum</th>
-                <th scope="col">Revision</th>
-                <th scope="col">What changed</th>
-                <th scope="col">Issued</th>
+                <th scope="col">Query</th>
+                <th scope="col">Raised by</th>
+                <th scope="col">Question</th>
+                <th scope="col">Answer</th>
+                <th scope="col">Circulation</th>
               </tr>
             </thead>
             <tbody>
-              {data.addenda.map((a) => (
-                <tr key={a.id}>
-                  <td className="mono">{a.number}</td>
-                  <td>
-                    {a.supersedes_revision} → {a.revision}
+              {data.queries.map((q) => (
+                <tr key={q.id}>
+                  <td className="mono">
+                    {q.number}
+                    <div className="muted">{q.state}</div>
                   </td>
                   <td>
-                    {a.summary}
-                    {a.bid_due_date ? (
-                      <div className="muted">
-                        Bid due date moved to {a.bid_due_date}.
-                      </div>
+                    {/* The name as it was when they asked, not as the registry
+                        reads today — the same snapshot rule as the shortlist. */}
+                    {q.raised_by_name}
+                    <div className="muted">
+                      {q.category} · {q.raised_on}
+                    </div>
+                  </td>
+                  <td>{q.question}</td>
+                  <td>
+                    {q.answer ?? <span className="muted">—</span>}
+                    {q.answered_by ? (
+                      <div className="muted">{q.answered_by}</div>
+                    ) : null}
+                    {q.withdrawn_reason ? (
+                      <div className="muted">Withdrawn: {q.withdrawn_reason}</div>
                     ) : null}
                   </td>
                   <td>
-                    {a.draft ? (
-                      <span className="warn">draft</span>
+                    {!q.answer ? (
+                      <span className="muted">—</span>
+                    ) : q.circulated ? (
+                      'circulated'
                     ) : (
-                      <span className="muted">{a.issued_by}</span>
+                      <span className="warn">
+                        not circulated: {q.restricted_reason}
+                      </span>
                     )}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {data.addenda.length === 0 ? null : (
+        <>
+          <h3>Addenda</h3>
+          <div className="table-scroll">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th scope="col">Addendum</th>
+                  <th scope="col">Revision</th>
+                  <th scope="col">What changed</th>
+                  <th scope="col">Issued</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.addenda.map((a) => (
+                  <tr key={a.id}>
+                    <td className="mono">{a.number}</td>
+                    <td>
+                      {a.supersedes_revision} → {a.revision}
+                    </td>
+                    <td>
+                      {a.summary}
+                      {a.bid_due_date ? (
+                        <div className="muted">
+                          Bid due date moved to {a.bid_due_date}.
+                        </div>
+                      ) : null}
+                    </td>
+                    <td>
+                      {a.draft ? (
+                        <span className="warn">draft</span>
+                      ) : (
+                        <span className="muted">{a.issued_by}</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </>
       )}
     </Card>
@@ -213,26 +217,28 @@ function TechnicalPackageCard({ data }: { data: RfqDetailData }) {
             )}
           </p>
           <p className="muted">{pkg.basis_of_design}</p>
-          <table className="table">
-            <thead>
-              <tr>
-                <th scope="col">Document</th>
-                <th scope="col">Title</th>
-                <th scope="col">Revision</th>
-              </tr>
-            </thead>
-            <tbody>
-              {pkg.attachments.map((a) => (
-                <tr key={a.doc_code}>
-                  <td className="mono">{a.doc_code}</td>
-                  <td>{a.title}</td>
-                  {/* an attachment with no definite revision is exactly what
-                      blocks the freeze, so it is called out rather than blank */}
-                  <td>{a.revision ?? <span className="warn">none</span>}</td>
+          <div className="table-scroll">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th scope="col">Document</th>
+                  <th scope="col">Title</th>
+                  <th scope="col">Revision</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {pkg.attachments.map((a) => (
+                  <tr key={a.doc_code}>
+                    <td className="mono">{a.doc_code}</td>
+                    <td>{a.title}</td>
+                    {/* an attachment with no definite revision is exactly what
+                        blocks the freeze, so it is called out rather than blank */}
+                    <td>{a.revision ?? <span className="warn">none</span>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </>
       )}
     </Card>
@@ -247,33 +253,35 @@ function ShortlistCard({ data }: { data: RfqDetailData }) {
       {data.shortlist.length === 0 ? (
         <Empty>No vendors shortlisted yet.</Empty>
       ) : (
-        <table className="table">
-          <thead>
-            <tr>
-              <th scope="col">Vendor</th>
-              <th scope="col">Prequalification</th>
-              <th scope="col">Scope fit</th>
-              <th scope="col">Included</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.shortlist.map((e) => (
-              <tr key={e.vendor_name}>
-                <td>{e.vendor_name}</td>
-                <td>{e.prequal_status}</td>
-                <td>{e.scope_code_fit ? 'yes' : 'no'}</td>
-                <td>
-                  {e.included ? 'yes' : 'no'}
-                  {e.override_reason ? (
-                    <div className="muted">
-                      override by {e.override_by}: {e.override_reason}
-                    </div>
-                  ) : null}
-                </td>
+        <div className="table-scroll">
+          <table className="table">
+            <thead>
+              <tr>
+                <th scope="col">Vendor</th>
+                <th scope="col">Prequalification</th>
+                <th scope="col">Scope fit</th>
+                <th scope="col">Included</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {data.shortlist.map((e) => (
+                <tr key={e.vendor_name}>
+                  <td>{e.vendor_name}</td>
+                  <td>{e.prequal_status}</td>
+                  <td>{e.scope_code_fit ? 'yes' : 'no'}</td>
+                  <td>
+                    {e.included ? 'yes' : 'no'}
+                    {e.override_reason ? (
+                      <div className="muted">
+                        override by {e.override_by}: {e.override_reason}
+                      </div>
+                    ) : null}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </Card>
   )
@@ -307,26 +315,28 @@ function VdrlCard({ data }: { data: RfqDetailData }) {
       {data.vdrl.length === 0 ? (
         <Empty>No VDRL lines defined.</Empty>
       ) : (
-        <table className="table">
-          <thead>
-            <tr>
-              <th scope="col">Code</th>
-              <th scope="col">Title</th>
-              <th scope="col">Type</th>
-              <th scope="col">Mandatory</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.vdrl.map((line) => (
-              <tr key={line.doc_code}>
-                <td className="mono">{line.doc_code}</td>
-                <td>{line.title}</td>
-                <td>{line.doc_type}</td>
-                <td>{line.mandatory ? 'yes' : 'no'}</td>
+        <div className="table-scroll">
+          <table className="table">
+            <thead>
+              <tr>
+                <th scope="col">Code</th>
+                <th scope="col">Title</th>
+                <th scope="col">Type</th>
+                <th scope="col">Mandatory</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {data.vdrl.map((line) => (
+                <tr key={line.doc_code}>
+                  <td className="mono">{line.doc_code}</td>
+                  <td>{line.title}</td>
+                  <td>{line.doc_type}</td>
+                  <td>{line.mandatory ? 'yes' : 'no'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </Card>
   )
@@ -340,33 +350,35 @@ function BidsCard({ data }: { data: RfqDetailData }) {
         <Empty>No bids received yet.</Empty>
       ) : (
         <>
-          <table className="table">
-            <thead>
-              <tr>
-                <th scope="col">Vendor</th>
-                <th scope="col">Headline price</th>
-                <th scope="col">Documents</th>
-                <th scope="col">Selected</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.bids.map((bid) => (
-                <tr key={bid.id}>
-                  <td>{bid.vendor_name}</td>
-                  <td className="mono">
-                    {bid.headline_price_aed.toLocaleString()} {bid.currency}
-                  </td>
-                  <td>
-                    {bid.vdrl_received}/{bid.vdrl_required}
-                    {bid.vdrl_missing.length > 0 ? (
-                      <div className="warn">missing {bid.vdrl_missing.join(', ')}</div>
-                    ) : null}
-                  </td>
-                  <td>{bid.selected ? 'yes' : 'no'}</td>
+          <div className="table-scroll">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th scope="col">Vendor</th>
+                  <th scope="col">Headline price</th>
+                  <th scope="col">Documents</th>
+                  <th scope="col">Selected</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {data.bids.map((bid) => (
+                  <tr key={bid.id}>
+                    <td>{bid.vendor_name}</td>
+                    <td className="mono">
+                      {bid.headline_price_aed.toLocaleString()} {bid.currency}
+                    </td>
+                    <td>
+                      {bid.vdrl_received}/{bid.vdrl_required}
+                      {bid.vdrl_missing.length > 0 ? (
+                        <div className="warn">missing {bid.vdrl_missing.join(', ')}</div>
+                      ) : null}
+                    </td>
+                    <td>{bid.selected ? 'yes' : 'no'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           {selection ? (
             <p className="muted">
               Selected by {selection.selected_by}: {selection.rationale}

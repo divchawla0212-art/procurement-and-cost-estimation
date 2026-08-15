@@ -27,6 +27,8 @@ import type {
   WorkflowProjectDetail,
   WorkflowProjectInput,
   WorkflowProjectSummary,
+  DraftShortlistEntry,
+  DraftShortlistInput,
   ItemVendorEntry,
   ItemVendorInput,
   SuggestedVendor,
@@ -393,6 +395,41 @@ export function removeItemVendor(
 ): Promise<void> {
   return fetch(
     `${itemVendorsPath(projectId, itemId)}/${encodeURIComponent(entryId)}`,
+    { method: 'DELETE' },
+  ).then(expectNoContent)
+}
+
+function draftShortlistPath(projectId: string, itemId: string): string {
+  return (
+    `/api/workflow/projects/${encodeURIComponent(projectId)}/items/` +
+    `${encodeURIComponent(itemId)}/draft-shortlist`
+  )
+}
+
+/** Pick one vendor onto this item's shortlist draft, before any RFQ exists.
+ *
+ *  One call per vendor, and sequential at the call site — the same reasoning as
+ *  `addItemVendor` and as the per-vendor invitation: there is no bulk route,
+ *  and every row lands attributed to whoever picked it. Picking the same vendor
+ *  twice is a no-op server-side that hands back the row already there, so a
+ *  double submit cannot produce duplicates. */
+export function addDraftShortlistPick(
+  projectId: string,
+  itemId: string,
+  body: DraftShortlistInput,
+): Promise<DraftShortlistEntry> {
+  return sendJson(draftShortlistPath(projectId, itemId), 'POST', body)
+}
+
+/** Unpick one vendor, **by id** — two suppliers can share a trading name, and
+ *  the pool re-sorts under its own search. */
+export function removeDraftShortlistPick(
+  projectId: string,
+  itemId: string,
+  entryId: string,
+): Promise<void> {
+  return fetch(
+    `${draftShortlistPath(projectId, itemId)}/${encodeURIComponent(entryId)}`,
     { method: 'DELETE' },
   ).then(expectNoContent)
 }

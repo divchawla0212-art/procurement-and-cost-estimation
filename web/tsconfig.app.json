@@ -4,7 +4,12 @@
     "target": "es2023",
     "lib": ["ES2023", "DOM"],
     "module": "esnext",
-    "types": ["vite/client"],
+    // `node` as well as `vite/client`, because `include` is `src` and one test
+    // in there reads the source tree off disk — the only way to catch a defect
+    // jsdom cannot see, since it applies no stylesheet and does no layout.
+    // Naming `types` at all disables automatic @types inclusion, so a package
+    // already in devDependencies still has to be listed here.
+    "types": ["vite/client", "node"],
     "allowArbitraryExtensions": true,
     "skipLibCheck": true,
 

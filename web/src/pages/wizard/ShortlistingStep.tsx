@@ -37,85 +37,87 @@ export function ShortlistingStep({ data, run, busy, tick }: StepProps) {
       {data.shortlist.length === 0 ? (
         <p className="muted">Nobody invited yet.</p>
       ) : (
-        <table className="table">
-          <thead>
-            <tr>
-              <th scope="col">Vendor</th>
-              <th scope="col">Approvals</th>
-              <th scope="col">Prequalification</th>
-              <th scope="col">Scope fit</th>
-              <th scope="col">Recorded exception</th>
-              <th scope="col" />
-            </tr>
-          </thead>
-          <tbody>
-            {data.shortlist.map((e) => (
-              <tr key={e.id}>
-                <td>
-                  {e.vendor_name}
-                  {e.vendor_id ? null : (
-                    <span className="muted"> · not in the registry</span>
-                  )}
-                </td>
-                {/* Live, unlike every other column here: the server re-derives
-                    both keys from the registry on each read, so correcting a
-                    vendor's `approved_by` shows up without the shortlist being
-                    touched.
-
-                    Three states — pills, off the list, and not checked. The
-                    last is a vendor typed in by hand, who has no registry row,
-                    and saying "not on the list" for them would report a check
-                    that never happened.
-
-                    The pills and the warning are shown *together* rather than
-                    as alternatives: a vendor we have qualified and the client
-                    has not is both of those things at once, and the pill alone
-                    would let our own approval read as clearance we do not
-                    have. */}
-                <td>
-                  {e.approved_by === null ? (
-                    <span className="muted">Not checked</span>
-                  ) : (
-                    <>
-                      <ApprovalPills approvers={e.approved_by} />
-                      {e.client_approved === false && (
-                        <span className="warn">
-                          Not on the {data.client_approver} list
-                        </span>
-                      )}
-                    </>
-                  )}
-                </td>
-                {/* The status as it was when the invitation was issued, not as
-                    it is today. That is what makes this row an audit trail. */}
-                <td>{e.prequal_status}</td>
-                <td>{e.scope_code_fit ? 'yes' : 'no'}</td>
-                <td>
-                  {e.override_reason ? (
-                    <>
-                      {e.override_reason}
-                      {e.override_by ? (
-                        <span className="muted"> — {e.override_by}</span>
-                      ) : null}
-                    </>
-                  ) : (
-                    <span className="muted">—</span>
-                  )}
-                </td>
-                <td>
-                  <button
-                    type="button"
-                    className="linkish"
-                    disabled={busy}
-                    onClick={() => run(() => removeShortlistEntry(data.rfq.id, e.id))}
-                  >
-                    Remove
-                  </button>
-                </td>
+        <div className="table-scroll">
+          <table className="table">
+            <thead>
+              <tr>
+                <th scope="col">Vendor</th>
+                <th scope="col">Approvals</th>
+                <th scope="col">Prequalification</th>
+                <th scope="col">Scope fit</th>
+                <th scope="col">Recorded exception</th>
+                <th scope="col" />
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {data.shortlist.map((e) => (
+                <tr key={e.id}>
+                  <td>
+                    {e.vendor_name}
+                    {e.vendor_id ? null : (
+                      <span className="muted"> · not in the registry</span>
+                    )}
+                  </td>
+                  {/* Live, unlike every other column here: the server re-derives
+                      both keys from the registry on each read, so correcting a
+                      vendor's `approved_by` shows up without the shortlist being
+                      touched.
+
+                      Three states — pills, off the list, and not checked. The
+                      last is a vendor typed in by hand, who has no registry row,
+                      and saying "not on the list" for them would report a check
+                      that never happened.
+
+                      The pills and the warning are shown *together* rather than
+                      as alternatives: a vendor we have qualified and the client
+                      has not is both of those things at once, and the pill alone
+                      would let our own approval read as clearance we do not
+                      have. */}
+                  <td>
+                    {e.approved_by === null ? (
+                      <span className="muted">Not checked</span>
+                    ) : (
+                      <>
+                        <ApprovalPills approvers={e.approved_by} />
+                        {e.client_approved === false && (
+                          <span className="warn">
+                            Not on the {data.client_approver} list
+                          </span>
+                        )}
+                      </>
+                    )}
+                  </td>
+                  {/* The status as it was when the invitation was issued, not as
+                      it is today. That is what makes this row an audit trail. */}
+                  <td>{e.prequal_status}</td>
+                  <td>{e.scope_code_fit ? 'yes' : 'no'}</td>
+                  <td>
+                    {e.override_reason ? (
+                      <>
+                        {e.override_reason}
+                        {e.override_by ? (
+                          <span className="muted"> — {e.override_by}</span>
+                        ) : null}
+                      </>
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
+                  </td>
+                  <td>
+                    <button
+                      type="button"
+                      className="linkish"
+                      disabled={busy}
+                      onClick={() => run(() => removeShortlistEntry(data.rfq.id, e.id))}
+                    >
+                      Remove
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
 
       <h3>Registry</h3>

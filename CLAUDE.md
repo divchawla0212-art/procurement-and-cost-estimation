@@ -270,7 +270,41 @@ The web suite is separate and not part of either row above — both rows are
 `python -m pytest` counts. Run it with `npm test` under `web/` (vitest,
 non-watching, exits non-zero on failure); `npm run build` also type-checks the
 test files, since `web/tsconfig.app.json` includes `src`. CI runs both, in the
-`web` job of the same workflow. It stands at **304 passed** across 21 files.
+`web` job of the same workflow. It stands at **313 passed** across 22 files.
+
+The last **3** are `table-scroll.test.ts`, and it is the odd one in this suite:
+it reads the **source tree off disk** rather than rendering anything. That is
+deliberate. jsdom applies no stylesheet and does no layout, so a table
+overrunning its card measures identically to one that fits — the seven-column
+vendor list shipped 787px wide inside a 614px card, scrolling the whole document
+sideways, with every render test green. What a file *can* see is the missing
+wrapper that causes it, so the assertion is structural: every
+`<table className="table">` is preceded by `<div className="table-scroll">`, and
+`.table-scroll` still carries `overflow-x: auto`. A third test asserts the
+scanner finds tables at all — without it, renaming the class would leave the
+file asserting nothing and still passing.
+
+Because `web/tsconfig.app.json` has `include: ["src"]`, that file is
+type-checked by `npm run build`, and naming `types` at all disables automatic
+`@types` inclusion — so `@types/node` being in `devDependencies` was not enough
+and `"node"` had to be listed there explicitly. The cost is that node globals
+are now visible to app source too; `process.env` in a browser module is a
+mistake this no longer catches.
+
+The **6** before those are Bid Desk's BD-2 on the item screen: the batch control
+now fills the **item's** shortlist draft rather than inviting into a covering
+RFQ, and a `Shortlist draft` card renders what it filled. Net of two tests
+deleted rather than skipped — `has no bulk control when no RFQ covers the item`
+asserted a rule BD-2 inverts, and `keeps a refused vendor ticked and invites the
+rest` was superseded exactly by its draft-path twin.
+
+Two of the new ones are worth keeping. `shortlists the selected vendors with no
+RFQ covering the item` is the requirement in one assertion — the old card
+withheld the control entirely until an RFQ existed. `keeps the draft on screen
+after a shortlisting reloads it` stubs the second project read on a
+**macrotask**; resolved immediately, the loading state and the resolution batch
+into one commit, the card never unmounts, and it would pass against the defect.
+Third instance of that trap on this screen.
 
 The last **14** are Bid Desk's BD-1, the four-source vendor pool on the item
 screen — see [`feature-request.md`](feature-request.md). The card was registry
@@ -316,11 +350,13 @@ there is no structural stand-in to assert here at all: this one is caught only b
 measuring `getBoundingClientRect`, which is the whole argument for launching the
 app.
 
-Known and **not** fixed by that phase: the available-vendor table is 787px
-inside a 614px card at a 940px viewport, so the document scrolls sideways rather
-than the table scrolling in its own container. Its seven columns are
-byte-identical before and after BD-1, so it predates the change; it is tracked
-separately rather than folded in.
+Known and not fixed by that phase, **since fixed separately**: the
+available-vendor table was 787px inside a 614px card at a 940px viewport, so the
+document scrolled sideways rather than the table scrolling in its own container.
+Its seven columns were byte-identical before and after BD-1, so it predated that
+change and was tracked as its own piece of work. Seventeen tables across six
+screens now sit in a `.table-scroll` wrapper, guarded by the source-scanning
+test described above.
 
 The **5** before those are the sign-in screen's admin-account chip, in the new
 `Auth.test.tsx` — that screen had no test file at all.

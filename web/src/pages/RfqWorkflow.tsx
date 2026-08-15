@@ -50,36 +50,38 @@ export function RfqWorkflow(): JSX.Element {
         </EmptyState>
       ) : (
         <Card title="RFQs">
-          <table className="table">
-            <thead>
-              <tr>
-                <th scope="col">Reference</th>
-                <th scope="col">Package</th>
-                <th scope="col">Discipline</th>
-                <th scope="col">Stage</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.rfqs.map((rfq) => (
-                <tr key={rfq.id}>
-                  <td className="mono">
-                    {/* A button, not a clickable row: a row with an onClick is
-                        unreachable by keyboard and announces nothing. */}
-                    <button
-                      type="button"
-                      className="linkish"
-                      onClick={() => navigate(`/rfqs/${rfq.id}`)}
-                    >
-                      {rfq.reference}
-                    </button>
-                  </td>
-                  <td>{rfq.package}</td>
-                  <td>{rfq.discipline}</td>
-                  <td>{rfq.stage}</td>
+          <div className="table-scroll">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th scope="col">Reference</th>
+                  <th scope="col">Package</th>
+                  <th scope="col">Discipline</th>
+                  <th scope="col">Stage</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {data.rfqs.map((rfq) => (
+                  <tr key={rfq.id}>
+                    <td className="mono">
+                      {/* A button, not a clickable row: a row with an onClick is
+                          unreachable by keyboard and announces nothing. */}
+                      <button
+                        type="button"
+                        className="linkish"
+                        onClick={() => navigate(`/rfqs/${rfq.id}`)}
+                      >
+                        {rfq.reference}
+                      </button>
+                    </td>
+                    <td>{rfq.package}</td>
+                    <td>{rfq.discipline}</td>
+                    <td>{rfq.stage}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </Card>
       )}
 

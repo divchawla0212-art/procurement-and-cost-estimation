@@ -12,35 +12,37 @@ export function AttachmentTable({
 }): JSX.Element {
   if (attachments.length === 0) return <p className="muted">No attachments yet.</p>
   return (
-    <table className="table">
-      <thead>
-        <tr>
-          <th scope="col">Document</th>
-          <th scope="col">Title</th>
-          <th scope="col">Revision</th>
-          {onRemove ? <th scope="col" /> : null}
-        </tr>
-      </thead>
-      <tbody>
-        {attachments.map((a) => (
-          <tr key={a.doc_code}>
-            <td className="mono">{a.doc_code}</td>
-            <td>{a.title}</td>
-            <td>{a.revision ?? <span className="warn">none</span>}</td>
-            {onRemove ? (
-              <td>
-                <button
-                  type="button"
-                  className="linkish"
-                  onClick={() => onRemove(a.doc_code)}
-                >
-                  Remove
-                </button>
-              </td>
-            ) : null}
+    <div className="table-scroll">
+      <table className="table">
+        <thead>
+          <tr>
+            <th scope="col">Document</th>
+            <th scope="col">Title</th>
+            <th scope="col">Revision</th>
+            {onRemove ? <th scope="col" /> : null}
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {attachments.map((a) => (
+            <tr key={a.doc_code}>
+              <td className="mono">{a.doc_code}</td>
+              <td>{a.title}</td>
+              <td>{a.revision ?? <span className="warn">none</span>}</td>
+              {onRemove ? (
+                <td>
+                  <button
+                    type="button"
+                    className="linkish"
+                    onClick={() => onRemove(a.doc_code)}
+                  >
+                    Remove
+                  </button>
+                </td>
+              ) : null}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   )
 }

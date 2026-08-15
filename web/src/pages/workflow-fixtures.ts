@@ -12,6 +12,7 @@
  */
 import type {
   BidderSummary,
+  DraftShortlistEntry,
   ItemVendorEntry,
   Rfq,
   RfqDetail,
@@ -98,6 +99,27 @@ export function detail(
     items: [GENERATOR],
     rfqs: [],
     item_vendor_lists: {},
+    draft_shortlists: {},
+    ...over,
+  }
+}
+
+/** One vendor picked against an item, before any RFQ covers it.
+ *
+ *  Defaults to a registry pick, because that is the one carrying a `vendor_id`
+ *  and therefore the one where getting the shape wrong matters — a curated pick
+ *  has `vendor_id: null` and a test wanting one says so. */
+export function draftPick(
+  over: Partial<DraftShortlistEntry> = {},
+): DraftShortlistEntry {
+  return {
+    id: 'dse_1',
+    item_id: 'itm_1',
+    vendor_id: 'bdr_almunara',
+    vendor_name: 'Al Munara Switchgear LLC',
+    source: 'ADNOC',
+    added_by: 'buyer@example.com',
+    added_at: '2026-08-15T09:00:00Z',
     ...over,
   }
 }

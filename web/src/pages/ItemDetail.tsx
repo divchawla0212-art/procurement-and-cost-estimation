@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { JSX } from 'react'
 import {
+  addDraftShortlistPick,
   addItemVendor,
   addShortlistEntry,
   createRfq,
@@ -8,6 +9,7 @@ import {
   fetchAvailableBidders,
   fetchWorkflowProject,
   inviteRegisteredBidder,
+  removeDraftShortlistPick,
   removeItemVendor,
   suggestItemVendors,
   updateWorkflowItem,
@@ -18,6 +20,9 @@ import { summarise, useCoveringShortlists } from './covering-shortlists'
 import { ItemForm, RaiseRfqForm } from './forms'
 import type {
   BidderSummary,
+  DraftShortlistEntry,
+  DraftShortlistInput,
+  DraftShortlistSource,
   ItemVendorEntry,
   ItemVendorInput,
   Rfq,
@@ -61,6 +66,106 @@ import {
  * this list.
  */
 const BIDDER_CAP = 25
+
+/** The two pool sources that come from the registry. Named here so the check
+ *  below is a narrowing rather than a cast — a bidder approved by some third
+ *  client carries an approver that is not a pool source, and it must not become
+ *  one by being written straight through. */
+const REGISTRY_SOURCES: DraftShortlistSource[] = ['ADNOC', 'Astra']
+
+/**
+ * What has been shortlisted against this item so far.
+ *
+ * Rendered because the alternative is a button that appears to do nothing —
+ * the same class of defect as curated rows falling past the pool's row cap,
+ * found the same way, by using the screen.
+ *
+ * This is a **draft**. Nobody here has been invited to anything: an invitation
+ * is an attributed act with its own per-vendor guards, and it happens when an
+ * RFQ is raised over this shortlist.
+ */
+function DraftShortlistCard({
+  projectId,
+  itemId,
+  picks,
+  onChanged,
+}: {
+  projectId: string
+  itemId: string
+  picks: DraftShortlistEntry[]
+  onChanged: () => void
+}): JSX.Element {
+  const [rowError, setRowError] = useState<Record<string, string>>({})
+
+  async function remove(entryId: string) {
+    setRowError(({ [entryId]: _gone, ...rest }) => rest)
+    try {
+      await removeDraftShortlistPick(projectId, itemId, entryId)
+      onChanged()
+    } catch (err) {
+      setRowError((prev) => ({ ...prev, [entryId]: (err as Error).message }))
+    }
+  }
+
+  return (
+    <Card title="Shortlist draft">
+      {picks.length === 0 ? (
+        <EmptyState title="Nobody shortlisted yet">
+          Tick vendors in the list above and shortlist them. They stay here
+          until an RFQ is raised over them, and nobody is contacted meanwhile.
+        </EmptyState>
+      ) : (
+        <div className="table-scroll">
+          <table className="table">
+            <thead>
+              <tr>
+                <th scope="col">Vendor</th>
+                {/* Where the buyer found them, which is not derivable later: a
+                    registry vendor's approvals can be corrected and a curated row
+                    can be deleted from the item's list entirely. */}
+                <th scope="col">Found on</th>
+                <th scope="col">Shortlisted by</th>
+                <th scope="col">
+                  <span className="sr-only">Remove</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {picks.map((pick) => (
+                <tr key={pick.id}>
+                  <td>
+                    {pick.vendor_name}
+                    {rowError[pick.id] && (
+                      <div className="banner banner--error" role="alert">
+                        {rowError[pick.id]}
+                      </div>
+                    )}
+                  </td>
+                  <td className="muted">{pick.source}</td>
+                  <td className="muted">{pick.added_by}</td>
+                  <td>
+                    {/* The name rides on `aria-label`, not in the visible label:
+                        a per-row button carrying a vendor name wrapped to three
+                        lines and made every row 89px tall. A screen reader still
+                        gets the name. */}
+                    <button
+                      type="button"
+                      className="linkish"
+                      aria-label={`Remove ${pick.vendor_name}`}
+                      onClick={() => void remove(pick.id)}
+                    >
+                      Remove
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
+  )
+}
 
 /**
  * One row of the pool, tagged with the universe it came from.
@@ -111,6 +216,8 @@ function rowName(row: PoolRow): string {
  * it is unscoped.
  */
 function AvailableVendorList({
+  projectId,
+  itemId,
   discipline,
   curated,
   covering,
@@ -119,6 +226,10 @@ function AvailableVendorList({
   onTarget,
   onInvited,
 }: {
+  /** The item the picks are written against. A shortlist is assembled here,
+   *  before any RFQ exists — which is the whole point of the draft. */
+  projectId: string
+  itemId: string
   discipline: string
   /** This item's curated vendor lists — the `Manual` and `Suggested` entries,
    *  already on the page as part of the project payload. Filtering them is a
@@ -283,34 +394,69 @@ function AvailableVendorList({
     })
   }
 
-  async function inviteSelected() {
+  /**
+   * Put one row on the **item's** shortlist draft.
+   *
+   * Not on an RFQ. A buyer assembles a selection before raising anything, so
+   * the write is owned by the item and outlives the browser — this API restarts
+   * on every code change and clears sessions when it does, which is exactly
+   * what carrying the basket in navigation state would not survive.
+   *
+   * The discriminated union decides what is sent: a registry row goes by
+   * `vendor_id`, a curated one by name with `vendor_id: null`. Deriving an id
+   * from a name would attach a real company's approvals to whatever somebody
+   * typed, which is the defect this repository has recorded twice.
+   */
+  function pickBody(row: PoolRow): DraftShortlistInput {
+    if (row.kind === 'registry') {
+      // A registry row satisfies *every* ticked approval, because that half is
+      // ANDed — so "which chip surfaced them" is genuinely ambiguous. The
+      // client's approval is the more informative of the two to record, and
+      // Astra is the fallback rather than a guess: with both required, a row
+      // that reached this table carries at least one of them.
+      const found = row.bidder.approved_by.find((a): a is DraftShortlistSource =>
+        REGISTRY_SOURCES.includes(a as DraftShortlistSource),
+      )
+      return {
+        vendor_id: row.bidder.id,
+        vendor_name: row.bidder.name,
+        source: found ?? 'Astra',
+      }
+    }
+    return {
+      vendor_id: null,
+      vendor_name: row.entry.vendor_name,
+      source: row.entry.source === 'Suggested' ? 'Suggested' : 'Manual',
+    }
+  }
+
+  async function shortlistSelected() {
     const failed = new Map<string, string>()
-    let invited = 0
+    let picked = 0
     for (const key of selected) {
-      // Resolved against the whole pool, not the drawn rows: a selection
-      // survives a search that hides it. A key that no longer resolves belongs
-      // to a chip that has since been unticked, and there is nothing left to
-      // say about it.
       const row = pool.find((r) => rowKey(r) === key)
       if (!row) continue
       try {
-        await shortlist(row)
-        invited += 1
+        await addDraftShortlistPick(projectId, itemId, pickBody(row))
+        picked += 1
       } catch (err) {
         failed.set(key, (err as Error).message)
       }
     }
     setRowError((prev) => ({ ...prev, ...Object.fromEntries(failed) }))
     // Successes leave the selection; refusals stay ticked, so the reader fixes
-    // the reason and retries exactly what failed rather than re-selecting.
+    // what went wrong and retries exactly that rather than re-selecting.
     setSelected(new Set(failed.keys()))
     setSummary(
-      `${invited} invited` + (failed.size ? ` · ${failed.size} refused` : ''),
+      `${picked} shortlisted` + (failed.size ? ` · ${failed.size} refused` : ''),
     )
-    // One reload for the whole batch, so the Invited marks and the RFQ summary
-    // below move together instead of the table re-rendering under each call.
     onInvited()
   }
+
+  // There was a batch *invitation* here until BD-2. It went with the rule it
+  // implemented: the batch control now fills the item's shortlist draft, and
+  // inviting is what happens when an RFQ is raised over that draft. The
+  // per-vendor path below stays, and goes with the covering-RFQ card.
 
   async function invite(row: PoolRow) {
     const key = rowKey(row)
@@ -543,8 +689,8 @@ function AvailableVendorList({
           )}
           {covering.length === 0 && (
             <p className="muted">
-              No RFQ covers this item, so there is nowhere to shortlist these
-              vendors — raise an RFQ first.
+              Tick the vendors you want and shortlist them against this item. No
+              RFQ is needed yet — one is raised over the shortlist afterwards.
             </p>
           )}
 
@@ -573,13 +719,15 @@ function AvailableVendorList({
                 {hidden.length > 0 && ` · ${hidden.length} not shown`}
               </span>
             )}
-            {/* Absent when there is no RFQ to invite into — the same rule the
-                per-row button follows. */}
-            {target && selected.size > 0 && (
+            {/* Offered whether or not an RFQ covers the item: the draft is
+                owned by the item, and assembling it before raising anything is
+                the point. The per-row control beside it still invites into a
+                covering RFQ, and goes when that card does. */}
+            {selected.size > 0 && (
               <button
                 type="button"
                 className="btn btn-sm"
-                onClick={() => void inviteSelected()}
+                onClick={() => void shortlistSelected()}
               >
                 Shortlist selected ({selected.size})
               </button>
@@ -591,142 +739,144 @@ function AvailableVendorList({
             )}
           </div>
 
-          <table className="table">
-            <thead>
-              <tr>
-                <th scope="col">
-                  <span className="sr-only">Select</span>
-                </th>
-                {/* The source rides under the name in this column rather than
-                    in one of its own. It was a column first, and a column cost
-                    61px of an 902px table that the three wrapping columns
-                    beside it were already short of: the worst rows went from
-                    146px to 194px tall and the whole table 16% longer.
-                    Measured in a browser, both ways, on the real 79-vendor
-                    Cables list — jsdom applies no stylesheet and does no
-                    layout, so it sees none of this. Under the name it is back
-                    to 146px, and it reads better besides: the provenance
-                    belongs to the company, not to a column beside it. */}
-                <th scope="col">Vendor</th>
-                <th scope="col">Approvals</th>
-                <th scope="col">Product groups</th>
-                <th scope="col">Represents</th>
-                <th scope="col">Prequalification</th>
-                <th scope="col">
-                  <span className="sr-only">Shortlist</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {rendered.map((row) => {
-                const key = rowKey(row)
-                const name = rowName(row)
-                // Registry rows only. A curated row has no `vendor_id`, so
-                // there is nothing to match a shortlist entry on — and
-                // matching on the name would be the very lookup this screen
-                // refuses to make.
-                const already =
-                  row.kind === 'registry' && invited.has(row.bidder.id)
-                const groups =
-                  row.kind === 'registry'
-                    ? row.bidder.trade_categories
-                    : row.entry.trade_categories
-                return (
-                  <tr key={key}>
-                    <td>
-                      <input
-                        type="checkbox"
-                        aria-label={`Select ${name}`}
-                        checked={selected.has(key)}
-                        onChange={(e) =>
-                          setSelected((prev) => {
-                            const next = new Set(prev)
-                            if (e.target.checked) next.add(key)
-                            else next.delete(key)
-                            return next
-                          })
-                        }
-                      />
-                    </td>
-                    <td>
-                      {/* Wrapped, so the name is still an element of its own:
-                          with the source line beside it as a bare text node
-                          the cell's text would read "Al Munara Switchgear
-                          LLCRegistry" and nothing could match the name alone. */}
-                      <span>{name}</span>
-                      {/* Every row says which universe it came from, because
-                          two rows can carry the same company name and which of
-                          the two this is decides what may be done to it. */}
-                      <div className="muted">
-                        {row.kind === 'registry'
-                          ? 'Registry'
-                          : SOURCE_LABEL[row.entry.source]}
-                      </div>
-                      {/* The refusal lives in the row that caused it. */}
-                      {rowError[key] && (
-                        <div className="banner banner--error" role="alert">
-                          {rowError[key]}
+          <div className="table-scroll">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th scope="col">
+                    <span className="sr-only">Select</span>
+                  </th>
+                  {/* The source rides under the name in this column rather than
+                      in one of its own. It was a column first, and a column cost
+                      61px of an 902px table that the three wrapping columns
+                      beside it were already short of: the worst rows went from
+                      146px to 194px tall and the whole table 16% longer.
+                      Measured in a browser, both ways, on the real 79-vendor
+                      Cables list — jsdom applies no stylesheet and does no
+                      layout, so it sees none of this. Under the name it is back
+                      to 146px, and it reads better besides: the provenance
+                      belongs to the company, not to a column beside it. */}
+                  <th scope="col">Vendor</th>
+                  <th scope="col">Approvals</th>
+                  <th scope="col">Product groups</th>
+                  <th scope="col">Represents</th>
+                  <th scope="col">Prequalification</th>
+                  <th scope="col">
+                    <span className="sr-only">Shortlist</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {rendered.map((row) => {
+                  const key = rowKey(row)
+                  const name = rowName(row)
+                  // Registry rows only. A curated row has no `vendor_id`, so
+                  // there is nothing to match a shortlist entry on — and
+                  // matching on the name would be the very lookup this screen
+                  // refuses to make.
+                  const already =
+                    row.kind === 'registry' && invited.has(row.bidder.id)
+                  const groups =
+                    row.kind === 'registry'
+                      ? row.bidder.trade_categories
+                      : row.entry.trade_categories
+                  return (
+                    <tr key={key}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${name}`}
+                          checked={selected.has(key)}
+                          onChange={(e) =>
+                            setSelected((prev) => {
+                              const next = new Set(prev)
+                              if (e.target.checked) next.add(key)
+                              else next.delete(key)
+                              return next
+                            })
+                          }
+                        />
+                      </td>
+                      <td>
+                        {/* Wrapped, so the name is still an element of its own:
+                            with the source line beside it as a bare text node
+                            the cell's text would read "Al Munara Switchgear
+                            LLCRegistry" and nothing could match the name alone. */}
+                        <span>{name}</span>
+                        {/* Every row says which universe it came from, because
+                            two rows can carry the same company name and which of
+                            the two this is decides what may be done to it. */}
+                        <div className="muted">
+                          {row.kind === 'registry'
+                            ? 'Registry'
+                            : SOURCE_LABEL[row.entry.source]}
                         </div>
-                      )}
-                    </td>
-                    {/* "Not checked" rather than empty pills or a dash: a
-                        curated row has no registry row, so there is no finding
-                        either way — the `null` vs `false` distinction the
-                        shortlist's client-approval column keeps. */}
-                    <td>
-                      {row.kind === 'registry' ? (
-                        <ApprovalPills approvers={row.bidder.approved_by} />
-                      ) : (
-                        <span className="muted">Not checked</span>
-                      )}
-                    </td>
-                    {/* Capped at two: an eleven-group discipline expansion
-                        rendered in full ran this cell to 595px and made every
-                        row 170px tall. */}
-                    <td className="muted">
-                      {groups.slice(0, 2).join(' · ') || '—'}
-                      {groups.length > 2 && ` · +${groups.length - 2} more`}
-                    </td>
-                    <td className="muted">
-                      {row.kind === 'registry'
-                        ? row.bidder.represented_manufacturers
-                            .slice(0, 2)
-                            .join(' · ') || '—'
-                        : '—'}
-                    </td>
-                    {/* The derived status, not `prequal_status`: a lapsed
-                        approval is still stored as "Approved". */}
-                    <td>
-                      {row.kind === 'registry' ? (
-                        row.bidder.effective_prequal
-                      ) : (
-                        <span className="muted">Not checked</span>
-                      )}
-                    </td>
-                    <td>
-                      {already ? (
-                        <span className="muted">Invited</span>
-                      ) : target ? (
-                        <button
-                          type="button"
-                          className="btn btn-sm"
-                          // The vendor's name belongs in the accessible name,
-                          // not the visible label: in the label it wrapped to
-                          // three lines and made every row 89px tall, while a
-                          // screen reader needs it either way to tell one row's
-                          // button from another's.
-                          aria-label={`Shortlist ${name}`}
-                          onClick={() => void invite(row)}
-                        >
-                          Shortlist
-                        </button>
-                      ) : null}
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+                        {/* The refusal lives in the row that caused it. */}
+                        {rowError[key] && (
+                          <div className="banner banner--error" role="alert">
+                            {rowError[key]}
+                          </div>
+                        )}
+                      </td>
+                      {/* "Not checked" rather than empty pills or a dash: a
+                          curated row has no registry row, so there is no finding
+                          either way — the `null` vs `false` distinction the
+                          shortlist's client-approval column keeps. */}
+                      <td>
+                        {row.kind === 'registry' ? (
+                          <ApprovalPills approvers={row.bidder.approved_by} />
+                        ) : (
+                          <span className="muted">Not checked</span>
+                        )}
+                      </td>
+                      {/* Capped at two: an eleven-group discipline expansion
+                          rendered in full ran this cell to 595px and made every
+                          row 170px tall. */}
+                      <td className="muted">
+                        {groups.slice(0, 2).join(' · ') || '—'}
+                        {groups.length > 2 && ` · +${groups.length - 2} more`}
+                      </td>
+                      <td className="muted">
+                        {row.kind === 'registry'
+                          ? row.bidder.represented_manufacturers
+                              .slice(0, 2)
+                              .join(' · ') || '—'
+                          : '—'}
+                      </td>
+                      {/* The derived status, not `prequal_status`: a lapsed
+                          approval is still stored as "Approved". */}
+                      <td>
+                        {row.kind === 'registry' ? (
+                          row.bidder.effective_prequal
+                        ) : (
+                          <span className="muted">Not checked</span>
+                        )}
+                      </td>
+                      <td>
+                        {already ? (
+                          <span className="muted">Invited</span>
+                        ) : target ? (
+                          <button
+                            type="button"
+                            className="btn btn-sm"
+                            // The vendor's name belongs in the accessible name,
+                            // not the visible label: in the label it wrapped to
+                            // three lines and made every row 89px tall, while a
+                            // screen reader needs it either way to tell one row's
+                            // button from another's.
+                            aria-label={`Shortlist ${name}`}
+                            onClick={() => void invite(row)}
+                          >
+                            Shortlist
+                          </button>
+                        ) : null}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
 
           <p className="muted">
             {needle
@@ -862,81 +1012,83 @@ function VendorListCard({
         </EmptyState>
       ) : (
         <>
-          <table className="table">
-            <thead>
-              <tr>
-                <th scope="col">Vendor</th>
-                {uploaded && <th scope="col">Registry</th>}
-                <th scope="col">Product groups</th>
-                <th scope="col">How it arrived</th>
-                {onRemove && (
-                  <th scope="col">
-                    <span className="sr-only">Remove</span>
-                  </th>
-                )}
-              </tr>
-            </thead>
-            <tbody>
-              {entries.map((e) => (
-                <tr key={e.id}>
-                  {/* The name as the export wrote it, or as the buyer typed
-                      it, so a row can be read back against its source. */}
-                  <td>
-                    {e.vendor_name}
-                    {/* The refusal lives in the row that caused it. */}
-                    {rowError[e.id] && (
-                      <div className="banner banner--error" role="alert">
-                        {rowError[e.id]}
-                      </div>
-                    )}
-                  </td>
-                  {uploaded && (
-                    <td>
-                      {e.vendor_id === null ? (
-                        <span className="warn">Not in the registry</span>
-                      ) : (
-                        <span className="muted">Linked</span>
-                      )}
-                    </td>
-                  )}
-                  {/* Capped at two, the same shape the available-vendor card
-                      beside it uses. A curated row carries the item's whole
-                      discipline expansion — eleven groups for Cables — and
-                      rendered in full that cell ran to 595px, crushed the
-                      vendor name to 67px and made every row 170px tall. Only
-                      measurable in a browser: jsdom applies no stylesheet and
-                      does no layout. Second instance on this screen, after the
-                      89px shortlist button. */}
-                  <td className="muted">
-                    {e.trade_categories.slice(0, 2).join(' · ') || '—'}
-                    {e.trade_categories.length > 2 &&
-                      ` · +${e.trade_categories.length - 2} more`}
-                  </td>
-                  {/* `source_document` names the export for an upload and the
-                      act for a curated row, so every row says how it got here
-                      whichever door it came through. */}
-                  <td className="muted">{e.source_document}</td>
+          <div className="table-scroll">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th scope="col">Vendor</th>
+                  {uploaded && <th scope="col">Registry</th>}
+                  <th scope="col">Product groups</th>
+                  <th scope="col">How it arrived</th>
                   {onRemove && (
-                    <td>
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-ghost"
-                        // The name goes in the accessible name, not the
-                        // visible label — the rule the shortlist button
-                        // follows, and here it is also what makes removal
-                        // addressable in a list where two rows can share a
-                        // trading name.
-                        aria-label={`Remove ${e.vendor_name}`}
-                        onClick={() => void remove(e.id)}
-                      >
-                        Remove
-                      </button>
-                    </td>
+                    <th scope="col">
+                      <span className="sr-only">Remove</span>
+                    </th>
                   )}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {entries.map((e) => (
+                  <tr key={e.id}>
+                    {/* The name as the export wrote it, or as the buyer typed
+                        it, so a row can be read back against its source. */}
+                    <td>
+                      {e.vendor_name}
+                      {/* The refusal lives in the row that caused it. */}
+                      {rowError[e.id] && (
+                        <div className="banner banner--error" role="alert">
+                          {rowError[e.id]}
+                        </div>
+                      )}
+                    </td>
+                    {uploaded && (
+                      <td>
+                        {e.vendor_id === null ? (
+                          <span className="warn">Not in the registry</span>
+                        ) : (
+                          <span className="muted">Linked</span>
+                        )}
+                      </td>
+                    )}
+                    {/* Capped at two, the same shape the available-vendor card
+                        beside it uses. A curated row carries the item's whole
+                        discipline expansion — eleven groups for Cables — and
+                        rendered in full that cell ran to 595px, crushed the
+                        vendor name to 67px and made every row 170px tall. Only
+                        measurable in a browser: jsdom applies no stylesheet and
+                        does no layout. Second instance on this screen, after the
+                        89px shortlist button. */}
+                    <td className="muted">
+                      {e.trade_categories.slice(0, 2).join(' · ') || '—'}
+                      {e.trade_categories.length > 2 &&
+                        ` · +${e.trade_categories.length - 2} more`}
+                    </td>
+                    {/* `source_document` names the export for an upload and the
+                        act for a curated row, so every row says how it got here
+                        whichever door it came through. */}
+                    <td className="muted">{e.source_document}</td>
+                    {onRemove && (
+                      <td>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-ghost"
+                          // The name goes in the accessible name, not the
+                          // visible label — the rule the shortlist button
+                          // follows, and here it is also what makes removal
+                          // addressable in a list where two rows can share a
+                          // trading name.
+                          aria-label={`Remove ${e.vendor_name}`}
+                          onClick={() => void remove(e.id)}
+                        >
+                          Remove
+                        </button>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           <p className="muted">
             {entries.length} on the {label.toLowerCase()} for{' '}
             {discipline || 'this item'}
@@ -1144,54 +1296,56 @@ function SuggestVendors({
       )}
 
       {found !== null && found.length > 0 && (
-        <table className="table">
-          <thead>
-            <tr>
-              <th scope="col">Company</th>
-              <th scope="col">Country</th>
-              <th scope="col">Supplies</th>
-              <th scope="col">Why the model says so</th>
-              <th scope="col">
-                <span className="sr-only">Add</span>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {found.map((v) => (
-              <tr key={v.name}>
-                <td>
-                  {v.name}
-                  {rowError[v.name] && (
-                    <div className="banner banner--error" role="alert">
-                      {rowError[v.name]}
-                    </div>
-                  )}
-                </td>
-                <td className="muted">{v.country ?? '—'}</td>
-                <td className="muted">{v.supplies ?? '—'}</td>
-                {/* Shown, not hidden behind a tooltip: it is the only thing
-                    the reader has to judge an unverified name by. */}
-                <td className="muted">{v.basis ?? '—'}</td>
-                <td>
-                  {added.has(v.name) ? (
-                    <span className="muted">Added</span>
-                  ) : (
-                    <button
-                      type="button"
-                      className="btn btn-sm"
-                      // One per row and no control that takes them all: see the
-                      // card's note on friction.
-                      aria-label={`Add ${v.name}`}
-                      onClick={() => void add(v)}
-                    >
-                      Add
-                    </button>
-                  )}
-                </td>
+        <div className="table-scroll">
+          <table className="table">
+            <thead>
+              <tr>
+                <th scope="col">Company</th>
+                <th scope="col">Country</th>
+                <th scope="col">Supplies</th>
+                <th scope="col">Why the model says so</th>
+                <th scope="col">
+                  <span className="sr-only">Add</span>
+                </th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {found.map((v) => (
+                <tr key={v.name}>
+                  <td>
+                    {v.name}
+                    {rowError[v.name] && (
+                      <div className="banner banner--error" role="alert">
+                        {rowError[v.name]}
+                      </div>
+                    )}
+                  </td>
+                  <td className="muted">{v.country ?? '—'}</td>
+                  <td className="muted">{v.supplies ?? '—'}</td>
+                  {/* Shown, not hidden behind a tooltip: it is the only thing
+                      the reader has to judge an unverified name by. */}
+                  <td className="muted">{v.basis ?? '—'}</td>
+                  <td>
+                    {added.has(v.name) ? (
+                      <span className="muted">Added</span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        // One per row and no control that takes them all: see the
+                        // card's note on friction.
+                        aria-label={`Add ${v.name}`}
+                        onClick={() => void add(v)}
+                      >
+                        Add
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </>
   )
@@ -1440,6 +1594,8 @@ export function ItemDetail({
           before an RFQ exists, and after one does the RFQ list is where you
           go next. */}
       <AvailableVendorList
+        projectId={projectId}
+        itemId={itemId}
         discipline={item.discipline}
         // The two curated lists, from the payload this screen already read.
         // Passed rather than fetched: a second read could disagree with the
@@ -1460,6 +1616,15 @@ export function ItemDetail({
         }
         onTarget={setTarget}
         onInvited={() => setTick((t) => t + 1)}
+      />
+
+      {/* Directly under the pool it is filled from, so shortlisting something
+          and seeing it land are one glance apart. */}
+      <DraftShortlistCard
+        projectId={projectId}
+        itemId={itemId}
+        picks={data.draft_shortlists?.[itemId] ?? []}
+        onChanged={() => setTick((t) => t + 1)}
       />
 
       <Card
@@ -1503,65 +1668,67 @@ export function ItemDetail({
             on the project screen to cover several at once.
           </EmptyState>
         ) : covering.length === 0 ? null : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th scope="col">Reference</th>
-                <th scope="col">Package</th>
-                <th scope="col">Discipline</th>
-                <th scope="col">Stage</th>
-                <th scope="col">Shortlist</th>
-                {onOpenRfq && (
-                  <th scope="col">
-                    <span className="sr-only">Open</span>
-                  </th>
-                )}
-              </tr>
-            </thead>
-            <tbody>
-              {covering.map((r) => {
-                const found = shortlists.data?.find((s) => s.rfq.id === r.id)
-                return (
-                  <tr key={r.id}>
-                    <td className="mono">{r.reference}</td>
-                    <td>{r.package}</td>
-                    <td>{r.discipline}</td>
-                    <td>{r.stage}</td>
-                    {/* Three states, and the first two must stay apart: a
-                        shortlist that could not be read is not a shortlist
-                        with nobody on it, and rendering "0 invited" for the
-                        former would report a fact nobody established. */}
-                    <td>
-                      {!found || found.shortlist === null ? (
-                        <span className="muted">—</span>
-                      ) : found.shortlist.length === 0 ? (
-                        <span className="muted">Nobody invited yet</span>
-                      ) : (
-                        summarise(found.shortlist, found.clientApprover ?? '')
-                      )}
-                    </td>
-                    {onOpenRfq && (
+          <div className="table-scroll">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th scope="col">Reference</th>
+                  <th scope="col">Package</th>
+                  <th scope="col">Discipline</th>
+                  <th scope="col">Stage</th>
+                  <th scope="col">Shortlist</th>
+                  {onOpenRfq && (
+                    <th scope="col">
+                      <span className="sr-only">Open</span>
+                    </th>
+                  )}
+                </tr>
+              </thead>
+              <tbody>
+                {covering.map((r) => {
+                  const found = shortlists.data?.find((s) => s.rfq.id === r.id)
+                  return (
+                    <tr key={r.id}>
+                      <td className="mono">{r.reference}</td>
+                      <td>{r.package}</td>
+                      <td>{r.discipline}</td>
+                      <td>{r.stage}</td>
+                      {/* Three states, and the first two must stay apart: a
+                          shortlist that could not be read is not a shortlist
+                          with nobody on it, and rendering "0 invited" for the
+                          former would report a fact nobody established. */}
                       <td>
-                        <button
-                          type="button"
-                          className="btn btn-sm btn-ghost"
-                          // The reference, not the glyph. `›` is the visible
-                          // label because the column is one character wide;
-                          // a screen reader and a test both need to know
-                          // which RFQ this row's control opens, which is the
-                          // same rule the Shortlist button follows.
-                          aria-label={`Open ${r.reference}`}
-                          onClick={() => onOpenRfq(r.id)}
-                        >
-                          ›
-                        </button>
+                        {!found || found.shortlist === null ? (
+                          <span className="muted">—</span>
+                        ) : found.shortlist.length === 0 ? (
+                          <span className="muted">Nobody invited yet</span>
+                        ) : (
+                          summarise(found.shortlist, found.clientApprover ?? '')
+                        )}
                       </td>
-                    )}
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+                      {onOpenRfq && (
+                        <td>
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-ghost"
+                            // The reference, not the glyph. `›` is the visible
+                            // label because the column is one character wide;
+                            // a screen reader and a test both need to know
+                            // which RFQ this row's control opens, which is the
+                            // same rule the Shortlist button follows.
+                            aria-label={`Open ${r.reference}`}
+                            onClick={() => onOpenRfq(r.id)}
+                          >
+                            ›
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
       </Card>
     </>
