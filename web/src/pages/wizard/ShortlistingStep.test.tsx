@@ -6,7 +6,6 @@ import type { RfqDetail, ShortlistEntry } from '../../types'
 vi.mock('../../api', () => ({
   addShortlistEntry: vi.fn().mockResolvedValue({}),
   approveShortlist: vi.fn().mockResolvedValue({}),
-  inviteRegisteredBidder: vi.fn().mockResolvedValue({}),
   removeShortlistEntry: vi.fn().mockResolvedValue({}),
   setTbeTemplate: vi.fn().mockResolvedValue({}),
 }))

@@ -271,7 +271,7 @@ The web suite is separate and not part of either row above — both rows are
 `python -m pytest` counts. Run it with `npm test` under `web/` (vitest,
 non-watching, exits non-zero on failure); `npm run build` also type-checks the
 test files, since `web/tsconfig.app.json` includes `src`. CI runs both, in the
-`web` job of the same workflow. It stands at **307 passed** across 22 files.
+`web` job of the same workflow. It stands at **311 passed** across 22 files.
 
 The **5** web tests before those are Bid Desk's BD-5: reworking the
 Shortlisting step and dropping the item screen's Raise RFQ door. Three in
@@ -287,18 +287,34 @@ met it only after scrolling past everything it approves. Two in
 `ItemDetail.test.tsx` assert the covering-RFQ card carries no Raise RFQ
 control, with an RFQ already covering the item and without one.
 
-**Fourteen** web tests came out net across two files, deleted rather than
-skipped. Seven in `RfqWizard.test.tsx` drove the candidate-list UI directly —
-inviting from a candidate row, the scope-fit filter, the candidate search box,
-an override reason typed against a blocked candidate, and the already-invited
-mark inside that list — none of which exists any more: choosing who to invite
-now happens on the item screen's `AvailableVendorList`, over the four-source
-pool BD-1 built, which was already strictly more than the registry-only search
-this step carried. Seven in `ItemDetail.test.tsx` drove `RaiseRfqForm` reached
+**Fourteen** web tests were deleted outright across two files, not skipped —
+a gross count, not a net one, since four more land elsewhere below. Seven in
+`RfqWizard.test.tsx` drove the candidate-list UI directly — inviting from a
+candidate row, the scope-fit filter, the candidate search box, an override
+reason typed against a blocked candidate, and the already-invited mark inside
+that list — none of which exists any more: choosing who to invite now happens
+on the item screen's `AvailableVendorList`, over the four-source pool BD-1
+built, which was already strictly more than the registry-only search this
+step carried. Seven in `ItemDetail.test.tsx` drove `RaiseRfqForm` reached
 through this screen's own Raise RFQ button: two exercised the button and form
-directly, and five drove the form's Discipline picker, its product groups and
-its other fields — all already covered through `ProjectDetail.tsx`'s own door
-into the same form, so nothing here loses coverage.
+directly, and five drove the form's Discipline picker, its product groups,
+its package placeholder and its budget field.
+
+Only one of those five was already covered elsewhere — the budget field's
+bare existence, which `ProjectDetail.test.tsx`'s own assertion that the same
+field takes text rather than a number cannot pass without the field being
+there under that label. **The other four were not**, and a first pass at this
+paragraph claimed they were, checked by memory of what `ProjectDetail.tsx`
+covers rather than by reading it — a review caught it, with `grep -rn
+"optgroup" web/src` turning up nothing outside the block that had just been
+deleted. `forms.tsx`'s `DisciplineSelect` in its `productGroups` mode (used
+only by `RaiseRfqForm`) was left with no assertion on its `<optgroup>`
+structure, on offering both the family and the leaf product groups, on a leaf
+value being what actually gets sent, or on the package field's placeholder.
+All four are now ported into `ProjectDetail.test.tsx`, adapted to the door it
+already opens the form through (tick an item, click Raise RFQ) rather than
+copied verbatim from the deleted block, bringing the web total from 307 to
+**311**.
 
 None of this phase's tests touch a fixture directory or a provider key, and
 none of the three files carrying the `needs_real_avl` marker changed, so the

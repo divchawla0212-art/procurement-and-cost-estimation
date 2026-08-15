@@ -289,6 +289,68 @@ describe('ProjectDetail', () => {
     )
   })
 
+  /** Opens `RaiseRfqForm` through this screen's own door — tick an item,
+   *  click Raise RFQ — and hands back the Discipline select. `forms.tsx`'s
+   *  `DisciplineSelect` renders it with `productGroups` on, which is what the
+   *  four tests below exercise: the picker offers both the family and the
+   *  product groups behind it, grouped under it, and a leaf value is what
+   *  actually gets sent. */
+  async function openRaiseRfq() {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(detail())
+    renderDetail()
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select Gas generator' }))
+    fireEvent.click(screen.getByRole('button', { name: /raise rfq/i }))
+    return screen.getByLabelText('Discipline')
+  }
+
+  it('offers the disciplines and the product groups behind them', async () => {
+    // Both levels: an item is scoped to a family, but an RFQ is commonly cut
+    // narrower — one cable type rather than all eleven.
+    const select = await openRaiseRfq()
+    await screen.findByRole('option', { name: /^Cables/ })
+
+    expect(select.tagName).toBe('SELECT')
+    expect(
+      within(select).getByRole('option', { name: /Cables — all 1 product groups/ }),
+    ).toBeInTheDocument()
+    expect(
+      within(select).getByRole('option', { name: 'CABLES - LV POWER DISTRIBUTION' }),
+    ).toBeInTheDocument()
+    expect(
+      within(select).getByRole('option', { name: 'GENERATOR POWER-OTHERS' }),
+    ).toBeInTheDocument()
+  })
+
+  it('groups each product group under its discipline', async () => {
+    const select = await openRaiseRfq()
+    await screen.findByRole('option', { name: /^Cables/ })
+
+    const groups = select.querySelectorAll('optgroup')
+    expect([...groups].map((g) => g.getAttribute('label'))).toEqual([
+      'Cables',
+      'Generators',
+    ])
+  })
+
+  it('sends the product group chosen, not the family', async () => {
+    const select = await openRaiseRfq()
+    await screen.findByRole('option', { name: /^Cables/ })
+    fireEvent.change(select, {
+      target: { value: 'CABLES - LV POWER DISTRIBUTION' },
+    })
+    expect((select as HTMLSelectElement).value).toBe(
+      'CABLES - LV POWER DISTRIBUTION',
+    )
+  })
+
+  it('shows an example of a package rather than explaining one', async () => {
+    await openRaiseRfq()
+    expect(screen.getByLabelText('Package')).toHaveAttribute(
+      'placeholder',
+      expect.stringContaining('Wellhead tie-in ball valves'),
+    )
+  })
+
   it('takes the estimated budget as text, so the scroll wheel cannot alter it', async () => {
     vi.mocked(fetchWorkflowProject).mockResolvedValue(detail())
 
