@@ -6,9 +6,6 @@ import type { RfqDetail, ShortlistEntry } from '../../types'
 vi.mock('../../api', () => ({
   addShortlistEntry: vi.fn().mockResolvedValue({}),
   approveShortlist: vi.fn().mockResolvedValue({}),
-  // The step loads the candidate list on mount; every test here is about the
-  // invited table above it, so an empty registry keeps that half quiet.
-  fetchCandidates: vi.fn().mockResolvedValue([]),
   inviteRegisteredBidder: vi.fn().mockResolvedValue({}),
   removeShortlistEntry: vi.fn().mockResolvedValue({}),
   setTbeTemplate: vi.fn().mockResolvedValue({}),
@@ -101,5 +98,47 @@ describe('ShortlistingStep approvals column', () => {
 
     const row = await screen.findByRole('row', { name: /Al Munara/ })
     expect(within(row).getByText(/Not on the ADNOC list/i)).toBeInTheDocument()
+  })
+})
+
+// BD-5: who is invited now comes from the item's own draft shortlist, filled
+// on the item screen before an RFQ exists at all — see `AvailableVendorList`
+// in `ItemDetail.tsx`. The Registry search-and-invite affordance this step
+// used to carry duplicated that, on a narrower list (the registry alone,
+// never the four-source pool), so it comes out rather than staying as a
+// second door to the same act.
+describe('ShortlistingStep vendor selection', () => {
+  it('has no Registry section', () => {
+    step([entry()])
+
+    expect(screen.queryByRole('heading', { name: 'Registry' })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Search candidates')).not.toBeInTheDocument()
+    expect(
+      screen.queryByLabelText(/Only those registered for/),
+    ).not.toBeInTheDocument()
+  })
+
+  it('keeps the escape hatch for a vendor nobody registered', () => {
+    step([entry()])
+
+    expect(
+      screen.getByText(/Add a vendor who is not in the registry/i),
+    ).toBeInTheDocument()
+    expect(screen.getByLabelText('Vendor name')).toBeInTheDocument()
+  })
+
+  // `_shortlisting_exit` (workflow/gates.py) checks included vendor, then
+  // approval, then the TBE template, in that order. The approval control used
+  // to render after the whole registry section, at the bottom of the vendor
+  // half of the step; it now leads the step so a top-to-bottom reader meets it
+  // before the table it approves.
+  it('renders the approval control before the invited-bidders table', () => {
+    step([entry()])
+
+    const button = screen.getByRole('button', { name: 'Approve shortlist' })
+    const table = screen.getByRole('table')
+    expect(
+      button.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
   })
 })

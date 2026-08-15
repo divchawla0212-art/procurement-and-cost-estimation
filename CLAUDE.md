@@ -271,7 +271,39 @@ The web suite is separate and not part of either row above — both rows are
 `python -m pytest` counts. Run it with `npm test` under `web/` (vitest,
 non-watching, exits non-zero on failure); `npm run build` also type-checks the
 test files, since `web/tsconfig.app.json` includes `src`. CI runs both, in the
-`web` job of the same workflow. It stands at **316 passed** across 22 files.
+`web` job of the same workflow. It stands at **307 passed** across 22 files.
+
+The **5** web tests before those are Bid Desk's BD-5: reworking the
+Shortlisting step and dropping the item screen's Raise RFQ door. Three in
+`ShortlistingStep.test.tsx` assert what replaced the Registry section — no
+heading, no candidate search, and the escape hatch for a vendor nobody
+registered still there behind its disclosure — plus that the approval control,
+with its status line, now precedes the invited-bidders table in DOM order.
+`_shortlisting_exit` (`workflow/gates.py`) checks an included vendor, then
+approval, then the TBE template, in that order; the control used to sit after
+the whole vendor half of the step — the invited-bidders table, the Registry
+section and the disclosure — rather than leading it, so a top-to-bottom reader
+met it only after scrolling past everything it approves. Two in
+`ItemDetail.test.tsx` assert the covering-RFQ card carries no Raise RFQ
+control, with an RFQ already covering the item and without one.
+
+**Fourteen** web tests came out net across two files, deleted rather than
+skipped. Seven in `RfqWizard.test.tsx` drove the candidate-list UI directly —
+inviting from a candidate row, the scope-fit filter, the candidate search box,
+an override reason typed against a blocked candidate, and the already-invited
+mark inside that list — none of which exists any more: choosing who to invite
+now happens on the item screen's `AvailableVendorList`, over the four-source
+pool BD-1 built, which was already strictly more than the registry-only search
+this step carried. Seven in `ItemDetail.test.tsx` drove `RaiseRfqForm` reached
+through this screen's own Raise RFQ button: two exercised the button and form
+directly, and five drove the form's Discipline picker, its product groups and
+its other fields — all already covered through `ProjectDetail.tsx`'s own door
+into the same form, so nothing here loses coverage.
+
+None of this phase's tests touch a fixture directory or a provider key, and
+none of the three files carrying the `needs_real_avl` marker changed, so the
+AVL gate is still eleven and was not re-measured — the Python suite is
+untouched by this phase.
 
 The **4** Python tests and **1** web test before those fix `StageStrip`'s
 process-code labelling — the gap the BD-4 paragraph below once flagged as known

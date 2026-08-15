@@ -1,8 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { RfqWizard } from './RfqWizard'
-import type { Candidate, RfqDetail, ShortlistEntry } from '../types'
-import { APPROVED_BIDDER, EXPIRED_BIDDER } from './workflow-fixtures'
+import type { RfqDetail, ShortlistEntry } from '../types'
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
@@ -12,8 +11,6 @@ vi.mock('../api', async (importOriginal) => {
     transitionRfq: vi.fn(),
     freezeTechnicalPackage: vi.fn(),
     addShortlistEntry: vi.fn(),
-    inviteRegisteredBidder: vi.fn(),
-    fetchCandidates: vi.fn(),
     removeShortlistEntry: vi.fn(),
     approveShortlist: vi.fn(),
     setTbeTemplate: vi.fn(),
@@ -25,10 +22,8 @@ vi.mock('../api', async (importOriginal) => {
 import {
   addShortlistEntry,
   approveShortlist,
-  fetchCandidates,
   fetchRfq,
   freezeTechnicalPackage,
-  inviteRegisteredBidder,
   removeShortlistEntry,
   transitionRfq,
 } from '../api'
@@ -50,52 +45,6 @@ function entry(over: Partial<ShortlistEntry> = {}): ShortlistEntry {
     override_reason: null,
     ...over,
   }
-}
-
-function candidate(over: Partial<Candidate> = {}): Candidate {
-  return {
-    bidder: APPROVED_BIDDER,
-    suitability: {
-      eligible: true,
-      scope_fit: true,
-      effective_prequal: 'Approved',
-      blockers: [],
-      cautions: [],
-    },
-    shortlisted: false,
-    ...over,
-  }
-}
-
-/** Blocked by a lapsed prequalification, but *in* scope — so it survives the
- *  candidate list's default "only those registered for this discipline"
- *  filter, and each test below is about one thing. */
-const BLOCKED_CANDIDATE: Candidate = {
-  bidder: EXPIRED_BIDDER,
-  suitability: {
-    eligible: false,
-    scope_fit: true,
-    effective_prequal: 'Expired',
-    blockers: [
-      'Prequalification lapsed on 2026-05-09 and must be renewed before Sandstone Piping Industries can be invited.',
-    ],
-    cautions: [],
-  },
-  shortlisted: false,
-}
-
-/** Approved, but not listed for this RFQ's discipline. A caution, never a
- *  blocker — and hidden by the default filter until it is unticked. */
-const OUT_OF_SCOPE_CANDIDATE: Candidate = {
-  bidder: { ...APPROVED_BIDDER, id: 'bdr_offscope', name: 'Blue Harbour Marine Services' },
-  suitability: {
-    eligible: true,
-    scope_fit: false,
-    effective_prequal: 'Approved',
-    blockers: [],
-    cautions: ['Not registered for Mechanical — inviting them records a scope mismatch.'],
-  },
-  shortlisted: false,
 }
 
 const STAGES = [
@@ -140,9 +89,8 @@ function detail(over: Partial<RfqDetail> = {}): RfqDetail {
   }
 }
 
-async function show(data: RfqDetail, candidates: Candidate[] = []) {
+async function show(data: RfqDetail) {
   vi.mocked(fetchRfq).mockResolvedValue(data)
-  vi.mocked(fetchCandidates).mockResolvedValue(candidates)
   render(<RfqWizard rfqId="rfq_abc" stages={STAGES} onBack={() => {}} />)
   await waitFor(() => {
     expect(screen.queryByText(/Loading RFQ…/i)).not.toBeInTheDocument()
@@ -223,7 +171,6 @@ describe('RfqWizard', () => {
         },
         shortlist: [entry()],
       }),
-      [candidate({ shortlisted: true })],
     )
 
     fireEvent.click(screen.getByRole('button', { name: /Shortlisting/ }))
@@ -232,121 +179,16 @@ describe('RfqWizard', () => {
     expect(screen.getByRole('button', { name: 'Remove' })).toBeInTheDocument()
   })
 
-  it('invites a bidder from the registry, sending only the id', async () => {
-    // Not the name, prequal status or scope fit: those come from the registry,
-    // and a screen that sent them would be claiming they were its to decide.
-    vi.mocked(inviteRegisteredBidder).mockResolvedValue(entry())
-    await show(detail({ rfq: { ...detail().rfq, stage: 'Shortlisting' } }), [
-      candidate(),
-    ])
-
-    fireEvent.click(await screen.findByRole('button', { name: /Invite Al Munara/ }))
-
-    await waitFor(() =>
-      expect(inviteRegisteredBidder).toHaveBeenCalledWith('rfq_abc', {
-        vendor_id: 'bdr_almunara',
-      }),
-    )
-  })
-
-  it('shows a blocked candidate\u2019s blockers rather than hiding the control', async () => {
-    await show(detail({ rfq: { ...detail().rfq, stage: 'Shortlisting' } }), [
-      BLOCKED_CANDIDATE,
-    ])
-
-    expect(
-      await screen.findByText(/Prequalification lapsed on 2026-05-09/),
-    ).toBeInTheDocument()
-    // Still invitable — with a reason. Hiding the control would move the
-    // decision to a spreadsheet rather than prevent it.
-    expect(screen.getByRole('button', { name: /Invite Sandstone/ })).toBeInTheDocument()
-  })
-
-  it('hides out-of-scope candidates behind a filter that says what it is doing', async () => {
-    // A client's imported AVL is the whole approved list; on a common product
-    // group most of it is irrelevant to this package. The filter is on by
-    // default and the count says how much it is holding back.
-    await show(detail({ rfq: { ...detail().rfq, stage: 'Shortlisting' } }), [
-      candidate(),
-      OUT_OF_SCOPE_CANDIDATE,
-    ])
-
-    // A candidate's name appears twice — as the heading and inside its Invite
-    // button — so these count matches rather than expecting exactly one.
-    await screen.findAllByText(/Al Munara Switchgear LLC/)
-    expect(screen.queryAllByText(/Blue Harbour Marine Services/)).toHaveLength(0)
-    expect(screen.getByText(/1 of 2 in the registry/)).toBeInTheDocument()
-
-    fireEvent.click(screen.getByLabelText(/Only those registered for/))
-
-    expect(screen.getAllByText(/Blue Harbour Marine Services/).length).toBeGreaterThan(0)
-    expect(screen.getByText(/records a scope mismatch/)).toBeInTheDocument()
-  })
-
-  it('searches candidates by the manufacturers they represent', async () => {
-    await show(detail({ rfq: { ...detail().rfq, stage: 'Shortlisting' } }), [
-      candidate(),
-      { ...candidate(), bidder: { ...APPROVED_BIDDER, id: 'bdr_other', name: 'Another Vendor', represented_manufacturers: ['ABB'] } },
-    ])
-
-    await screen.findAllByText(/Al Munara Switchgear LLC/)
-    fireEvent.change(screen.getByLabelText('Search candidates'), {
-      target: { value: 'ABB' },
-    })
-
-    expect(screen.getAllByText(/Another Vendor/).length).toBeGreaterThan(0)
-    expect(screen.queryAllByText(/Al Munara Switchgear LLC/)).toHaveLength(0)
-  })
-
-  it('sends the override reason typed against a blocked candidate', async () => {
-    vi.mocked(inviteRegisteredBidder).mockResolvedValue(
-      entry({ vendor_id: 'bdr_sandstone', override_reason: 'Sole source' }),
-    )
-    await show(detail({ rfq: { ...detail().rfq, stage: 'Shortlisting' } }), [
-      BLOCKED_CANDIDATE,
-    ])
-
-    fireEvent.change(await screen.findByLabelText(/Reason for inviting Sandstone/), {
-      target: { value: 'Sole source for the 16-inch jig' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: /Invite Sandstone/ }))
-
-    await waitFor(() =>
-      expect(inviteRegisteredBidder).toHaveBeenCalledWith('rfq_abc', {
-        vendor_id: 'bdr_sandstone',
-        override_reason: 'Sole source for the 16-inch jig',
-      }),
-    )
-  })
-
-  it('surfaces the refusal when a blocked bidder is invited with no reason', async () => {
-    vi.mocked(inviteRegisteredBidder).mockRejectedValue(
-      new Error(
-        'Prequalification lapsed on 2026-05-09. Record a reason to invite them anyway.',
-      ),
-    )
-    await show(detail({ rfq: { ...detail().rfq, stage: 'Shortlisting' } }), [
-      BLOCKED_CANDIDATE,
-    ])
-
-    fireEvent.click(await screen.findByRole('button', { name: /Invite Sandstone/ }))
-
-    await waitFor(() =>
-      expect(
-        screen.getByText(/Record a reason to invite them anyway/),
-      ).toBeInTheDocument(),
-    )
-  })
-
-  it('marks a candidate already invited rather than offering them twice', async () => {
-    await show(
-      detail({ rfq: { ...detail().rfq, stage: 'Shortlisting' }, shortlist: [entry()] }),
-      [candidate({ shortlisted: true })],
-    )
-
-    expect(await screen.findByText('Invited')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /Invite Al Munara/ })).toBeNull()
-  })
+  // BD-5: who to invite is chosen on the item screen, before an RFQ exists —
+  // `AvailableVendorList` there is judged against the four-source pool, which
+  // is strictly more than the registry-only search this step used to carry.
+  // The seven tests that drove that search were deleted here, not skipped:
+  // they exercised the Invite-from-a-candidate-row control, the scope-fit
+  // filter, the candidate search box, an override reason typed against a
+  // blocked candidate, and the already-invited mark inside that list — none
+  // of which exists any more. `ShortlistingStep.test.tsx` covers what
+  // replaced it: the Registry section is gone and the escape hatch for an
+  // unregistered vendor survives.
 
   // The card above the item screen's RFQ list answers "who may bid"; this
   // column answers "is who we invited still on that list". They read the same
@@ -367,7 +209,6 @@ describe('RfqWizard', () => {
           }),
         ],
       }),
-      [candidate({ shortlisted: true })],
     )
 
     const approved = screen.getByRole('row', { name: /Al Munara/ })
@@ -392,7 +233,6 @@ describe('RfqWizard', () => {
           }),
         ],
       }),
-      [],
     )
 
     const row = screen.getByRole('row', { name: /Galfar/ })
@@ -404,7 +244,6 @@ describe('RfqWizard', () => {
     vi.mocked(removeShortlistEntry).mockResolvedValue(undefined)
     await show(
       detail({ rfq: { ...detail().rfq, stage: 'Shortlisting' }, shortlist: [entry()] }),
-      [candidate({ shortlisted: true })],
     )
 
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }))

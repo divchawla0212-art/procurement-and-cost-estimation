@@ -32,8 +32,7 @@ vi.mock('../api', async (importOriginal) => {
     // A curated row has no `vendor_id`, so it is shortlisted by name through
     // the free-text path — never through `inviteRegisteredBidder`.
     addShortlistEntry: vi.fn(),
-    createRfq: vi.fn(),
-    // The Raise-RFQ form's Discipline field is a picker over the vocabulary.
+    // The Edit item form's Discipline field is a picker over the vocabulary.
     fetchDisciplines: vi.fn(),
     // One read per covering RFQ: the project payload carries no shortlist.
     fetchRfq: vi.fn(),
@@ -52,7 +51,6 @@ import {
   addDraftShortlistPick,
   addItemVendor,
   addShortlistEntry,
-  createRfq,
   removeDraftShortlistPick,
   fetchAvailableBidders,
   fetchDisciplines,
@@ -746,6 +744,40 @@ describe('ItemDetail', () => {
     ).toBeInTheDocument()
   })
 
+  // BD-3: raising an RFQ from this screen came off. An item's shortlist is
+  // now assembled in the draft above this card, before any RFQ exists — the
+  // door into actually raising one is the project screen, which is where the
+  // selection this form used to skip (`itemIds={[itemId]}`) has to be ticked
+  // for more than one item anyway. The card still says which RFQs cover the
+  // item; only the affordance to create one here is gone.
+  it('has no Raise RFQ control on the covering-RFQ card', async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(
+      detail({
+        items: [GENERATOR],
+        rfqs: [rfq('rfq_1', 'ADP-RFQ-2026-014', ['itm_1'])],
+      }),
+    )
+
+    renderItem()
+
+    const card = await screen.findByRole('region', { name: /RFQs covering/i })
+    expect(
+      within(card).queryByRole('button', { name: /raise rfq/i }),
+    ).not.toBeInTheDocument()
+    expect(within(card).queryByLabelText('Reference')).not.toBeInTheDocument()
+  })
+
+  it('has no Raise RFQ control when the item has no covering RFQ either', async () => {
+    vi.mocked(fetchWorkflowProject).mockResolvedValue(detail())
+
+    renderItem()
+
+    const card = await screen.findByRole('region', { name: /RFQs covering/i })
+    expect(
+      within(card).queryByRole('button', { name: /raise rfq/i }),
+    ).not.toBeInTheDocument()
+  })
+
   it('handles a stale item id without crashing', async () => {
     vi.mocked(fetchWorkflowProject).mockResolvedValue(detail({ items: [] }))
     renderItem('itm_missing')
@@ -872,67 +904,12 @@ describe('ItemDetail', () => {
       expect(onHome).toHaveBeenCalledTimes(1)
     })
   })
-  describe('the raise-RFQ form', () => {
-    async function openIt() {
-      vi.mocked(fetchWorkflowProject).mockResolvedValue(detail())
-      renderItem()
-      fireEvent.click(await screen.findByRole('button', { name: /raise rfq/i }))
-      return screen.getByLabelText('Discipline')
-    }
-
-    it('offers the disciplines and the product groups behind them', async () => {
-      // Both levels: an item is scoped to a family, but an RFQ is commonly cut
-      // narrower — one cable type rather than all eleven.
-      const select = await openIt()
-      await screen.findByRole('option', { name: /^Cables/ })
-
-      expect(select.tagName).toBe('SELECT')
-      expect(
-        within(select).getByRole('option', { name: /Cables — all 1 product groups/ }),
-      ).toBeInTheDocument()
-      expect(
-        within(select).getByRole('option', { name: 'CABLES - LV POWER DISTRIBUTION' }),
-      ).toBeInTheDocument()
-      expect(
-        within(select).getByRole('option', { name: 'GENERATOR POWER-OTHERS' }),
-      ).toBeInTheDocument()
-    })
-
-    it('groups each product group under its discipline', async () => {
-      const select = await openIt()
-      await screen.findByRole('option', { name: /^Cables/ })
-
-      const groups = select.querySelectorAll('optgroup')
-      expect([...groups].map((g) => g.getAttribute('label'))).toEqual([
-        'Cables',
-        'Generators',
-      ])
-    })
-
-    it('sends the product group chosen, not the family', async () => {
-      const select = await openIt()
-      await screen.findByRole('option', { name: /^Cables/ })
-      fireEvent.change(select, {
-        target: { value: 'CABLES - LV POWER DISTRIBUTION' },
-      })
-      expect((select as HTMLSelectElement).value).toBe(
-        'CABLES - LV POWER DISTRIBUTION',
-      )
-    })
-
-    it('shows an example of a package rather than explaining one', async () => {
-      await openIt()
-      expect(screen.getByLabelText('Package')).toHaveAttribute(
-        'placeholder',
-        expect.stringContaining('Wellhead tie-in ball valves'),
-      )
-    })
-
-    it('calls the budget field a budget', async () => {
-      await openIt()
-      expect(screen.getByLabelText('Estimated budget (AED)')).toBeInTheDocument()
-    })
-  })
+  // BD-3: `the raise-RFQ form` describe block came out with it — its five
+  // tests drove `RaiseRfqForm` reached through this screen's own Raise RFQ
+  // button, which no longer exists here. `ProjectDetail.test.tsx` already
+  // exercises the same form (the discipline picker, its product groups, the
+  // budget field, the package placeholder) on the door it now belongs to
+  // exclusively, so nothing here loses coverage.
 
   describe('the available vendor list', () => {
     /** Answers the scoped call and the master-list call separately. */
@@ -1080,95 +1057,13 @@ describe('ItemDetail', () => {
     })
   })
 
-  describe('raising an RFQ', () => {
-    // The project screen raises one over the items you ticked there. Here the
-    // item *is* the selection, so there is nothing to tick — which is the whole
-    // reason this door exists: you arrive at an item, read who could bid for it
-    // in the card above, and raise the RFQ without going back up a level.
-    it('covers exactly this item, without a selection step', async () => {
-      vi.mocked(fetchWorkflowProject).mockResolvedValue(
-        detail({ items: [GENERATOR, CABLE] }),
-      )
-      vi.mocked(createRfq).mockResolvedValue(
-        rfq('rfq_1', 'ADP-RFQ-2026-014', ['itm_1']),
-      )
-
-      renderItem()
-
-      const card = await screen.findByRole('region', { name: /RFQs covering/i })
-      fireEvent.click(within(card).getByRole('button', { name: /raise rfq/i }))
-
-      const type = (label: string, value: string) =>
-        fireEvent.change(within(card).getByLabelText(label), {
-          target: { value },
-        })
-      // The Discipline select is populated from the served vocabulary; a
-    // `<select>` ignores a value it has no option for, so wait for the option.
-    await screen.findByRole('option', { name: /^Cables/ })
-    type('Reference', 'ADP-RFQ-2026-014')
-      type('Package', 'Power generation')
-      type('Discipline', 'Generators')
-      type('Estimated budget (AED)', '18000000')
-      fireEvent.click(within(card).getByRole('button', { name: /create rfq/i }))
-
-      await waitFor(() =>
-        expect(createRfq).toHaveBeenCalledWith({
-          project_id: 'prj_1',
-          // `itm_1` alone, and never the project's other items — CABLE is in
-          // the fixture precisely so a regression that sent them all is caught.
-          item_ids: ['itm_1'],
-          reference: 'ADP-RFQ-2026-014',
-          package: 'Power generation',
-          discipline: 'Generators',
-          value_estimate_aed: 18000000,
-        }),
-      )
-    })
-
-    it('shows the new RFQ in the covering list once it is created', async () => {
-      // The new RFQ is read back from the server rather than pushed into
-      // local state: `covering` is filtered from the project payload, so a
-      // screen that did not reload would show a stale list next to a form that
-      // had just succeeded.
-      vi.mocked(fetchWorkflowProject)
-        .mockResolvedValueOnce(detail())
-        .mockResolvedValue(
-          detail({ rfqs: [rfq('rfq_1', 'ADP-RFQ-2026-014', ['itm_1'])] }),
-        )
-      vi.mocked(createRfq).mockResolvedValue(
-        rfq('rfq_1', 'ADP-RFQ-2026-014', ['itm_1']),
-      )
-
-      renderItem()
-
-      const card = await screen.findByRole('region', { name: /RFQs covering/i })
-      expect(
-        within(card).getByText(/No RFQ covers this item yet/i),
-      ).toBeInTheDocument()
-
-      fireEvent.click(within(card).getByRole('button', { name: /raise rfq/i }))
-      const type = (label: string, value: string) =>
-        fireEvent.change(within(card).getByLabelText(label), {
-          target: { value },
-        })
-      // The Discipline select is populated from the served vocabulary; a
-    // `<select>` ignores a value it has no option for, so wait for the option.
-    await screen.findByRole('option', { name: /^Cables/ })
-    type('Reference', 'ADP-RFQ-2026-014')
-      type('Package', 'Power generation')
-      type('Discipline', 'Generators')
-      type('Estimated budget (AED)', '18000000')
-      fireEvent.click(within(card).getByRole('button', { name: /create rfq/i }))
-
-      expect(await screen.findByText('ADP-RFQ-2026-014')).toBeInTheDocument()
-      // The form closed on success, so the card is a list again.
-      await waitFor(() =>
-        expect(
-          screen.queryByRole('button', { name: /create rfq/i }),
-        ).not.toBeInTheDocument(),
-      )
-    })
-  })
+  // BD-3: raising an RFQ from this screen came off — see `has no Raise RFQ
+  // control on the covering-RFQ card` above. The two tests that drove the
+  // form's presence here (`covers exactly this item, without a selection
+  // step` and `shows the new RFQ in the covering list once it is created`)
+  // were deleted, not skipped: `RaiseRfqForm` is no longer reachable from
+  // this screen at all, and `ProjectDetail.test.tsx` already covers the form
+  // itself on the door it now belongs to exclusively.
 
   /* ------------------------------------------------- adding one by hand */
   //

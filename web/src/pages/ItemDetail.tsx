@@ -4,8 +4,6 @@ import {
   addDraftShortlistPick,
   addItemVendor,
   addShortlistEntry,
-  createRfq,
-  extractRfqDoc,
   fetchAvailableBidders,
   fetchWorkflowProject,
   inviteRegisteredBidder,
@@ -17,7 +15,7 @@ import {
 import { useAsync } from '../useAsync'
 import type { CoveringShortlist } from './covering-shortlists'
 import { summarise, useCoveringShortlists } from './covering-shortlists'
-import { ItemForm, RaiseRfqForm } from './forms'
+import { ItemForm } from './forms'
 import type {
   BidderSummary,
   DraftShortlistEntry,
@@ -1391,7 +1389,6 @@ export function ItemDetail({
 }): JSX.Element {
   const [tick, setTick] = useState(0)
   const [editing, setEditing] = useState(false)
-  const [raising, setRaising] = useState(false)
   const [warning, setWarning] = useState<string | null>(null)
   // Held here rather than in the vendor card, which unmounts while a reload is
   // in flight. Empty until the covering RFQs are known; the fallback below
@@ -1627,47 +1624,17 @@ export function ItemDetail({
         onChanged={() => setTick((t) => t + 1)}
       />
 
-      <Card
-        title="RFQs covering this item"
-        actions={
-          !raising && (
-            <button
-              type="button"
-              className="btn btn-sm"
-              onClick={() => setRaising(true)}
-            >
-              Raise RFQ
-            </button>
-          )
-        }
-      >
-        {/* No selection step, unlike the project screen: there the RFQ is
-            raised over whichever items you ticked, and here the item you are
-            looking at *is* the selection. An RFQ raised from this door covers
-            this item and nothing else — widen it from the project screen. */}
-        {raising && (
-          <RaiseRfqForm
-            projectId={projectId}
-            itemIds={[itemId]}
-            onExtract={extractRfqDoc}
-            onCancel={() => setRaising(false)}
-            onSubmit={async (body) => {
-              await createRfq(body)
-              setRaising(false)
-              // Re-read rather than push the new RFQ into local state:
-              // `covering` is filtered out of the project payload, so the
-              // server stays the one authority on which RFQs cover this item.
-              setTick((t) => t + 1)
-            }}
-          />
-        )}
-
-        {covering.length === 0 && !raising ? (
+      {/* BD-3: this card no longer raises an RFQ — that door is the project
+          screen, where an item is one of possibly several ticked into the
+          same package. What is left here is the plain record of which RFQs
+          already cover this item, for the reader who arrived here first. */}
+      <Card title="RFQs covering this item">
+        {covering.length === 0 ? (
           <EmptyState title="No RFQ covers this item yet">
-            Raise one here to cover this item alone, or tick it alongside others
-            on the project screen to cover several at once.
+            Raise one from the project screen: tick this item there, alongside
+            any others it should cover, and use Raise RFQ.
           </EmptyState>
-        ) : covering.length === 0 ? null : (
+        ) : (
           <div className="table-scroll">
             <table className="table">
               <thead>

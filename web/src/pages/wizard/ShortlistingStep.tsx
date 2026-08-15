@@ -2,37 +2,48 @@ import { useState } from 'react'
 import {
   addShortlistEntry,
   approveShortlist,
-  fetchCandidates,
-  inviteRegisteredBidder,
   removeShortlistEntry,
   setTbeTemplate,
 } from '../../api'
-import type { Candidate } from '../../types'
-import { useAsync } from '../../useAsync'
 import { ApprovalPills } from '../../components/primitives'
 import type { StepProps } from './types'
 
 /**
- * Who is invited, chosen from the registry rather than typed from memory.
+ * Who is invited, and whether procurement has signed off on the list.
  *
- * The candidate list is the whole registry judged against *this* RFQ, so the
- * reader decides with the same information the server will decide with. A
- * blocked bidder keeps their Invite control — it is the override reason beside
- * it that makes including them a recorded, attributed act, and hiding the
- * control would only send the decision back to a spreadsheet.
+ * Choosing who to invite no longer happens here — it happens on the item
+ * screen, before an RFQ even exists: `AvailableVendorList` there is judged
+ * against the four-source pool (both approvals, hand-added, model-suggested),
+ * which is strictly more than the registry-only search this step used to
+ * carry. What is left here is the record of who was invited, the approval
+ * that gates issuance, and the one-off escape hatch for a vendor nobody
+ * registered.
  *
- * Inviting sends `vendor_id` and nothing else. The name, prequal status and
- * scope fit are the registry's, snapshotted server-side at the moment of the
- * decision; a screen that sent them would be claiming they were its to decide.
+ * The approval control leads the step rather than trailing it.
+ * `_shortlisting_exit` (`workflow/gates.py`) checks an included vendor, then
+ * approval, then the TBE template — in that order — and a control a reader
+ * only meets after scrolling past the table it approves invites approving
+ * without having looked at what is on it.
  */
-export function ShortlistingStep({ data, run, busy, tick }: StepProps) {
+export function ShortlistingStep({ data, run, busy }: StepProps) {
   const [criteria, setCriteria] = useState((data.tbe_template?.criteria ?? []).join('\n'))
-  // Keyed on the wizard's tick as well as the RFQ, so inviting somebody
-  // refreshes who is still available rather than leaving a stale list.
-  const candidates = useAsync(() => fetchCandidates(data.rfq.id), [data.rfq.id, tick])
 
   return (
     <>
+      <p className={data.shortlist_approved ? 'muted' : 'warn'}>
+        {data.shortlist_approved
+          ? 'Shortlist approved.'
+          : 'Shortlist not approved yet. Any change to the vendors re-opens approval.'}
+      </p>
+      <button
+        type="button"
+        className="btn btn--quiet"
+        disabled={busy || data.shortlist_approved}
+        onClick={() => run(() => approveShortlist(data.rfq.id))}
+      >
+        Approve shortlist
+      </button>
+
       <h3>Invited bidders</h3>
       {data.shortlist.length === 0 ? (
         <p className="muted">Nobody invited yet.</p>
@@ -120,27 +131,6 @@ export function ShortlistingStep({ data, run, busy, tick }: StepProps) {
         </div>
       )}
 
-      <h3>Registry</h3>
-      {candidates.loading ? (
-        <p className="muted">Loading bidders…</p>
-      ) : candidates.error ? (
-        <p className="warn">{candidates.error}</p>
-      ) : (candidates.data ?? []).length === 0 ? (
-        <p className="muted">
-          The bidder registry is empty. Import an Approved Vendor List, and its
-          vendors will be offered here with their prequalification checked for
-          you.
-        </p>
-      ) : (
-        <CandidateList
-          candidates={candidates.data ?? []}
-          discipline={data.rfq.discipline}
-          rfqId={data.rfq.id}
-          run={run}
-          busy={busy}
-        />
-      )}
-
       <details className="pcard-details">
         <summary>Add a vendor who is not in the registry</summary>
         <p className="muted">
@@ -150,20 +140,6 @@ export function ShortlistingStep({ data, run, busy, tick }: StepProps) {
         </p>
         <UnregisteredVendorRow rfqId={data.rfq.id} run={run} busy={busy} />
       </details>
-
-      <p className={data.shortlist_approved ? 'muted' : 'warn'}>
-        {data.shortlist_approved
-          ? 'Shortlist approved.'
-          : 'Shortlist not approved yet. Any change to the vendors re-opens approval.'}
-      </p>
-      <button
-        type="button"
-        className="btn btn--quiet"
-        disabled={busy || data.shortlist_approved}
-        onClick={() => run(() => approveShortlist(data.rfq.id))}
-      >
-        Approve shortlist
-      </button>
 
       <h3>TBE template</h3>
       <label className="field-label" htmlFor="tbe-criteria">
@@ -194,189 +170,6 @@ export function ShortlistingStep({ data, run, busy, tick }: StepProps) {
         Save TBE template
       </button>
     </>
-  )
-}
-
-/** How many candidates to render at once.
- *
- *  On a registry imported from an ADNOC AVL a common product group has over a
- *  hundred approved vendors, and rendering all of them is both slow and
- *  useless — nobody shortlists by scrolling a hundred cards. The list leads
- *  with those who fit (the server orders it that way), and says plainly how
- *  many it is holding back rather than truncating in silence.
- */
-const CANDIDATE_CAP = 25
-
-function CandidateList({
-  candidates,
-  discipline,
-  rfqId,
-  run,
-  busy,
-}: {
-  candidates: Candidate[]
-  discipline: string
-  rfqId: string
-  run: (action: () => Promise<unknown>) => Promise<void>
-  busy: boolean
-}) {
-  const [query, setQuery] = useState('')
-  // Default on: the registry is the client's whole approved list, and the
-  // question in front of the reader is almost always "who of ours can do
-  // this". The toggle is right there when the answer is nobody.
-  const [fittingOnly, setFittingOnly] = useState(true)
-
-  const needle = query.trim().toLowerCase()
-  const shown = candidates.filter((c) => {
-    if (fittingOnly && !c.suitability.scope_fit && !c.shortlisted) return false
-    if (!needle) return true
-    return (
-      c.bidder.name.toLowerCase().includes(needle) ||
-      c.bidder.represented_manufacturers.some((m) =>
-        m.toLowerCase().includes(needle),
-      )
-    )
-  })
-
-  return (
-    <>
-      <div className="fxrow">
-        <input
-          className="input"
-          aria-label="Search candidates"
-          placeholder="Search by vendor or manufacturer"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        <label>
-          <input
-            type="checkbox"
-            checked={fittingOnly}
-            onChange={(e) => setFittingOnly(e.target.checked)}
-          />{' '}
-          Only those registered for {discipline}
-        </label>
-      </div>
-
-      <p className="muted">
-        {shown.length} of {candidates.length} in the registry.
-        {shown.length > CANDIDATE_CAP && (
-          <> Showing the first {CANDIDATE_CAP} — search to narrow it.</>
-        )}
-      </p>
-
-      {shown.length === 0 ? (
-        <p className="muted">
-          Nobody in the registry is listed for {discipline}. Untick the filter
-          to invite somebody anyway — it will be recorded as a scope mismatch.
-        </p>
-      ) : (
-        <ul className="candidatelist">
-          {shown.slice(0, CANDIDATE_CAP).map((c) => (
-            <CandidateRow
-              key={c.bidder.id}
-              candidate={c}
-              rfqId={rfqId}
-              run={run}
-              busy={busy}
-            />
-          ))}
-        </ul>
-      )}
-    </>
-  )
-}
-
-function CandidateRow({
-  candidate,
-  rfqId,
-  run,
-  busy,
-}: {
-  candidate: Candidate
-  rfqId: string
-  run: (action: () => Promise<unknown>) => Promise<void>
-  busy: boolean
-}) {
-  const [reason, setReason] = useState('')
-  const { bidder, suitability } = candidate
-  const shortName = bidder.name.split(/\s+/)[0]
-
-  return (
-    <li className="candidate">
-      <div className="candidate-head">
-        <b>{bidder.name}</b>
-        <span
-          className={`pcard-status pcard-status--${suitability.effective_prequal
-            .toLowerCase()
-            .replace(/\s+/g, '-')}`}
-        >
-          {suitability.effective_prequal}
-        </span>
-        {/* Whose list they are on. On a client's imported AVL every candidate
-            is approved, so this is the distinction that actually separates
-            them — which is why the pills are coloured rather than uniform. */}
-        <ApprovalPills approvers={bidder.approved_by} />
-        {candidate.shortlisted ? (
-          <span className="muted">Invited</span>
-        ) : (
-          <button
-            type="button"
-            className="btn btn-sm"
-            disabled={busy}
-            onClick={() =>
-              run(() =>
-                inviteRegisteredBidder(rfqId, {
-                  vendor_id: bidder.id,
-                  // Omitted entirely when empty, so an eligible bidder is not
-                  // recorded as carrying an exception with no text.
-                  ...(reason.trim() ? { override_reason: reason.trim() } : {}),
-                }),
-              )
-            }
-          >
-            Invite {bidder.name}
-          </button>
-        )}
-      </div>
-
-      <p className="muted">
-        {bidder.trade_categories.length === 0
-          ? 'No trade categories recorded'
-          : bidder.trade_categories.slice(0, 2).join(' · ') +
-            (bidder.trade_categories.length > 2
-              ? ` · +${bidder.trade_categories.length - 2} more`
-              : '')}
-        {bidder.represented_manufacturers.length > 0 && (
-          <> — represents {bidder.represented_manufacturers.slice(0, 3).join(', ')}</>
-        )}
-      </p>
-
-      {suitability.blockers.map((b) => (
-        <p className="warn" key={b}>
-          {b}
-        </p>
-      ))}
-      {suitability.cautions.map((c) => (
-        <p className="muted" key={c}>
-          {c}
-        </p>
-      ))}
-
-      {!suitability.eligible && !candidate.shortlisted ? (
-        <>
-          <label className="field-label" htmlFor={`override-${bidder.id}`}>
-            Reason for inviting {shortName} anyway
-          </label>
-          <input
-            id={`override-${bidder.id}`}
-            className="input"
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-          />
-        </>
-      ) : null}
-    </li>
   )
 }
 
