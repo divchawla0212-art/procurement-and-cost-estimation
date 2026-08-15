@@ -215,12 +215,12 @@ def freeze_and_prepare(store: WorkflowStore, rfq_id: str) -> None:
     store.select_bids(rfq_id, [bid.id], by="client@example.com", rationale="Only compliant bid")
 
 
-def test_new_rfq_starts_at_scoping():
+def test_new_rfq_starts_at_shortlisting():
     store = make_store()
     p = make_project(store)
     item = make_item(store, p.id)
     rfq = make_rfq(store, p.id, [item.id])
-    assert rfq.stage is Stage.SCOPING
+    assert rfq.stage is Stage.SHORTLISTING
     assert rfq.project_id == p.id
     assert rfq.item_ids == [item.id]
 
@@ -241,7 +241,7 @@ def test_creation_records_an_opening_history_entry():
     rfq = make_rfq(store, p.id, [item.id])
     assert len(rfq.history) == 1
     assert rfq.history[0].from_stage is None
-    assert rfq.history[0].to_stage is Stage.SCOPING
+    assert rfq.history[0].to_stage is Stage.SHORTLISTING
 
 
 def test_allowed_transition_advances_the_stage_and_appends_history():
@@ -251,11 +251,11 @@ def test_allowed_transition_advances_the_stage_and_appends_history():
     rfq = make_rfq(store, p.id, [item.id])
     freeze_and_prepare(store, rfq.id)
 
-    updated = store.transition(rfq.id, Stage.SHORTLISTING, by="amal@example.com")
+    updated = store.transition(rfq.id, Stage.ISSUED, by="amal@example.com")
 
-    assert updated.stage is Stage.SHORTLISTING
+    assert updated.stage is Stage.ISSUED
     assert len(updated.history) == 2
-    assert updated.history[-1].from_stage is Stage.SCOPING
+    assert updated.history[-1].from_stage is Stage.SHORTLISTING
     assert updated.history[-1].by == "amal@example.com"
 
 
@@ -266,9 +266,9 @@ def test_disallowed_transition_raises_and_leaves_the_stage_untouched():
     rfq = make_rfq(store, p.id, [item.id])
 
     with pytest.raises(ValueError, match="not allowed"):
-        store.transition(rfq.id, Stage.ISSUED, by="amal@example.com")
+        store.transition(rfq.id, Stage.CLARIFICATIONS, by="amal@example.com")
 
-    assert store.get_rfq(rfq.id).stage is Stage.SCOPING
+    assert store.get_rfq(rfq.id).stage is Stage.SHORTLISTING
 
 
 def test_backward_transition_preserves_the_prior_attempt():
@@ -278,7 +278,6 @@ def test_backward_transition_preserves_the_prior_attempt():
     rfq = make_rfq(store, p.id, [item.id])
     freeze_and_prepare(store, rfq.id)
     for target in [
-        Stage.SHORTLISTING,
         Stage.ISSUED,
         Stage.CLARIFICATIONS,
         Stage.BIDS_RECEIVED,
@@ -589,9 +588,10 @@ def test_removing_an_unknown_vdrl_line_raises():
 
 
 def test_a_frozen_technical_package_cannot_be_replaced():
-    """Freezing is the whole point of the Scoping gate: vendors bid against a
-    fixed revision. A later edit would move the goalposts under bids already
-    invited against it."""
+    """Freezing is what makes a package something a vendor can bid against:
+    they bid against a fixed revision. A later edit would move the goalposts
+    under bids already invited against it. The gate that used to enforce
+    freezing before shortlisting is gone; this refusal is not."""
     store = make_store()
     rfq = seed_rfq(store)
     store.set_technical_package(

@@ -78,4 +78,15 @@ describe('wide tables scroll inside their card, not the page', () => {
     const theme = readFileSync(join(SRC, 'theme.css'), 'utf8')
     expect(theme).toMatch(/\.table-scroll\s*\{[^}]*overflow-x:\s*auto/)
   })
+
+  it('keeps .table-scroll a containing block for its .sr-only spans', () => {
+    // Not cosmetic, and the reason this case is separate: `.sr-only` is
+    // absolutely positioned, so without `position` on the wrapper it resolves
+    // against the initial containing block, escapes the clipping, and widens
+    // the document on its own — with the table itself scrolling perfectly.
+    // Dropping this declaration reintroduces the original bug in a form where
+    // every table still looks correct.
+    const theme = readFileSync(join(SRC, 'theme.css'), 'utf8')
+    expect(theme).toMatch(/\.table-scroll\s*\{[^}]*position:\s*relative/)
+  })
 })

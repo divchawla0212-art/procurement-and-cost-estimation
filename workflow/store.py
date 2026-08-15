@@ -560,7 +560,7 @@ class WorkflowStore:
             history=[
                 StageTransition(
                     from_stage=None,
-                    to_stage=Stage.SCOPING,
+                    to_stage=Stage.SHORTLISTING,
                     at=datetime.now(timezone.utc),
                     by="system",
                     reason="RFQ created",
@@ -619,9 +619,10 @@ class WorkflowStore:
             raise KeyError(f"Unknown RFQ: {rfq_id}")
         existing = self._packages.get(rfq_id)
         if existing is not None and existing.frozen_at is not None:
-            # Freezing is the Scoping exit criterion precisely because vendors
-            # bid against a fixed revision. Replacing it afterwards moves the
-            # goalposts under bids already invited against the old one.
+            # Freezing exists precisely because vendors bid against a fixed
+            # revision. Replacing it afterwards moves the goalposts under bids
+            # already invited against the old one. (It used to be the Scoping
+            # exit criterion as well; that stage is gone, the refusal is not.)
             raise ValueError(
                 "The technical package is frozen and can no longer be edited."
             )

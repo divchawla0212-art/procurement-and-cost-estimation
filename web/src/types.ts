@@ -219,14 +219,13 @@ export interface AdminUser {
 }
 
 /**
- * The nine workflow stages, as `/api/workflow/stages` returns them. The union
+ * The eight workflow stages, as `/api/workflow/stages` returns them. The union
  * exists for call sites that switch on a stage; `StageStrip` deliberately
  * takes `string[]` instead, so the server stays the single source of the
  * stage vocabulary and adding a stage server-side does not need a matching
  * edit here before the strip renders it.
  */
 export type RfqStage =
-  | 'Scoping'
   | 'Shortlisting'
   | 'Issued'
   | 'Clarifications'
@@ -278,9 +277,11 @@ export interface Attachment {
   revision: string | null
 }
 
-/** The package a vendor bids against. Freezing it is what closes the Scoping
- *  gate, and it cannot be frozen while any attachment lacks a definite
- *  revision — "latest" is not something a vendor can quote. */
+/** The package a vendor bids against. It cannot be frozen while any attachment
+ *  lacks a definite revision — "latest" is not something a vendor can quote —
+ *  and once frozen it refuses every later edit. It is edited under Issued;
+ *  freezing used to be the exit criterion of a Scoping stage that no longer
+ *  exists. */
 export interface TechnicalPackage {
   rfq_id: string
   revision: string

@@ -5,7 +5,6 @@ import { useAsync } from '../useAsync'
 import { Card, ErrorState, LoadingState } from '../components/primitives'
 import { ClarificationsStep } from './wizard/ClarificationsStep'
 import { IssuedStep } from './wizard/IssuedStep'
-import { ScopingStep } from './wizard/ScopingStep'
 import { ShortlistingStep } from './wizard/ShortlistingStep'
 
 /**
@@ -37,14 +36,15 @@ import { ShortlistingStep } from './wizard/ShortlistingStep'
 
 /** The steps this phase covers. Bids and evaluation arrive with the ingestion
  *  work, so the wizard stops at Clarifications rather than showing four steps
- *  with nothing behind them. */
-const WIZARD_STAGES = ['Scoping', 'Shortlisting', 'Issued', 'Clarifications'] as const
+ *  with nothing behind them. `Scoping` used to open the list; it was removed
+ *  from the process, and its technical-package editor moved into Issued. */
+const WIZARD_STAGES = ['Shortlisting', 'Issued', 'Clarifications'] as const
 
 const STEP_BLURB: Record<string, string> = {
-  Scoping: 'Define the package and freeze it. Vendors bid against this revision.',
   Shortlisting:
     'Invite bidders from the registry, get the list approved, and attach the TBE template.',
-  Issued: 'List the documents each vendor must return with their bid.',
+  Issued:
+    'Freeze the package vendors will bid against, and list the documents each vendor must return with their bid.',
   Clarifications:
     'Bidders ask, you answer, and every answer goes to the whole shortlist unless you record why it does not.',
 }
@@ -160,7 +160,6 @@ export function RfqWizard({
 
       <Card title={step}>
         <p className="muted">{STEP_BLURB[step]}</p>
-        {step === 'Scoping' ? <ScopingStep data={data} run={run} busy={busy} /> : null}
         {step === 'Shortlisting' ? (
           <ShortlistingStep data={data} run={run} busy={busy} tick={tick} />
         ) : null}

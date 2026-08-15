@@ -19,9 +19,8 @@ from workflow.stages import (
 from workflow.store import WorkflowStore
 
 
-def test_nine_stages_in_process_order():
+def test_eight_stages_in_process_order():
     assert STAGE_ORDER == [
-        Stage.SCOPING,
         Stage.SHORTLISTING,
         Stage.ISSUED,
         Stage.CLARIFICATIONS,
@@ -33,13 +32,30 @@ def test_nine_stages_in_process_order():
     ]
 
 
+def test_scoping_is_not_a_stage():
+    """An RFQ begins at Shortlisting. `Scoping` duplicated work the item screen
+    had already done, and it is gone from the vocabulary rather than merely
+    unused — a member nobody transitions to is still a member somebody can
+    store."""
+    assert "SCOPING" not in Stage.__members__
+    assert "Scoping" not in {stage.value for stage in Stage}
+
+
+def test_no_transition_targets_scoping():
+    """Removing the key is half the job. An orphaned *target* is still a
+    reachable edge, and `is_allowed` would happily answer yes to it."""
+    reachable = {target.value for targets in TRANSITIONS.values() for target in targets}
+    assert "Scoping" not in reachable
+    assert "Scoping" not in {source.value for source in TRANSITIONS}
+
+
 def test_each_stage_advances_to_its_successor():
     for current, following in zip(STAGE_ORDER, STAGE_ORDER[1:]):
         assert is_allowed(current, following), f"{current} should advance to {following}"
 
 
 def test_skipping_a_stage_is_rejected():
-    assert not is_allowed(Stage.SCOPING, Stage.ISSUED)
+    assert not is_allowed(Stage.SHORTLISTING, Stage.CLARIFICATIONS)
     assert not is_allowed(Stage.ISSUED, Stage.EVALUATION)
 
 
@@ -54,7 +70,7 @@ def test_renegotiation_returns_to_evaluation():
 
 
 def test_forward_transitions_are_not_backward():
-    assert not is_backward(Stage.SCOPING, Stage.SHORTLISTING)
+    assert not is_backward(Stage.SHORTLISTING, Stage.ISSUED)
 
 
 def test_terminal_stage_has_no_successors():
@@ -62,7 +78,7 @@ def test_terminal_stage_has_no_successors():
 
 
 def test_unlisted_transition_is_denied_by_default():
-    assert not is_allowed(Stage.PO_ISSUED, Stage.SCOPING)
+    assert not is_allowed(Stage.PO_ISSUED, Stage.SHORTLISTING)
     assert not is_allowed(Stage.AWARDED, Stage.SHORTLISTING)
 
 
@@ -116,23 +132,19 @@ def freeze_the_package(store: WorkflowStore, rfq_id: str) -> None:
     store.freeze_package(rfq_id, by="lead.engineer@example.com")
 
 
-def test_scoping_gate_blocks_until_the_package_is_frozen():
-    store, rfq_id = gated_store()
-    result = check_gate(store, rfq_id, Stage.SCOPING, Stage.SHORTLISTING)
-    assert result.passed is False
-    assert "frozen" in result.reason.lower()
-
-
-def test_scoping_gate_passes_once_the_package_is_frozen():
-    store, rfq_id = gated_store()
-    freeze_the_package(store, rfq_id)
-    assert check_gate(store, rfq_id, Stage.SCOPING, Stage.SHORTLISTING).passed is True
+# The two tests that stood here — `test_scoping_gate_blocks_until_the_package_is_frozen`
+# and `test_scoping_gate_passes_once_the_package_is_frozen` — are deleted rather
+# than updated: the rule they asserted no longer exists. `Scoping` is not a
+# stage, so there is no Scoping → Shortlisting edge for a gate to guard, and
+# `_shortlisting_exit` is the first gate now. The freeze rule itself survives
+# untouched in `test_workflow_store.py` (a frozen package refuses a later edit)
+# and moved on screen into the Issued step; what went is the *gate* that made
+# freezing a precondition of shortlisting.
 
 
 def test_shortlisting_gate_blocks_until_the_shortlist_is_approved():
     store, rfq_id = gated_store()
     freeze_the_package(store, rfq_id)
-    store.transition(rfq_id, Stage.SHORTLISTING, by="amal@example.com")
     store.add_shortlist_entry(rfq_id, vendor_name="Galfar", prequal_status="Qualified",
                               scope_code_fit=True, included=True)
 
@@ -144,7 +156,6 @@ def test_shortlisting_gate_blocks_until_the_shortlist_is_approved():
 def test_shortlisting_gate_blocks_when_no_vendor_is_included():
     store, rfq_id = gated_store()
     freeze_the_package(store, rfq_id)
-    store.transition(rfq_id, Stage.SHORTLISTING, by="amal@example.com")
     store.add_shortlist_entry(rfq_id, vendor_name="OQC", prequal_status="Under review",
                               scope_code_fit=False, included=False)
 
@@ -156,7 +167,6 @@ def test_shortlisting_gate_blocks_when_no_vendor_is_included():
 def test_issuance_gate_blocks_without_a_tbe_template():
     store, rfq_id = gated_store()
     freeze_the_package(store, rfq_id)
-    store.transition(rfq_id, Stage.SHORTLISTING, by="amal@example.com")
     store.add_shortlist_entry(rfq_id, vendor_name="Galfar", prequal_status="Qualified",
                               scope_code_fit=True, included=True)
     store.approve_shortlist(rfq_id, by="procurement@example.com")
@@ -169,7 +179,6 @@ def test_issuance_gate_blocks_without_a_tbe_template():
 def test_issuance_gate_passes_with_shortlist_approved_and_tbe_present():
     store, rfq_id = gated_store()
     freeze_the_package(store, rfq_id)
-    store.transition(rfq_id, Stage.SHORTLISTING, by="amal@example.com")
     store.add_shortlist_entry(rfq_id, vendor_name="Galfar", prequal_status="Qualified",
                               scope_code_fit=True, included=True)
     store.approve_shortlist(rfq_id, by="procurement@example.com")
@@ -181,7 +190,7 @@ def test_issuance_gate_passes_with_shortlist_approved_and_tbe_present():
 def test_a_blocked_gate_always_carries_a_reason():
     """No bare False: a blocked transition must say what is blocking it."""
     store, rfq_id = gated_store()
-    result = check_gate(store, rfq_id, Stage.SCOPING, Stage.SHORTLISTING)
+    result = check_gate(store, rfq_id, Stage.SHORTLISTING, Stage.ISSUED)
     assert result.passed is False
     assert result.reason
 
@@ -195,17 +204,17 @@ def test_ungated_transitions_pass_without_a_reason():
 
 def test_transition_raises_with_the_gate_reason():
     store, rfq_id = gated_store()
-    with pytest.raises(ValueError, match="frozen"):
-        store.transition(rfq_id, Stage.SHORTLISTING, by="amal@example.com")
+    with pytest.raises(ValueError, match="no included vendors"):
+        store.transition(rfq_id, Stage.ISSUED, by="amal@example.com")
 
 
 def test_a_blocked_transition_leaves_the_stage_and_history_untouched():
     store, rfq_id = gated_store()
     before = store.get_rfq(rfq_id)
     with pytest.raises(ValueError):
-        store.transition(rfq_id, Stage.SHORTLISTING, by="amal@example.com")
+        store.transition(rfq_id, Stage.ISSUED, by="amal@example.com")
     after = store.get_rfq(rfq_id)
-    assert after.stage is Stage.SCOPING
+    assert after.stage is Stage.SHORTLISTING
     assert len(after.history) == len(before.history)
 
 
@@ -213,7 +222,6 @@ def test_backward_transitions_are_not_gated():
     """A retender must not be blocked by the gate that guards going forward."""
     store, rfq_id = gated_store()
     freeze_the_package(store, rfq_id)
-    store.transition(rfq_id, Stage.SHORTLISTING, by="amal@example.com")
     store.add_shortlist_entry(rfq_id, vendor_name="Galfar", prequal_status="Qualified",
                               scope_code_fit=True, included=True)
     store.approve_shortlist(rfq_id, by="procurement@example.com")
@@ -256,7 +264,6 @@ def rfq_at_clarifications() -> tuple[WorkflowStore, str, str]:
     )
     store.approve_shortlist(rfq.id, by="procurement@example.com")
     store.set_tbe_template(rfq.id, criteria=["Accuracy class"])
-    store.transition(rfq.id, Stage.SHORTLISTING, by="buyer@example.com")
     store.transition(rfq.id, Stage.ISSUED, by="buyer@example.com")
     store.transition(rfq.id, Stage.CLARIFICATIONS, by="buyer@example.com")
     return store, rfq.id, entry.id
@@ -297,8 +304,9 @@ def test_a_draft_addendum_blocks_bids_from_being_opened():
 
 
 def test_the_reason_names_both_halves_when_both_are_outstanding():
-    """`_scoping_exit`s lesson: a reader told only the nearer half fixes it,
-    retries, and is refused again for a reason nobody mentioned."""
+    """The lesson the deleted Scoping gate left behind: a reader told only the
+    nearer half fixes it, retries, and is refused again for a reason nobody
+    mentioned."""
     store, rfq_id, entry_id = rfq_at_clarifications()
     store.raise_query(rfq_id, entry_id, question="a", category="Technical",
                       raised_on=date(2026, 8, 13))

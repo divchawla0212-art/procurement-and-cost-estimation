@@ -332,8 +332,11 @@ def build_demo_store(as_of: date, bidders: list[Bidder] | None = None) -> Workfl
     _load_registry(store, roster)
     _projects_and_items(store, as_of)
 
-    # -- HAL-01: still being scoped. Package attached, not yet frozen, so the
-    # Scoping gate is closed and the demo has something to *do*.
+    # -- HAL-01: raised and nothing else. A package is attached but nobody has
+    # been invited, so the Shortlisting gate is closed on its first clause and
+    # the demo has something to *do*. This is the one RFQ with an empty
+    # shortlist, and `test_every_demo_rfq_finds_real_vendors_for_its_product_group`
+    # counts on that.
     store.create_rfq(
         rfq_id="rfq_hal01", project_id="prj_haliba", item_ids=["itm_hal_switchgear"],
         reference="HAL-RFQ-2026-001", package="LV switchgear",
@@ -346,7 +349,8 @@ def build_demo_store(as_of: date, bidders: list[Bidder] | None = None) -> Workfl
     )
 
     # -- HAL-02: shortlisting. Frozen package; vendors invited, approval
-    # deliberately not yet given, so the Shortlisting gate is closed.
+    # deliberately not yet given, so the Shortlisting gate is closed on its
+    # second clause rather than its first.
     store.create_rfq(
         rfq_id="rfq_hal02", project_id="prj_haliba",
         item_ids=["itm_hal_valves", "itm_hal_flanges"],
@@ -358,8 +362,6 @@ def build_demo_store(as_of: date, bidders: list[Bidder] | None = None) -> Workfl
             [("HAL-PID-014", "Tie-in P&ID", "Rev. C"),
              ("HAL-DS-101", "Valve datasheets", "Rev. B"),
              ("HAL-SPC-007", "Piping material specification", "Rev. D")])
-    store.transition("rfq_hal02", Stage.SHORTLISTING, by=BUYER,
-                     reason="Package frozen at Rev. C")
     _invite(store, "rfq_hal02", _shortlistable(roster, PG_BALL_VALVES, 4), as_of)
 
     # -- RUU-01: issued. Everything the Shortlisting gate wants is in place.
@@ -372,8 +374,6 @@ def build_demo_store(as_of: date, bidders: list[Bidder] | None = None) -> Workfl
             "Two 100 % instrument air packages, oil-free, with dryers.",
             [("RUU-DS-220", "Compressor datasheet", "Rev. B"),
              ("RUU-PID-031", "Instrument air P&ID", "Rev. A")])
-    store.transition("rfq_ruu01", Stage.SHORTLISTING, by=BUYER,
-                     reason="Package frozen at Rev. B")
     _invite(store, "rfq_ruu01", _shortlistable(roster, PG_AIR_COMPRESSORS, 3), as_of)
     store.approve_shortlist("rfq_ruu01", by=PROCUREMENT)
     store.set_tbe_template(
@@ -419,7 +419,6 @@ def build_demo_store(as_of: date, bidders: list[Bidder] | None = None) -> Workfl
             "Battery-limit field transmitters plus the substation feeder cable.",
             [("RUU-IDX-410", "Instrument index", "Rev. A"),
              ("RUU-IO-411", "IO list", "Rev. A")])
-    store.transition("rfq_ruu02", Stage.SHORTLISTING, by=BUYER)
     _invite(store, "rfq_ruu02", _shortlistable(roster, PG_PRESSURE_TX, 3), as_of)
     store.approve_shortlist("rfq_ruu02", by=PROCUREMENT)
     store.set_tbe_template(
@@ -487,7 +486,6 @@ def build_demo_store(as_of: date, bidders: list[Bidder] | None = None) -> Workfl
     _freeze(store, "rfq_jat01", "Rev. B",
             "4 800 m of 11 kV three-core XLPE, drum lengths per the schedule.",
             [("JAT-CS-501", "Cable schedule", "Rev. B")])
-    store.transition("rfq_jat01", Stage.SHORTLISTING, by=BUYER)
     cable_bidders = _invite(store, "rfq_jat01", _shortlistable(roster, PG_MV_CABLE, 2), as_of)
     store.approve_shortlist("rfq_jat01", by=PROCUREMENT)
     store.set_tbe_template("rfq_jat01", criteria=["Conductor size", "Drum lengths",
@@ -522,7 +520,6 @@ def build_demo_store(as_of: date, bidders: list[Bidder] | None = None) -> Workfl
             "640 t of rack and platform steelwork with the bunkering exchangers.",
             [("JAT-ST-601", "Steel tonnage schedule", "Rev. A"),
              ("JAT-HX-602", "Exchanger datasheets", "Rev. A")])
-    store.transition("rfq_jat02", Stage.SHORTLISTING, by=BUYER)
     steel_bidders = _invite(store, "rfq_jat02", _shortlistable(roster, PG_STEEL, 2), as_of)
     store.approve_shortlist("rfq_jat02", by=PROCUREMENT)
     store.set_tbe_template("rfq_jat02", criteria=["Plate grade", "Weld procedure",

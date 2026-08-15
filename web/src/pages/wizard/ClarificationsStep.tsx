@@ -427,7 +427,7 @@ function DraftAddendumForm({ data, run, busy }: Omit<StepProps, 'tick'>) {
     return (
       <p className="muted">
         The technical package is not frozen, so there is nothing for an addendum
-        to supersede. Edit it directly under Scoping.
+        to supersede. Edit it directly under Issued.
       </p>
     )
   }

@@ -18,6 +18,7 @@ does. Swapping it for a real database is a change to this module only —
 import os
 import threading
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from typing import Iterator
 
 from procurement.store import layout
@@ -30,10 +31,12 @@ from workflow.models.project import Item, ItemVendorEntry, Project
 from workflow.models.rfq import (
     RfqRecord,
     ShortlistEntry,
+    StageTransition,
     TbeTemplate,
     TechnicalPackage,
     VdrlLine,
 )
+from workflow.stages import RETIRED_STAGES
 from workflow.store import WorkflowStore
 
 # One process, one lock — the same reasoning as `api/auth/store._LOCK`, and the
@@ -114,6 +117,49 @@ def to_document(store: WorkflowStore) -> dict:
     }
 
 
+def _move_off_a_retired_stage(record: dict) -> dict:
+    """An RFQ stored at a stage that no longer exists moves to its replacement,
+    with one history entry recording the move.
+
+    Two separate things happen to a document written before a stage was
+    retired, and only one of them is this function's business:
+
+    - Its **history** names the retired stage, in the entry recording the RFQ's
+      own creation and possibly in a transition out of it. Those entries are
+      left exactly as they are. History is append-only, and `StageTransition`
+      keeps a retired label verbatim precisely so that they can be.
+    - Its **stage** may still *be* the retired one, and that is what cannot
+      stand: nothing can transition out of a stage `TRANSITIONS` has no key
+      for, so the RFQ would be stuck. It moves, and the move is recorded.
+
+    Idempotent because it keys on the stage, not on the history: once the RFQ
+    has moved there is no retired stage left to find, and a second load appends
+    nothing. Keying on "does the history mention Scoping" would append on every
+    load forever, and only a two-run test tells the two apart —
+    `test_loading_a_scoping_document_twice_appends_one_entry`.
+    """
+    retired = record.get("stage")
+    replacement = RETIRED_STAGES.get(retired)
+    if replacement is None:
+        return record
+
+    moved = StageTransition(
+        # The literal retired label, not `None` and not an invented member.
+        # `None` already means "the RFQ was created here", and this entry is
+        # the opposite of that.
+        from_stage=retired,
+        to_stage=replacement,
+        at=datetime.now(timezone.utc),
+        by="system",
+        reason=f"{retired} was removed from the process.",
+    )
+    return {
+        **record,
+        "stage": replacement.value,
+        "history": [*record.get("history", []), moved.model_dump(mode="json")],
+    }
+
+
 def from_document(doc: dict) -> WorkflowStore:
     """Rebuild a store from a document.
 
@@ -130,7 +176,9 @@ def from_document(doc: dict) -> WorkflowStore:
     # hands the result to `bidder_db` and the next `save` drops the key. Absent
     # is the normal case now, and `load` fills the registry from the database.
     store._bidders = {b["id"]: Bidder(**b) for b in doc.get("bidders", [])}
-    store._rfqs = {r["id"]: RfqRecord(**r) for r in doc.get("rfqs", [])}
+    store._rfqs = {
+        r["id"]: RfqRecord(**_move_off_a_retired_stage(r)) for r in doc.get("rfqs", [])
+    }
     store._packages = {p["rfq_id"]: TechnicalPackage(**p) for p in doc.get("packages", [])}
     store._tbe = {t["rfq_id"]: TbeTemplate(**t) for t in doc.get("tbe", [])}
     store._bids = {b["id"]: Bid(**b) for b in doc.get("bids", [])}

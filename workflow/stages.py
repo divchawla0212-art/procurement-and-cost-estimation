@@ -2,11 +2,14 @@ from enum import Enum
 
 
 class Stage(str, Enum):
-    """The eight process stages. RFQ-06 spans two states — terms are agreed
+    """The seven process stages. RFQ-06 spans two states — terms are agreed
     at NEGOTIATION and the approval chain completes at AWARDED — so there are
-    nine enum members."""
+    eight enum members.
 
-    SCOPING = "Scoping"                # RFQ-01
+    An RFQ begins at SHORTLISTING. The stage that used to come before it is in
+    `RETIRED_STAGES`, not here: a member nobody transitions to is still a
+    member somebody can store."""
+
     SHORTLISTING = "Shortlisting"      # RFQ-02
     ISSUED = "Issued"                  # RFQ-03
     CLARIFICATIONS = "Clarifications"  # RFQ-04
@@ -18,7 +21,6 @@ class Stage(str, Enum):
 
 
 STAGE_ORDER: list[Stage] = [
-    Stage.SCOPING,
     Stage.SHORTLISTING,
     Stage.ISSUED,
     Stage.CLARIFICATIONS,
@@ -34,7 +36,6 @@ STAGE_ORDER: list[Stage] = [
 # Every stage needs an entry, including the terminal one, so that `is_allowed`
 # answers "no" rather than raising.
 TRANSITIONS: dict[Stage, frozenset[Stage]] = {
-    Stage.SCOPING: frozenset({Stage.SHORTLISTING}),
     Stage.SHORTLISTING: frozenset({Stage.ISSUED}),
     Stage.ISSUED: frozenset({Stage.CLARIFICATIONS}),
     Stage.CLARIFICATIONS: frozenset({Stage.BIDS_RECEIVED}),
@@ -43,6 +44,25 @@ TRANSITIONS: dict[Stage, frozenset[Stage]] = {
     Stage.NEGOTIATION: frozenset({Stage.AWARDED, Stage.EVALUATION}),
     Stage.AWARDED: frozenset({Stage.PO_ISSUED}),
     Stage.PO_ISSUED: frozenset(),
+}
+
+
+# Stages that were once part of the process and still appear in stored history.
+#
+# History is append-only, so an entry naming `Scoping` is a record of something
+# that happened and must not be restated as something else. `Stage` is the
+# vocabulary of the process *now*; this is the vocabulary an old document may
+# still be written in. `StageTransition` admits a plain string only when it is
+# in here — every other unknown stage name is still a validation error, which is
+# what keeps a typo from silently loading as a stage nobody can transition out
+# of.
+#
+# Nothing may be added here to keep a live stage working. A member belongs here
+# only after it has been removed from `Stage`.
+RETIRED_STAGES: dict[str, Stage] = {
+    # Removed with Bid Desk's BD-4: it duplicated work the item screen had
+    # already done. `persistence.load` moves an RFQ still sitting here.
+    "Scoping": Stage.SHORTLISTING,
 }
 
 

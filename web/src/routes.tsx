@@ -225,7 +225,7 @@ function ItemDetailRoute() {
  * already had has to be made from data this route fetches. That is a real extra
  * request on a deep link, and the cost of the RFQ being addressable at all.
  */
-const WIZARD_RANGE = ['Scoping', 'Shortlisting', 'Issued', 'Clarifications']
+const WIZARD_RANGE = ['Shortlisting', 'Issued', 'Clarifications']
 
 function RfqRoute() {
   const { rfqId = '' } = useParams<{ rfqId: string }>()

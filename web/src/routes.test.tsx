@@ -107,9 +107,9 @@ describe('AppRoutes — dispatch', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(fetchRfqRoster).mockResolvedValue({
-      stages: ['Scoping', 'Shortlisting'],
+      stages: ['Shortlisting', 'Issued'],
       stage_counts: {},
-      rfqs: [{ id: 'rfq_1', reference: 'RFQ-1', package: 'P', discipline: 'D', stage: 'Scoping' }],
+      rfqs: [{ id: 'rfq_1', reference: 'RFQ-1', package: 'P', discipline: 'D', stage: 'Shortlisting' }],
     } as never)
   })
 
@@ -168,7 +168,7 @@ describe('AppRoutes — dispatch', () => {
 
   it('opens a late-stage RFQ in the read-only view', async () => {
     vi.mocked(fetchRfqRoster).mockResolvedValue({
-      stages: ['Scoping'],
+      stages: ['Shortlisting'],
       stage_counts: {},
       rfqs: [{ id: 'rfq_9', reference: 'RFQ-9', package: 'P', discipline: 'D', stage: 'Awarded' }],
     } as never)

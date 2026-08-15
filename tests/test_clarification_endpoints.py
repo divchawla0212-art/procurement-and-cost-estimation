@@ -190,7 +190,7 @@ def test_the_transition_route_surfaces_the_gate_sentence(tmp_path, monkeypatch):
     client.post(f"/api/workflow/rfqs/{rfq_id}/shortlist/approve", json={})
     client.put(f"/api/workflow/rfqs/{rfq_id}/tbe-template",
                json={"criteria": ["Accuracy class"]})
-    for target in ["Shortlisting", "Issued", "Clarifications"]:
+    for target in ["Issued", "Clarifications"]:
         assert client.post(f"/api/workflow/rfqs/{rfq_id}/transition",
                            json={"target": target}).status_code == 200
     raise_a_query(client, rfq_id, entry_id)

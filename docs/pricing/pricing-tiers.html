@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Seats and Credits — Procurement Platform</title>
+<style>
+  /* minimal reset — the page sets all its own spacing via flex/grid gap */
+  *, *::before, *::after { box-sizing: border-box; }
+  body { margin: 0; }
+</style>
+<style>
+  :root {
+    --paper:      #F4F7F8;
+    --surface:    #FFFFFF;
+    --surface-2:  #EAEFF1;
+    --ink:        #131A1E;
+    --ink-2:      #3E4B52;
+    --ink-3:      #6B7A82;
+    --rule:       #CBD5D9;
+    --rule-soft:  #E2E9EB;
+    --accent:     #0C6C75;
+    --accent-2:   #0A5860;
+    --accent-wash:#DCEDEF;
+    --warn:       #94641A;
+    --warn-wash:  #F6EEDC;
+    --crit:       #9E3226;
+
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", "Roboto Mono", Menlo, Consolas, monospace;
+    --serif: ui-serif, "Iowan Old Style", Georgia, "Times New Roman", serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper:      #0D1214;
+      --surface:    #141C1F;
+      --surface-2:  #1B2529;
+      --ink:        #DDE6E8;
+      --ink-2:      #A6B5BA;
+      --ink-3:      #77878D;
+      --rule:       #2C3A3F;
+      --rule-soft:  #202B2F;
+      --accent:     #45B3BC;
+      --accent-2:   #6FCBD2;
+      --accent-wash:#152C2F;
+      --warn:       #D0A254;
+      --warn-wash:  #2A2113;
+      --crit:       #E08076;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --paper:      #0D1214;
+    --surface:    #141C1F;
+    --surface-2:  #1B2529;
+    --ink:        #DDE6E8;
+    --ink-2:      #A6B5BA;
+    --ink-3:      #77878D;
+    --rule:       #2C3A3F;
+    --rule-soft:  #202B2F;
+    --accent:     #45B3BC;
+    --accent-2:   #6FCBD2;
+    --accent-wash:#152C2F;
+    --warn:       #D0A254;
+    --warn-wash:  #2A2113;
+    --crit:       #E08076;
+  }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 17px; line-height: 1.62;
+    margin: 0; padding: 0 clamp(16px, 5vw, 48px) 96px;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; }
+  p { max-width: 68ch; margin: 0; }
+
+  .masthead {
+    border-bottom: 2px solid var(--ink);
+    padding: clamp(40px, 7vw, 72px) 0 22px;
+    display: flex; flex-direction: column; gap: 16px;
+  }
+  .eyebrow {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--accent); font-weight: 600;
+  }
+  h1 {
+    font-family: var(--mono); font-size: clamp(30px, 5.4vw, 46px);
+    line-height: 1.05; letter-spacing: -.02em; font-weight: 600;
+    margin: 0; text-wrap: balance;
+  }
+  .standfirst { font-size: 19px; color: var(--ink-2); max-width: 62ch; }
+
+  .figures {
+    display: grid; gap: 1px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    background: var(--rule); border: 1px solid var(--rule); margin-top: 34px;
+  }
+  .fig { background: var(--surface); padding: 20px 22px; display: grid;
+         grid-template-rows: auto auto 1fr; gap: 6px; align-content: start; }
+  .fig-label { font-family: var(--mono); font-size: 10.5px; letter-spacing: .13em;
+               text-transform: uppercase; color: var(--ink-3); }
+  .fig-value { font-family: var(--mono); font-size: 30px; font-weight: 600;
+               letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+  .fig-note { font-size: 13.5px; color: var(--ink-3); line-height: 1.4; }
+
+  section { margin-top: 60px; }
+  h2 { font-family: var(--mono); font-size: 13px; font-weight: 600;
+       letter-spacing: .13em; text-transform: uppercase; color: var(--accent);
+       margin: 0 0 6px; padding-bottom: 10px; border-bottom: 1px solid var(--rule); }
+  h3 { font-family: var(--mono); font-size: 15px; font-weight: 600;
+       color: var(--ink); margin: 30px 0 0; }
+  .lede { font-size: 18px; color: var(--ink-2); margin-top: 14px; max-width: 66ch; }
+
+  .scroller { overflow-x: auto; margin-top: 20px; border: 1px solid var(--rule); background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-family: var(--mono); font-size: 13.5px; }
+  caption { caption-side: bottom; text-align: left; padding: 12px 16px;
+            font-family: var(--serif); font-size: 13.5px; color: var(--ink-3);
+            border-top: 1px solid var(--rule-soft); line-height: 1.5; }
+  th, td { padding: 10px 16px; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  th:first-child, td:first-child { text-align: left; white-space: normal; min-width: 175px; }
+  thead th { font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase;
+             color: var(--ink-3); font-weight: 600; border-bottom: 1px solid var(--rule);
+             background: var(--surface-2); }
+  tbody tr + tr td { border-top: 1px solid var(--rule-soft); }
+  tbody tr.hi td { background: var(--accent-wash); font-weight: 600; }
+  tbody tr.total td { border-top: 2px solid var(--rule); font-weight: 600; }
+  td.dim { color: var(--ink-3); }
+
+  .tag { font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase;
+         padding: 2px 7px; border: 1px solid var(--accent); color: var(--accent);
+         border-radius: 2px; margin-left: 8px; white-space: nowrap; font-weight: 600; }
+
+  /* ---- plan cards ---- */
+  .plans { display: grid; gap: 16px; margin-top: 24px;
+           grid-template-columns: repeat(auto-fit, minmax(255px, 1fr)); }
+  .plan { border: 1px solid var(--rule); background: var(--surface);
+          display: flex; flex-direction: column; }
+  .plan.featured { border: 2px solid var(--accent); }
+  .plan-head { padding: 20px 22px 16px; border-bottom: 1px solid var(--rule-soft);
+               display: flex; flex-direction: column; gap: 4px; }
+  .plan-name { font-family: var(--mono); font-size: 12px; letter-spacing: .13em;
+               text-transform: uppercase; color: var(--accent); font-weight: 600; }
+  .plan-price { font-family: var(--mono); font-size: 32px; font-weight: 600;
+                letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+  .plan-per { font-family: var(--mono); font-size: 12px; color: var(--ink-3); }
+  .plan-body { padding: 16px 22px 22px; display: flex; flex-direction: column; gap: 0; flex: 1; }
+  .plan-line { display: flex; justify-content: space-between; gap: 12px;
+               padding: 7px 0; font-size: 14.5px; color: var(--ink-2);
+               border-bottom: 1px solid var(--rule-soft); }
+  .plan-line:last-child { border-bottom: 0; }
+  .plan-line b { font-family: var(--mono); font-size: 13.5px; color: var(--ink);
+                 font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  /* ---- margin bars ---- */
+  .bars { display: flex; flex-direction: column; gap: 2px; margin-top: 20px;
+          border: 1px solid var(--rule); background: var(--surface); padding: 20px 22px; }
+  .bar-row { display: grid; grid-template-columns: minmax(120px, 210px) 1fr auto;
+             align-items: center; gap: 16px; padding: 7px 0; }
+  .bar-name { font-family: var(--mono); font-size: 13px; color: var(--ink-2); }
+  .bar-track { display: block; height: 20px; background: var(--surface-2); }
+  .bar-fill { display: block; height: 100%; background: var(--accent); }
+  .bar-fill.muted { background: var(--ink-3); }
+  .bar-fill.warn { background: var(--warn); }
+  .bar-val { font-family: var(--mono); font-size: 14px; font-weight: 600;
+             font-variant-numeric: tabular-nums; min-width: 46px; text-align: right; }
+
+  .note { border-left: 3px solid var(--accent); background: var(--surface);
+          padding: 16px 20px; margin-top: 22px; font-size: 16px; color: var(--ink-2);
+          display: flex; flex-direction: column; gap: 10px; }
+  .note.warn { border-left-color: var(--warn); background: var(--warn-wash); }
+  .note-title { font-family: var(--mono); font-size: 11px; letter-spacing: .12em;
+                text-transform: uppercase; color: var(--ink); font-weight: 600; }
+
+  .definition { border: 1px solid var(--accent); background: var(--accent-wash);
+                padding: 26px 28px; margin-top: 22px;
+                display: flex; flex-direction: column; gap: 12px; }
+  .definition .eq { font-family: var(--mono); font-size: clamp(16px, 2.5vw, 22px);
+                    font-weight: 600; letter-spacing: -.01em; line-height: 1.4; }
+  .definition p { font-size: 15.5px; color: var(--ink-2); }
+
+  ol.decisions { list-style: none; margin: 20px 0 0; padding: 0;
+                 display: flex; flex-direction: column; gap: 1px;
+                 background: var(--rule); border: 1px solid var(--rule); }
+  ol.decisions li { background: var(--surface); padding: 16px 20px;
+                    display: grid; grid-template-columns: 30px 1fr; gap: 14px; align-items: baseline; }
+  .d-n { font-family: var(--mono); font-size: 11px; color: var(--accent); font-weight: 600; }
+  .d-body { font-size: 15.5px; color: var(--ink-2); }
+  .d-body b { color: var(--ink); font-weight: 600; }
+
+  ul.plain { margin: 14px 0 0; padding-left: 20px; color: var(--ink-2); font-size: 16px; }
+  ul.plain li { margin-bottom: 9px; }
+  ul.plain li::marker { color: var(--accent); }
+
+  code { font-family: var(--mono); font-size: .88em; background: var(--surface-2);
+         padding: 1px 5px; border-radius: 2px; color: var(--ink); }
+
+  footer { margin-top: 72px; padding-top: 20px; border-top: 1px solid var(--rule);
+           font-family: var(--mono); font-size: 12px; color: var(--ink-3); line-height: 1.7; }
+
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="eyebrow">Pricing model · margin applied</div>
+    <h1>Seats and Credits</h1>
+    <p class="standfirst">Three plans built on the measured cost basis, with the margin stated on every line rather than buried in the total.</p>
+  </header>
+
+  <div class="figures">
+    <div class="fig">
+      <div class="fig-label">Starter — 10 seats</div>
+      <div class="fig-value">$9,000</div>
+      <div class="fig-note">per year, including 24,000 credits — about 254 tender comparisons.</div>
+    </div>
+    <div class="fig">
+      <div class="fig-label">Each seat after 10</div>
+      <div class="fig-value">$75</div>
+      <div class="fig-note">per month, credits drawn from the shared pool.</div>
+    </div>
+    <div class="fig">
+      <div class="fig-label">Blended gross margin</div>
+      <div class="fig-value">79%</div>
+      <div class="fig-note">Starter, at full credit consumption on Sonnet 5.</div>
+    </div>
+  </div>
+
+  <!-- ============================================ -->
+  <section>
+    <h2>Three decisions, and why</h2>
+    <p class="lede">Everything below follows from these. Change one and the tables recompute; change none and the plans stand as priced.</p>
+
+    <ol class="decisions">
+      <li>
+        <span class="d-n">01</span>
+        <span class="d-body"><b>The credit is redefined to 5,000 tokens</b>, up from the 1,000 used in the cost analysis. That is arbitrary in cost terms and deliberate in product terms: it makes one tender ingest land on <b>≈100 credits</b>, which a buyer can hold in their head. A unit nobody can reason about gets ignored, and then overage feels like a penalty rather than a meter.</span>
+      </li>
+      <li>
+        <span class="d-n">02</span>
+        <span class="d-body"><b>Credits carry a 3–5× markup, not 10×.</b> They are a fairness meter, not the profit centre — they exist so a heavy user is not subsidised by nine quiet ones. A punitive credit price teaches customers to ingest fewer documents, which is precisely the behaviour that makes the product stick.</span>
+      </li>
+      <li>
+        <span class="d-n">03</span>
+        <span class="d-body"><b>The seat carries the margin.</b> A seat costs about $2 a month to serve and is priced at $50–75. That is where the predictable revenue lives, and it is defensible because what a seat buys is access to the whole workflow, not a quantity of compute.</span>
+      </li>
+    </ol>
+  </section>
+
+  <!-- ============================================ -->
+  <section>
+    <h2>The credit</h2>
+
+    <div class="definition">
+      <div class="eq">1 credit = 5,000 tokens of Sonnet-5-equivalent work</div>
+      <p>Costs <strong>$0.0305</strong> to serve. One tender ingest — 37 documents, 4 vendors, 102 model calls — is <strong>95 credits</strong>, or <strong>$2.88</strong> raw.</p>
+    </div>
+
+    <div class="scroller">
+      <table>
+        <caption>Volume earns a better rate, and pay-as-you-go is the most expensive way to buy — the standard shape, and the one that rewards committing up front.</caption>
+        <thead>
+          <tr><th scope="col">Band</th><th scope="col">$ / credit</th><th scope="col">Markup</th><th scope="col">Gross margin</th><th scope="col">Cost to customer per tender</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Pay-as-you-go top-up</td><td>$0.150</td><td>4.9×</td><td>79.7%</td><td>$14.18</td></tr>
+          <tr class="hi"><td>Starter bundle</td><td>$0.125</td><td>4.1×</td><td>75.6%</td><td>$11.82</td></tr>
+          <tr><td>Growth bundle</td><td>$0.105</td><td>3.4×</td><td>71.0%</td><td>$9.93</td></tr>
+          <tr><td>Scale bundle</td><td>$0.090</td><td>3.0×</td><td>66.2%</td><td>$8.51</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============================================ -->
+  <section>
+    <h2>The plans</h2>
+    <p class="lede">Each plan is a platform fee plus a credit bundle. Both halves are shown, because a single blended number hides which one is actually moving.</p>
+
+    <div class="plans">
+      <div class="plan featured">
+        <div class="plan-head">
+          <div class="plan-name">Starter <span class="tag">the initial plan</span></div>
+          <div class="plan-price">$9,000</div>
+          <div class="plan-per">per year · $750 / month</div>
+        </div>
+        <div class="plan-body">
+          <div class="plan-line"><span>Seats included</span><b>10</b></div>
+          <div class="plan-line"><span>Platform fee</span><b>$50 / seat / mo</b></div>
+          <div class="plan-line"><span>Credits included</span><b>24,000 / yr</b></div>
+          <div class="plan-line"><span>Credit rate</span><b>$0.125</b></div>
+          <div class="plan-line"><span>Tenders covered</span><b>≈ 254 / yr</b></div>
+          <div class="plan-line"><span>Per seat per month</span><b>2.1 tenders</b></div>
+          <div class="plan-line"><span>Cost to serve</span><b>$1,414 – $2,530</b></div>
+          <div class="plan-line"><span>Gross margin</span><b>72 – 84%</b></div>
+        </div>
+      </div>
+
+      <div class="plan">
+        <div class="plan-head">
+          <div class="plan-name">Growth</div>
+          <div class="plan-price">$21,060</div>
+          <div class="plan-per">per year · $1,755 / month</div>
+        </div>
+        <div class="plan-body">
+          <div class="plan-line"><span>Seats included</span><b>25</b></div>
+          <div class="plan-line"><span>Platform fee</span><b>$45 / seat / mo</b></div>
+          <div class="plan-line"><span>Credits included</span><b>72,000 / yr</b></div>
+          <div class="plan-line"><span>Credit rate</span><b>$0.105</b></div>
+          <div class="plan-line"><span>Tenders covered</span><b>≈ 761 / yr</b></div>
+          <div class="plan-line"><span>Per seat per month</span><b>2.5 tenders</b></div>
+          <div class="plan-line"><span>Cost to serve</span><b>$3,632 – $5,792</b></div>
+          <div class="plan-line"><span>Gross margin</span><b>72 – 83%</b></div>
+        </div>
+      </div>
+
+      <div class="plan">
+        <div class="plan-head">
+          <div class="plan-name">Scale</div>
+          <div class="plan-price">$40,200</div>
+          <div class="plan-per">per year · $3,350 / month</div>
+        </div>
+        <div class="plan-body">
+          <div class="plan-line"><span>Seats included</span><b>50</b></div>
+          <div class="plan-line"><span>Platform fee</span><b>$40 / seat / mo</b></div>
+          <div class="plan-line"><span>Credits included</span><b>180,000 / yr</b></div>
+          <div class="plan-line"><span>Credit rate</span><b>$0.090</b></div>
+          <div class="plan-line"><span>Tenders covered</span><b>≈ 1,904 / yr</b></div>
+          <div class="plan-line"><span>Per seat per month</span><b>3.2 tenders</b></div>
+          <div class="plan-line"><span>Cost to serve</span><b>$8,481 – $12,081</b></div>
+          <div class="plan-line"><span>Gross margin</span><b>70 – 79%</b></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="note">
+      <div class="note-title">Why the included credits rise faster than the seats</div>
+      <p>Starter covers 2.1 tenders per seat per month, Scale covers 3.2. That is intentional: larger accounts run bigger tender books per person, and a bundle that ran out early would push them onto top-up rates and make the upgrade feel like a downgrade. The margin holds because the platform fee scales with the seat count regardless.</p>
+    </div>
+  </section>
+
+  <!-- ============================================ -->
+  <section>
+    <h2>The eleventh seat</h2>
+    <p class="lede">You asked specifically what a seat costs once the ten are filled. This is that number.</p>
+
+    <div class="scroller">
+      <table>
+        <caption>An added seat carries <strong>no credits of its own</strong>. It draws on the account's shared pool at the account's own band, so the work it does is billed once, through the meter, rather than twice.</caption>
+        <thead>
+          <tr><th scope="col">Line</th><th scope="col">Value</th></tr>
+        </thead>
+        <tbody>
+          <tr class="hi"><td>Price</td><td>$75 / seat / month · $900 / year</td></tr>
+          <tr><td>Marginal cost to serve</td><td>≈ $2 / month (infrastructure only)</td></tr>
+          <tr><td>Gross margin on the seat</td><td>97%</td></tr>
+          <tr><td>Credits included</td><td class="dim">none — drawn from the shared pool</td></tr>
+          <tr><td>If that seat runs 4 tenders / month</td><td>378 credits · $11.52 to serve · $47.28 billed</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">
+      <div class="note-title">Note the deliberate asymmetry</div>
+      <p>An added seat is priced at $75 while a seat inside the Starter bundle is $50. Buying the next plan up is therefore always cheaper per seat than bolting seats onto the current one, which is what makes accounts upgrade instead of sprawling. If that friction proves too high in practice, drop the add-on to $60 before touching the plan prices.</p>
+    </div>
+
+    <h3>Top-up packs</h3>
+    <div class="scroller">
+      <table>
+        <caption>For when the included pool runs out mid-year. Priced above every bundle rate, so topping up is never cheaper than having committed.</caption>
+        <thead>
+          <tr><th scope="col">Pack</th><th scope="col">Price</th><th scope="col">$ / credit</th><th scope="col">≈ Tenders</th><th scope="col">Gross margin</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1,000 credits</td><td>$150</td><td>$0.150</td><td>11</td><td>80%</td></tr>
+          <tr><td>5,000 credits</td><td>$700</td><td>$0.140</td><td>53</td><td>78%</td></tr>
+          <tr><td>20,000 credits</td><td>$2,600</td><td>$0.130</td><td>212</td><td>77%</td></tr>
+          <tr><td>50,000 credits</td><td>$6,000</td><td>$0.120</td><td>529</td><td>75%</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============================================ -->
+  <section>
+    <h2>Does the margin survive contact with reality</h2>
+    <p class="lede">Five things that could move it, run against the Starter plan at $9,000 a year.</p>
+
+    <div class="bars">
+      <div class="bar-row">
+        <span class="bar-name">Adopt Batch API</span>
+        <span class="bar-track"><span class="bar-fill" style="width:83%"></span></span>
+        <span class="bar-val">83%</span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-name">Only 60% of credits used</span>
+        <span class="bar-track"><span class="bar-fill" style="width:82%"></span></span>
+        <span class="bar-val">82%</span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-name">Opus 5 <span style="color:var(--ink-3)">+ Batch</span></span>
+        <span class="bar-track"><span class="bar-fill" style="width:80%"></span></span>
+        <span class="bar-val">80%</span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-name">Base case <span class="tag">as priced</span></span>
+        <span class="bar-track"><span class="bar-fill" style="width:79%"></span></span>
+        <span class="bar-val">79%</span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-name">Switch to Opus 5</span>
+        <span class="bar-track"><span class="bar-fill warn" style="width:73%"></span></span>
+        <span class="bar-val">73%</span>
+      </div>
+    </div>
+
+    <div class="scroller">
+      <table>
+        <caption>The worst realistic case still clears 73%. Unused credits <em>improve</em> margin, which is why breakage should never be designed for — it is a windfall, not a plan.</caption>
+        <thead>
+          <tr><th scope="col">Scenario</th><th scope="col">Cost to serve / yr</th><th scope="col">Gross margin</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Adopt Batch API — ×0.50 per credit</td><td>$1,565</td><td>83%</td></tr>
+          <tr><td>Only 60% of credits consumed</td><td>$1,638</td><td>82%</td></tr>
+          <tr><td>Opus 5 with Batch API</td><td>$1,810</td><td>80%</td></tr>
+          <tr class="hi"><td>Base case — Sonnet 5, credits fully used</td><td>$1,930</td><td>79%</td></tr>
+          <tr><td>Switch to Opus 5 — ×1.67 per credit</td><td>$2,420</td><td>73%</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">
+      <div class="note-title">The model multiplier is the safety valve</div>
+      <p>Because credits are defined against Sonnet 5, moving a customer to Opus 5 charges them ×1.67 credits for the same work rather than quietly eating the cost. The row above is the pessimistic case where <em>you</em> absorb it as a platform default; if Opus is offered as a customer-selectable quality tier, margin is unchanged and the 73% never happens.</p>
+    </div>
+  </section>
+
+  <!-- ============================================ -->
+  <section>
+    <h2>The honest caveat</h2>
+
+    <div class="note warn">
+      <div class="note-title">This is cost-plus, and cost-plus is the wrong axis here</div>
+      <p>Every number on this page is anchored to what the work costs to serve. That produces healthy 70–84% margins and a model that cannot lose money. It also prices a tender comparison at <strong>$11.82</strong> — against 16 to 40 hours of engineer time that the comparison replaces.</p>
+    </div>
+
+    <div class="scroller">
+      <table>
+        <caption>The ratio of value delivered to price charged, at three plausible loaded rates for a procurement or proposals engineer.</caption>
+        <thead>
+          <tr><th scope="col">Manual effort replaced</th><th scope="col">Loaded cost of that effort</th><th scope="col">Charged</th><th scope="col">Ratio</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>16 hours @ $45/h</td><td>$720</td><td>$11.82</td><td>61×</td></tr>
+          <tr><td>24 hours @ $60/h</td><td>$1,440</td><td>$11.82</td><td>122×</td></tr>
+          <tr><td>40 hours @ $75/h</td><td>$3,000</td><td>$11.82</td><td>254×</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p style="margin-top:22px">A 61× to 254× gap is not a rounding error in the assumptions — it is the signal that the constraint on price is what a buyer will agree to, not what the compute costs. Use these tiers as the <strong>floor</strong> and the internal margin model. Treat the list price as a separate decision to make once you have a signed customer and a number they said yes to.</p>
+
+    <ul class="plain">
+      <li><strong>The credit rate is close to right</strong> at 3–5×. Raising it further attacks the wrong line and discourages ingestion.</li>
+      <li><strong>The seat price has the most headroom.</strong> $50–75 per seat is conservative for vertical B2B procurement software; the marginal cost is $2 either way.</li>
+      <li><strong>Nothing here can be billed yet.</strong> No token usage is recorded anywhere in the codebase, so the meter these plans depend on does not exist. That remains the first thing to build.</li>
+    </ul>
+  </section>
+
+  <footer>
+    Companion to the Tender Cost Basis analysis · measured 14 Aug 2026 · branch <code>rfq-platform-phase-1</code><br>
+    Costs are Anthropic first-party list rates with no committed-spend discount. Infrastructure ranges are estimates; every AI cost is measured.<br>
+    Margins are gross — cost of goods sold only. They exclude engineering, sales, support and overhead.
+  </footer>
+
+</div>
+</body>
+</html>

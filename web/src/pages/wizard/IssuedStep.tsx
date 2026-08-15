@@ -1,8 +1,16 @@
 import { useState } from 'react'
 import { addVdrlLine, removeVdrlLine } from '../../api'
+import { TechnicalPackageEditor } from './TechnicalPackageEditor'
 import type { StepProps } from './types'
 
-/** The documents each vendor must return with their bid. */
+/**
+ * What the enquiry is, and what has to come back.
+ *
+ * Two halves. The technical package comes first, because it is what vendors
+ * bid against and it is the thing that gets frozen; it arrived here from the
+ * Scoping step when that stage was removed from the process. The VDRL follows:
+ * the documents each vendor must return with their bid.
+ */
 export function IssuedStep({ data, run, busy }: Omit<StepProps, 'tick'>) {
   const [code, setCode] = useState('')
   const [title, setTitle] = useState('')
@@ -11,6 +19,10 @@ export function IssuedStep({ data, run, busy }: Omit<StepProps, 'tick'>) {
 
   return (
     <>
+      <h3>Technical package</h3>
+      <TechnicalPackageEditor data={data} run={run} busy={busy} />
+
+      <h3>Documents required with the bid</h3>
       {data.vdrl.length === 0 ? (
         <p className="muted">No documents required yet.</p>
       ) : (

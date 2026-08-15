@@ -25,8 +25,8 @@ untracked fixture directories are present, never in pass/fail:
 
 | where | baseline |
 |---|---|
-| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1735 passed, 3 skipped, 0 failed** |
-| CI, and any clean checkout | **1715 passed, 23 skipped, 0 failed** |
+| a developer workstation, `data/` and an ingested multi-vendor `projects/` present, `pdftotext` on PATH | **1741 passed, 3 skipped, 0 failed** |
+| CI, and any clean checkout | **1721 passed, 23 skipped, 0 failed** |
 
 Anything else is a real regression.
 
@@ -66,12 +66,12 @@ parser itself is covered in CI — only the tests that assert against the *real*
 
 So the CI row is the workstation row with the four corpus-coverage passes, the
 three `data/` passes, the two `pdftotext` passes and the eleven AVL passes
-turned into skips — `1715 = 1735 - 4 - 3 - 2 - 11`, `23 = 3 + 4 + 3 + 2 + 11`;
-1738 tests either way. When the counts move, measure the workstation row and derive
+turned into skips — `1721 = 1741 - 4 - 3 - 2 - 11`, `23 = 3 + 4 + 3 + 2 + 11`;
+1744 tests either way. When the counts move, measure the workstation row and derive
 the CI row from it; editing the two rows independently is how they drift
 apart.
 
-**The workstation row is measured, not derived**: **1735 passed, 3 skipped**,
+**The workstation row is measured, not derived**: **1741 passed, 3 skipped**,
 taken on 2026-08-15 on the `rfq-platform-phase-1` branch, in an environment
 with `pdftotext`, `data/` (including the ADNOC export) and an ingested
 multi-vendor `projects/` all present. The **eleven**-skip figure that the
@@ -270,7 +270,26 @@ The web suite is separate and not part of either row above — both rows are
 `python -m pytest` counts. Run it with `npm test` under `web/` (vitest,
 non-watching, exits non-zero on failure); `npm run build` also type-checks the
 test files, since `web/tsconfig.app.json` includes `src`. CI runs both, in the
-`web` job of the same workflow. It stands at **313 passed** across 22 files.
+`web` job of the same workflow. It stands at **315 passed** across 22 files.
+
+The **8** Python tests and **1** web test before those are Bid Desk's BD-4,
+removing the `Scoping` stage — see the retired-stage invariant above. The wizard
+is now Shortlisting → Issued → Clarifications, and **the technical-package
+editor moved rather than vanishing**: `_scoping_exit` was the only thing
+requiring a frozen package and the Scoping step was the only place to freeze
+one, so deleting both would have left addenda permanently refused with nothing
+able to unblock them. It now lives in `wizard/TechnicalPackageEditor.tsx`,
+rendered by `IssuedStep` above the VDRL, freeze rule unchanged.
+
+Two gate tests were **deleted, not skipped**, with a comment where they sat:
+they asserted an exit criterion that no longer exists.
+
+Known and not fixed: `StageStrip` computes each stage's process code as
+`RFQ-{i+1}`, but those codes are **fixed references, not positional** — there is
+an `RFQ-04A`, and Negotiation and Awarded deliberately share `RFQ-06`. It was
+already mislabelling those two before BD-4; removing Scoping just moved the
+error to the first stage where it is visible. `docs/rfq-process.html` still
+documents nine stages. Both are tracked separately.
 
 The last **3** are `table-scroll.test.ts`, and it is the odd one in this suite:
 it reads the **source tree off disk** rather than rendering anything. That is
@@ -640,6 +659,26 @@ its routes in `api/workflow_routes.py`. It is deliberately **not** part of
 (`generation`, `field_path` by id, orphan pruning) and this one does not share
 them, so keeping them apart stops a reader assuming one set covers both.
 
+- **A retired stage keeps its name in history, and only the RFQ's own `stage`
+  moves.** `Scoping` was removed in Bid Desk BD-4, and a document written before
+  that names it in two different places. Its **history** entries are left
+  exactly as they are — history is append-only, and rewriting the entry that
+  records an RFQ's creation to say it began somewhere it did not is precisely
+  the falsification that rule exists to prevent. Its **`stage`** cannot stand,
+  because `TRANSITIONS` has no key for a retired stage and the RFQ would be
+  stuck; it moves to the replacement in `stages.RETIRED_STAGES`, with one
+  appended entry recording the move, `by: "system"`.
+  This is why `StageTransition.from_stage` and `to_stage` are `Stage | str`
+  rather than `Stage`. Not laxity — the validator admits **only** the names in
+  `RETIRED_STAGES` as strings and still raises on anything else, so a typo
+  cannot load as a stage nothing can transition out of. Without it every RFQ
+  ever raised would fail to load, because `history[0].to_stage` is `"Scoping"`.
+  The migration keys on **`stage`, never on the history**, and that is what
+  makes it idempotent: once moved there is no retired stage left to find. Keyed
+  on "does the history mention Scoping" it would append on every load forever,
+  and only a two-run test tells the two apart —
+  `test_loading_a_scoping_document_twice_appends_one_entry`, verified by making
+  the migration history-keyed and watching it and its sibling go red.
 - **Stage codes are fixed**, and `TRANSITIONS` is **deny-by-default** — an edge
   absent from that table is refused. Every stage needs an entry, including the
   terminal `PO_ISSUED`, so `is_allowed` answers "no" instead of raising.

@@ -99,7 +99,6 @@ const OUT_OF_SCOPE_CANDIDATE: Candidate = {
 }
 
 const STAGES = [
-  'Scoping',
   'Shortlisting',
   'Issued',
   'Clarifications',
@@ -120,12 +119,12 @@ function detail(over: Partial<RfqDetail> = {}): RfqDetail {
       package: 'Wellhead tie-in materials',
       discipline: 'Mechanical',
       value_estimate_aed: 46200000,
-      stage: 'Scoping',
+      stage: 'Shortlisting',
       history: [
-        { from_stage: null, to_stage: 'Scoping', at: '2026-08-13T09:00:00Z', by: 'system', reason: 'RFQ created' },
+        { from_stage: null, to_stage: 'Shortlisting', at: '2026-08-13T09:00:00Z', by: 'system', reason: 'RFQ created' },
       ],
     },
-    gate: { passed: false, reason: 'The technical package must be frozen before shortlisting can begin.' },
+    gate: { passed: false, reason: 'The shortlist contains no included vendors.' },
     technical_package: null,
     shortlist: [],
     shortlist_approved: false,
@@ -151,13 +150,15 @@ async function show(data: RfqDetail, candidates: Candidate[] = []) {
 }
 
 describe('RfqWizard', () => {
-  it('shows the four pre-bid steps and opens the RFQ’s current one', async () => {
+  it('shows the three pre-bid steps and opens the RFQ’s current one', async () => {
     await show(detail())
     const steps = screen.getAllByRole('listitem').map((li) => li.textContent)
-    expect(steps.some((t) => t?.includes('Scoping'))).toBe(true)
+    expect(steps.some((t) => t?.includes('Shortlisting'))).toBe(true)
     expect(steps.some((t) => t?.includes('Clarifications'))).toBe(true)
-    // The Scoping editor is the one on screen
-    expect(screen.getByLabelText('Package revision')).toBeInTheDocument()
+    // Scoping was removed from the process; it must not come back as a step.
+    expect(steps.some((t) => t?.includes('Scoping'))).toBe(false)
+    // The Shortlisting editor is the one on screen — an RFQ starts here now.
+    expect(screen.getByRole('button', { name: 'Approve shortlist' })).toBeInTheDocument()
   })
 
   it('offers a web vendor search that is not built yet', async () => {
@@ -176,7 +177,7 @@ describe('RfqWizard', () => {
   it('says what is blocking the step, in the gate’s own words', async () => {
     await show(detail())
     expect(
-      screen.getByText(/The technical package must be frozen/),
+      screen.getByText(/The shortlist contains no included vendors/),
     ).toBeInTheDocument()
   })
 
@@ -184,10 +185,10 @@ describe('RfqWizard', () => {
     vi.mocked(transitionRfq).mockResolvedValue(detail().rfq)
     await show(detail({ gate: { passed: true, reason: null } }))
 
-    fireEvent.click(screen.getByRole('button', { name: /Mark Scoping complete/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Mark Shortlisting complete/ }))
 
     await waitFor(() => {
-      expect(transitionRfq).toHaveBeenCalledWith('rfq_abc', 'Shortlisting')
+      expect(transitionRfq).toHaveBeenCalledWith('rfq_abc', 'Issued')
     })
   })
 
@@ -199,7 +200,7 @@ describe('RfqWizard', () => {
     )
     await show(detail())
 
-    fireEvent.click(screen.getByRole('button', { name: /Mark Scoping complete/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Mark Shortlisting complete/ }))
 
     await waitFor(() => {
       expect(
@@ -451,6 +452,15 @@ describe('RfqWizard', () => {
     await waitFor(() => expect(approveShortlist).toHaveBeenCalledWith('rfq_abc'))
   })
 
+  // The technical package moved into the Issued step when Scoping was removed
+  // from the process. It is the same editor and the same freeze rule; what
+  // changed is which step you find it under, so these three drive it there.
+  it('edits the technical package under Issued', async () => {
+    await show(detail({ rfq: { ...detail().rfq, stage: 'Issued' } }))
+    expect(screen.getByLabelText('Package revision')).toBeInTheDocument()
+    expect(screen.getByLabelText('Document code')).toBeInTheDocument()
+  })
+
   it('freezes the package', async () => {
     vi.mocked(freezeTechnicalPackage).mockResolvedValue({
       rfq_id: 'rfq_abc', revision: 'Rev. B', basis_of_design: 'b',
@@ -458,6 +468,7 @@ describe('RfqWizard', () => {
     })
     await show(
       detail({
+        rfq: { ...detail().rfq, stage: 'Issued' },
         technical_package: {
           rfq_id: 'rfq_abc', revision: 'Rev. B', basis_of_design: 'basis',
           attachments: [], frozen_at: null, frozen_by: null,
@@ -470,9 +481,10 @@ describe('RfqWizard', () => {
     await waitFor(() => expect(freezeTechnicalPackage).toHaveBeenCalledWith('rfq_abc'))
   })
 
-  it('replaces the scoping editor with a read-only view once frozen', async () => {
+  it('replaces the package editor with a read-only view once frozen', async () => {
     await show(
       detail({
+        rfq: { ...detail().rfq, stage: 'Issued' },
         technical_package: {
           rfq_id: 'rfq_abc', revision: 'Rev. B', basis_of_design: 'basis',
           attachments: [{ doc_code: 'HAL-PID-001', title: 'P&ID', revision: 'Rev. C' }],
@@ -488,6 +500,7 @@ describe('RfqWizard', () => {
   it('flags an attachment with no definite revision, since that blocks the freeze', async () => {
     await show(
       detail({
+        rfq: { ...detail().rfq, stage: 'Issued' },
         technical_package: {
           rfq_id: 'rfq_abc', revision: 'Rev. B', basis_of_design: 'basis',
           attachments: [{ doc_code: 'HAL-PID-001', title: 'P&ID', revision: null }],

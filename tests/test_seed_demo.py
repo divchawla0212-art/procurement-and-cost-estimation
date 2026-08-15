@@ -52,11 +52,11 @@ def test_no_rfq_sits_in_a_stage_its_own_gates_would_have_refused():
             )
 
 
-def test_every_rfq_history_starts_at_scoping_and_ends_where_the_rfq_is():
+def test_every_rfq_history_starts_at_shortlisting_and_ends_where_the_rfq_is():
     store = seed_demo.build_demo_store(AS_OF)
     for rfq in store.list_rfqs():
         assert rfq.history[0].from_stage is None
-        assert rfq.history[0].to_stage is Stage.SCOPING
+        assert rfq.history[0].to_stage is Stage.SHORTLISTING
         assert rfq.history[-1].to_stage is rfq.stage
 
 
@@ -238,12 +238,15 @@ def test_every_demo_rfq_finds_real_vendors_for_its_product_group():
     exactly this reason. A made-up discipline would match nothing, and the
     whole candidate list would read as a scope mismatch."""
     store = seed_demo.build_demo_store(AS_OF, bidders=parse_avl(REAL_AVL, astra_subset=True))
-    for rfq in store.list_rfqs():
-        if rfq.stage is Stage.SCOPING:
-            continue  # not shortlisted yet, by design
-        entries = store.shortlist_for(rfq.id)
-        assert entries, rfq.reference
-        assert all(e.scope_code_fit for e in entries), rfq.reference
+    rfqs = store.list_rfqs()
+    shortlisted = [rfq for rfq in rfqs if store.shortlist_for(rfq.id)]
+    # HAL-01 is deliberately left with nobody invited, so the demo opens on a
+    # closed first gate. Every other RFQ had to find real vendors, and the
+    # count is asserted rather than the filter being left to swallow a seed
+    # that quietly stopped inviting anyone.
+    assert len(shortlisted) == len(rfqs) - 1
+    for rfq in shortlisted:
+        assert all(e.scope_code_fit for e in store.shortlist_for(rfq.id)), rfq.reference
 
 
 @needs_real_avl

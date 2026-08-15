@@ -1,8 +1,9 @@
 import type { JSX } from 'react'
 import type { Attachment } from '../../types'
 
-/** The package's attachment list. Shared by Scoping and by the addendum draft
- *  form, which replaces the list wholesale when it is issued. */
+/** The package's attachment list. Shared by the technical-package editor under
+ *  Issued and by the addendum draft form, which replaces the list wholesale
+ *  when it is issued. */
 export function AttachmentTable({
   attachments,
   onRemove,

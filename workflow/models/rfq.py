@@ -1,9 +1,10 @@
 from datetime import datetime
+from typing import Union
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-from workflow.stages import Stage
+from workflow.stages import RETIRED_STAGES, Stage
 
 
 def new_rfq_id() -> str:
@@ -12,13 +13,45 @@ def new_rfq_id() -> str:
 
 class StageTransition(BaseModel):
     """One entry in an RFQ's stage history. History is append-only: a backward
-    transition adds an entry, it never rewrites or removes an earlier one."""
+    transition adds an entry, it never rewrites or removes an earlier one.
 
-    from_stage: Stage | None
-    to_stage: Stage
+    Both stage fields are `Stage | str`, and the `str` half is not laxness. A
+    stage can be **retired** — `Scoping` was — and every RFQ raised before that
+    happened names it in the entry recording its own creation. Those entries
+    are a record of what happened; restating them as the stage that replaced
+    the retired one would be inventing a fact about an RFQ somebody actually
+    raised, and dropping them would lose it. So a retired label is kept
+    verbatim, as the string it is, and only a label in `RETIRED_STAGES` is
+    admitted that way — anything else is still a validation error, which is
+    what stops a typo loading as a stage nothing can transition out of.
+
+    `from_stage is None` keeps its one meaning: this entry records the RFQ's
+    creation, so there was no stage before it.
+    """
+
+    from_stage: Union[Stage, str, None] = Field(default=None, union_mode="left_to_right")
+    to_stage: Union[Stage, str] = Field(union_mode="left_to_right")
     at: datetime
     by: str
     reason: str | None = None
+
+    @field_validator("from_stage", "to_stage", mode="before")
+    @classmethod
+    def _resolve_stage(cls, value: object) -> object:
+        """A live stage resolves to its member; a retired one stays a string.
+
+        The declared union alone would not do this: pydantic's smart mode
+        matches `str` strictly against `"Issued"` and would hand back a plain
+        string, and every `is Stage.ISSUED` in this repository would quietly
+        stop being true. So the resolution is explicit here, and the union is
+        pinned left-to-right behind it.
+        """
+        if value is None or isinstance(value, Stage):
+            return value
+        if isinstance(value, str) and value in RETIRED_STAGES:
+            return value
+        # Not a member and not retired: still an error, exactly as before.
+        return Stage(value)
 
 
 class RfqRecord(BaseModel):
@@ -29,7 +62,7 @@ class RfqRecord(BaseModel):
     package: str
     discipline: str
     value_estimate_aed: int
-    stage: Stage = Stage.SCOPING
+    stage: Stage = Stage.SHORTLISTING
     history: list[StageTransition] = Field(default_factory=list)
 
 

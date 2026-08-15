@@ -89,7 +89,7 @@ def test_a_round_trip_preserves_every_entity(tmp_path):
     rfq = loaded.get_rfq(rfq_id)
     assert rfq is not None
     assert rfq.reference == "ADP-RFQ-2026-014"
-    assert rfq.stage is Stage.SCOPING
+    assert rfq.stage is Stage.SHORTLISTING
 
     package = loaded.get_technical_package(rfq_id)
     assert package.frozen_by == "lead.engineer@example.com"
@@ -110,20 +110,173 @@ def test_a_round_trip_preserves_the_whole_stage_history(tmp_path):
     """A retender walks the same edge twice. Losing either entry in the round
     trip would erase the record of the first attempt (spec C5-R4)."""
     store, rfq_id = populated_store()
-    for target in [Stage.SHORTLISTING, Stage.ISSUED, Stage.CLARIFICATIONS,
+    for target in [Stage.ISSUED, Stage.CLARIFICATIONS,
                    Stage.BIDS_RECEIVED, Stage.EVALUATION]:
         store.transition(rfq_id, target, by="amal@example.com")
     store.transition(rfq_id, Stage.ISSUED, by="amal@example.com", reason="retender")
     persistence.save(str(tmp_path), store)
 
     history = persistence.load(str(tmp_path)).get_rfq(rfq_id).history
-    assert len(history) == 7
+    assert len(history) == 6
     assert [h.to_stage for h in history if h.to_stage is Stage.ISSUED] == [
         Stage.ISSUED,
         Stage.ISSUED,
     ]
     assert history[-1].reason == "retender"
     assert history[0].from_stage is None
+
+
+# -- the Scoping migration ---------------------------------------------------
+#
+# I-C: **no RFQ in `workflow.json` is stored at stage `Scoping`, and every
+# migrated RFQ has exactly one appended history entry recording the move.**
+#
+# `Scoping` was the first stage until Bid Desk removed it. Two separate things
+# have to survive that: the RFQ's own stage, which would no longer parse, and
+# its history, which names `Scoping` in every RFQ ever created and is
+# append-only — so it is read back rather than rewritten.
+
+
+def scoping_document(stage: str = "Scoping", extra_history: list | None = None) -> dict:
+    """A document as it was written before `Scoping` was removed.
+
+    Hand-built rather than produced by an older `WorkflowStore`, because the
+    point is a document this code can no longer *write* — the only kind a
+    migration exists for.
+    """
+    history = [
+        {
+            "from_stage": None,
+            "to_stage": "Scoping",
+            "at": "2026-08-01T09:00:00Z",
+            "by": "system",
+            "reason": "RFQ created",
+        }
+    ]
+    history.extend(extra_history or [])
+    return {
+        "version": 1,
+        "projects": [
+            {
+                "id": "prj_old",
+                "name": "Haliba Field Development",
+                "code": "HAL",
+                "client": "Al Dhafra Petroleum",
+                "location": "Haliba field, UAE",
+                "live_period_start": "2026-01-01",
+                "live_period_end": "2029-12-31",
+                "currency": "AED",
+                "status": "Active",
+            }
+        ],
+        "items": [],
+        "rfqs": [
+            {
+                "id": "rfq_old",
+                "reference": "ADP-RFQ-2026-001",
+                "project_id": "prj_old",
+                "item_ids": [],
+                "package": "Wellhead tie-in materials",
+                "discipline": "Mechanical / piping",
+                "value_estimate_aed": 46_200_000,
+                "stage": stage,
+                "history": history,
+            }
+        ],
+    }
+
+
+def write_document(root: Path, doc: dict) -> None:
+    (root / "workflow.json").write_text(json.dumps(doc), encoding="utf-8")
+
+
+def test_a_stored_scoping_rfq_loads_at_shortlisting(tmp_path):
+    write_document(tmp_path, scoping_document())
+    rfq = persistence.load(str(tmp_path)).get_rfq("rfq_old")
+    assert rfq.stage is Stage.SHORTLISTING
+
+
+def test_the_scoping_migration_appends_exactly_one_entry(tmp_path):
+    write_document(tmp_path, scoping_document())
+    history = persistence.load(str(tmp_path)).get_rfq("rfq_old").history
+
+    assert len(history) == 2
+    moved = history[-1]
+    assert moved.from_stage == "Scoping"
+    assert moved.to_stage is Stage.SHORTLISTING
+    assert moved.by == "system"
+    assert "Scoping" in moved.reason
+
+
+def test_the_scoping_migration_rewrites_no_earlier_entry(tmp_path):
+    """History is append-only. The creation entry says the RFQ started at
+    Scoping, and it did — restating it as Shortlisting would be a fact this
+    repository invented about an RFQ somebody actually raised."""
+    write_document(tmp_path, scoping_document())
+    opening = persistence.load(str(tmp_path)).get_rfq("rfq_old").history[0]
+
+    assert opening.from_stage is None
+    assert opening.to_stage == "Scoping"
+    assert opening.reason == "RFQ created"
+
+
+def test_loading_a_scoping_document_twice_appends_one_entry(tmp_path):
+    """The two-run assertion, and the one that matters. An already-migrated
+    document has no `Scoping` stage left to find — but a migration keyed on the
+    *history* rather than the stage would append again on every load, and a
+    single-run test cannot tell the two apart."""
+    write_document(tmp_path, scoping_document())
+
+    first = persistence.load(str(tmp_path))
+    persistence.save(str(tmp_path), first)
+    second = persistence.load(str(tmp_path))
+    persistence.save(str(tmp_path), second)
+    third = persistence.load(str(tmp_path))
+
+    assert len(third.get_rfq("rfq_old").history) == 2
+    assert third.get_rfq("rfq_old").stage is Stage.SHORTLISTING
+
+
+def test_no_rfq_is_stored_at_scoping_after_a_save(tmp_path):
+    """I-C, asserted against the document rather than the store."""
+    write_document(tmp_path, scoping_document())
+    persistence.save(str(tmp_path), persistence.load(str(tmp_path)))
+
+    doc = json.loads((tmp_path / "workflow.json").read_text(encoding="utf-8"))
+    assert [r["stage"] for r in doc["rfqs"]] == ["Shortlisting"]
+
+
+def test_an_rfq_already_past_scoping_gains_no_migration_entry(tmp_path):
+    """Only an RFQ *sitting* at Scoping moved. One that walked out of it years
+    ago still names Scoping in its history, and appending to that would invent
+    a transition that never happened."""
+    write_document(
+        tmp_path,
+        scoping_document(
+            stage="Issued",
+            extra_history=[
+                {
+                    "from_stage": "Scoping",
+                    "to_stage": "Shortlisting",
+                    "at": "2026-08-02T09:00:00Z",
+                    "by": "buyer@example.com",
+                    "reason": None,
+                },
+                {
+                    "from_stage": "Shortlisting",
+                    "to_stage": "Issued",
+                    "at": "2026-08-03T09:00:00Z",
+                    "by": "buyer@example.com",
+                    "reason": None,
+                },
+            ],
+        ),
+    )
+    rfq = persistence.load(str(tmp_path)).get_rfq("rfq_old")
+
+    assert rfq.stage is Stage.ISSUED
+    assert len(rfq.history) == 3
+    assert rfq.history[1].from_stage == "Scoping"
 
 
 def test_a_reloaded_store_still_enforces_its_gates(tmp_path):
@@ -141,8 +294,8 @@ def test_a_reloaded_store_still_enforces_its_gates(tmp_path):
     persistence.save(str(tmp_path), store)
 
     loaded = persistence.load(str(tmp_path))
-    with pytest.raises(ValueError, match="frozen"):
-        loaded.transition(rfq.id, Stage.SHORTLISTING, by="amal@example.com")
+    with pytest.raises(ValueError, match="no included vendors"):
+        loaded.transition(rfq.id, Stage.ISSUED, by="amal@example.com")
 
 
 def test_saving_replaces_rather_than_accumulates(tmp_path):
@@ -1358,7 +1511,6 @@ def test_an_rfq_cannot_reach_bids_received_over_an_open_query(tmp_path):
     with persistence.locked_update(root) as store:
         store.approve_shortlist(rfq_id, by="procurement@example.com")
         store.set_tbe_template(rfq_id, criteria=["Throughput"])
-        store.transition(rfq_id, Stage.SHORTLISTING, by="buyer@example.com")
         store.transition(rfq_id, Stage.ISSUED, by="buyer@example.com")
         store.transition(rfq_id, Stage.CLARIFICATIONS, by="buyer@example.com")
         # Re-open the one query the fixture answered.

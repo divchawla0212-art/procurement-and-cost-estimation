@@ -7,11 +7,17 @@ import type { StepProps } from './types'
 /**
  * Define the package and freeze it. Vendors bid against this revision.
  *
+ * This was the whole of the Scoping step until Scoping was removed from the
+ * process. It moved rather than went: freezing is still what makes a package
+ * something a vendor can bid against, and `DraftAddendumForm` still refuses
+ * while the package is unfrozen — deleting the editor with the stage would
+ * have left addenda with nothing to supersede and no way to freeze anything.
+ *
  * The one thing editing cannot undo is a frozen package: the server refuses,
  * and this shows the frozen state rather than hiding the control, so the reason
  * is visible rather than mysterious.
  */
-export function ScopingStep({ data, run, busy }: Omit<StepProps, 'tick'>) {
+export function TechnicalPackageEditor({ data, run, busy }: Omit<StepProps, 'tick'>) {
   const pkg = data.technical_package
   const frozen = Boolean(pkg?.frozen_at)
   const [revision, setRevision] = useState(pkg?.revision ?? '')

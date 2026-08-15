@@ -258,9 +258,9 @@ def bootstrap(
     quietly hand a slot the wrong entry.
 
     Every step here is a real route, so this half is itself a check on the
-    stages before the one under test: a freeze that silently did nothing would
-    surface as a refused transition out of Scoping rather than as a mystery
-    three steps later.
+    stages before the one under test: a shortlist approval that silently did
+    nothing would surface as a refused transition out of Shortlisting rather
+    than as a mystery three steps later.
     """
     tag = time.strftime("%m%d-%H%M%S")
     if project_id:
@@ -304,7 +304,9 @@ def bootstrap(
 
     api.put(f"/api/workflow/rfqs/{rfq_id}/technical-package", spec["technical_package"])
     api.post(f"/api/workflow/rfqs/{rfq_id}/technical-package/freeze")
-    api.post(f"/api/workflow/rfqs/{rfq_id}/transition", {"target": "Shortlisting"})
+    # No transition here: an RFQ is raised *at* Shortlisting. The package is
+    # still frozen first, because the addendum this round issues has to have
+    # something to supersede.
     _say(OK, "SET", "package frozen, RFQ at Shortlisting")
 
     # The entry each slot got, kept as it is created rather than matched back

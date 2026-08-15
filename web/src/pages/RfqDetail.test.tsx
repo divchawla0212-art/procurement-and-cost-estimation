@@ -11,7 +11,6 @@ vi.mock('../api', async (importOriginal) => {
 import { fetchRfq } from '../api'
 
 const STAGES = [
-  'Scoping',
   'Shortlisting',
   'Issued',
   'Clarifications',
@@ -32,18 +31,23 @@ function detail(over: Partial<RfqDetailData> = {}): RfqDetailData {
       package: 'Wellhead & CGF tie-in materials',
       discipline: 'Mechanical / piping',
       value_estimate_aed: 46200000,
-      stage: 'Scoping',
+      // The read-only screen is what an RFQ past the wizard's range opens in,
+      // so it is shown at a stage that actually lands here.
+      stage: 'Bids Received',
       history: [
         {
           from_stage: null,
-          to_stage: 'Scoping',
+          to_stage: 'Shortlisting',
           at: '2026-08-12T09:00:00Z',
           by: 'system',
           reason: 'RFQ created',
         },
       ],
     },
-    gate: { passed: false, reason: 'The technical package must be frozen before shortlisting can begin.' },
+    gate: {
+      passed: false,
+      reason: 'Bids must be selected for evaluation before evaluation can begin.',
+    },
     technical_package: null,
     shortlist: [],
     shortlist_approved: false,
@@ -71,18 +75,20 @@ describe('RfqDetail', () => {
   it('says what is blocking the next stage, in the gate’s own words', async () => {
     await show(detail())
     expect(
-      screen.getByText(/Blocked at Scoping: The technical package must be frozen/),
+      screen.getByText(/Blocked at Bids Received: Bids must be selected for evaluation/),
     ).toBeInTheDocument()
   })
 
   it('marks the RFQ’s stage on the strip', async () => {
     await show(detail())
-    expect(screen.getByRole('listitem', { current: 'step' })).toHaveTextContent('Scoping')
+    expect(screen.getByRole('listitem', { current: 'step' })).toHaveTextContent(
+      'Bids Received',
+    )
   })
 
   it('reports a passing gate rather than a reason', async () => {
     await show(detail({ gate: { passed: true, reason: null } }))
-    expect(screen.getByText(/Ready to leave Scoping/)).toBeInTheDocument()
+    expect(screen.getByText(/Ready to leave Bids Received/)).toBeInTheDocument()
   })
 
   it('calls out an attachment with no definite revision, since that blocks the freeze', async () => {

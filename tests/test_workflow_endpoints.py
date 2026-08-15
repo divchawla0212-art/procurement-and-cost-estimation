@@ -72,45 +72,46 @@ def test_workflow_routes_require_a_session(tmp_path, monkeypatch):
     assert anonymous.get("/api/workflow/stages").status_code == 401
 
 
-def test_stages_endpoint_lists_all_nine_in_order(tmp_path, monkeypatch):
+def test_stages_endpoint_lists_all_eight_in_order(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     r = client.get("/api/workflow/stages")
     assert r.status_code == 200
     assert r.json()["stages"] == [
-        "Scoping", "Shortlisting", "Issued", "Clarifications",
+        "Shortlisting", "Issued", "Clarifications",
         "Bids Received", "Evaluation", "Negotiation", "Awarded", "PO Issued",
     ]
+    assert "Scoping" not in r.json()["stages"]
 
 
-def test_new_rfq_starts_at_scoping_with_a_blocking_gate(tmp_path, monkeypatch):
+def test_new_rfq_starts_at_shortlisting_with_a_blocking_gate(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     rfq_id = create_rfq(client)
     r = client.get(f"/api/workflow/rfqs/{rfq_id}")
     assert r.status_code == 200
     body = r.json()
-    assert body["rfq"]["stage"] == "Scoping"
+    assert body["rfq"]["stage"] == "Shortlisting"
     assert body["gate"]["passed"] is False
-    assert "frozen" in body["gate"]["reason"].lower()
+    assert "no included vendors" in body["gate"]["reason"].lower()
 
 
 def test_blocked_transition_returns_409_with_the_reason(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     rfq_id = create_rfq(client)
     r = client.post(f"/api/workflow/rfqs/{rfq_id}/transition", json={
-        "target": "Shortlisting",
+        "target": "Issued",
     })
     assert r.status_code == 409
-    assert "frozen" in r.json()["detail"].lower()
+    assert "no included vendors" in r.json()["detail"].lower()
 
 
 def test_a_blocked_transition_does_not_move_the_rfq(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     rfq_id = create_rfq(client)
     client.post(f"/api/workflow/rfqs/{rfq_id}/transition", json={
-        "target": "Shortlisting",
+        "target": "Issued",
     })
     body = client.get(f"/api/workflow/rfqs/{rfq_id}").json()
-    assert body["rfq"]["stage"] == "Scoping"
+    assert body["rfq"]["stage"] == "Shortlisting"
     assert len(body["rfq"]["history"]) == 1
 
 
@@ -168,29 +169,31 @@ def test_invalid_target_stage_returns_422(tmp_path, monkeypatch):
     assert r.status_code == 422
 
 
+def _satisfy_the_shortlisting_gate(client: TestClient, rfq_id: str) -> None:
+    """An included vendor, procurement's approval, and a TBE template — the
+    three clauses of the first gate an RFQ now meets."""
+    client.post(f"/api/workflow/rfqs/{rfq_id}/shortlist", json={
+        "vendor_name": "Galfar", "prequal_status": "Qualified",
+        "scope_code_fit": True, "included": True,
+    })
+    client.post(f"/api/workflow/rfqs/{rfq_id}/shortlist/approve")
+    client.put(f"/api/workflow/rfqs/{rfq_id}/tbe-template",
+               json={"criteria": ["Throughput", "Materials"]})
+
+
 def test_a_satisfied_gate_lets_the_rfq_advance(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     rfq_id = create_rfq(client)
-
-    r = client.put(f"/api/workflow/rfqs/{rfq_id}/technical-package", json={
-        "revision": "Rev. B",
-        "basis_of_design": "129 wellhead tie-ins, CGF, 16in export line to ASAB",
-        "attachments": [
-            {"doc_code": "HAL-PID-001", "title": "P&ID export line", "revision": "Rev. C"}
-        ],
-    })
-    assert r.status_code == 200, r.text
-    r = client.post(f"/api/workflow/rfqs/{rfq_id}/technical-package/freeze", json={})
-    assert r.status_code == 200, r.text
+    _satisfy_the_shortlisting_gate(client, rfq_id)
 
     body = client.get(f"/api/workflow/rfqs/{rfq_id}").json()
     assert body["gate"]["passed"] is True
 
     r = client.post(f"/api/workflow/rfqs/{rfq_id}/transition", json={
-        "target": "Shortlisting",
+        "target": "Issued",
     })
     assert r.status_code == 200, r.text
-    assert r.json()["stage"] == "Shortlisting"
+    assert r.json()["stage"] == "Issued"
 
 
 def test_who_moved_an_rfq_comes_from_the_session_not_the_request(tmp_path, monkeypatch):
@@ -204,9 +207,10 @@ def test_who_moved_an_rfq_comes_from_the_session_not_the_request(tmp_path, monke
         "attachments": [{"doc_code": "HAL-PID-001", "title": "P&ID", "revision": "Rev. C"}],
     })
     client.post(f"/api/workflow/rfqs/{rfq_id}/technical-package/freeze", json={})
+    _satisfy_the_shortlisting_gate(client, rfq_id)
 
     r = client.post(f"/api/workflow/rfqs/{rfq_id}/transition", json={
-        "target": "Shortlisting",
+        "target": "Issued",
         "by": "someone.else@example.com",  # ignored, not honoured
         "reason": "shortlist prepared",
     })
@@ -259,6 +263,15 @@ def test_rfq_detail_carries_the_artifacts_each_gate_reads(tmp_path, monkeypatch)
     assert body["technical_package"]["revision"] == "Rev. B"
     assert body["technical_package"]["frozen_by"] == ADMIN_EMAIL
     assert body["technical_package"]["attachments"][0]["doc_code"] == "HAL-PID-001"
+    # Freezing no longer opens anything — the first gate reads the shortlist,
+    # the approval and the TBE template, and the detail carries all three.
+    assert body["gate"]["passed"] is False
+
+    _satisfy_the_shortlisting_gate(client, rfq_id)
+    body = client.get(f"/api/workflow/rfqs/{rfq_id}").json()
+    assert [e["vendor_name"] for e in body["shortlist"]] == ["Galfar"]
+    assert body["shortlist_approved"] is True
+    assert body["tbe_template"]["criteria"] == ["Throughput", "Materials"]
     assert body["gate"]["passed"] is True
 
 
@@ -293,8 +306,8 @@ def test_rfq_roster_counts_every_stage_including_the_empty_ones(tmp_path, monkey
 
     body = client.get("/api/workflow/rfqs").json()
     assert len(body["rfqs"]) == 1
-    assert len(body["stage_counts"]) == 9, "a strip that drops empty stages changes shape"
-    assert body["stage_counts"]["Scoping"] == 1
+    assert len(body["stage_counts"]) == 8, "a strip that drops empty stages changes shape"
+    assert body["stage_counts"]["Shortlisting"] == 1
     assert body["stage_counts"]["Awarded"] == 0
     assert sum(body["stage_counts"].values()) == len(body["rfqs"])
 
@@ -363,7 +376,7 @@ def test_a_refused_transition_leaves_the_document_untouched(tmp_path, monkeypatc
 
     before = persistence.load(str(tmp_path)).get_rfq(rfq_id)
     r = client.post(f"/api/workflow/rfqs/{rfq_id}/transition", json={
-        "target": "Shortlisting",
+        "target": "Issued",
     })
     assert r.status_code == 409
 
@@ -383,20 +396,14 @@ def _freeze_package(client: TestClient, rfq_id: str) -> None:
     client.post(f"/api/workflow/rfqs/{rfq_id}/technical-package/freeze", json={})
 
 
-def test_a_user_can_walk_scoping_to_clarifications(tmp_path, monkeypatch):
+def test_a_user_can_walk_shortlisting_to_clarifications(tmp_path, monkeypatch):
     """The whole point of the wizard: each step is satisfied through the API,
     and only then does the next one open."""
     client = _client(tmp_path, monkeypatch)
     rfq_id = create_rfq(client)
 
-    # Scoping: blocked until the package is frozen
-    assert client.post(f"/api/workflow/rfqs/{rfq_id}/transition",
-                       json={"target": "Shortlisting"}).status_code == 409
-    _freeze_package(client, rfq_id)
-    assert client.post(f"/api/workflow/rfqs/{rfq_id}/transition",
-                       json={"target": "Shortlisting"}).status_code == 200
-
-    # Shortlisting: needs an included vendor, approval, and a TBE template
+    # Shortlisting: needs an included vendor, approval, and a TBE template.
+    # It is where an RFQ now begins — there is no step before it.
     assert client.post(f"/api/workflow/rfqs/{rfq_id}/transition",
                        json={"target": "Issued"}).status_code == 409
     client.post(f"/api/workflow/rfqs/{rfq_id}/shortlist", json={
@@ -409,7 +416,9 @@ def test_a_user_can_walk_scoping_to_clarifications(tmp_path, monkeypatch):
     assert client.post(f"/api/workflow/rfqs/{rfq_id}/transition",
                        json={"target": "Issued"}).status_code == 200
 
-    # Issuance: VDRL is edited here; the edge itself is not gated
+    # Issuance: the technical package and the VDRL are edited here; the edge
+    # itself is not gated.
+    _freeze_package(client, rfq_id)
     r = client.post(f"/api/workflow/rfqs/{rfq_id}/vdrl", json={
         "doc_code": "RFQ-GA-001", "title": "Skid GA drawing", "doc_type": "GA Drawing",
     })
@@ -420,7 +429,7 @@ def test_a_user_can_walk_scoping_to_clarifications(tmp_path, monkeypatch):
     body = client.get(f"/api/workflow/rfqs/{rfq_id}").json()
     assert body["rfq"]["stage"] == "Clarifications"
     assert [h["to_stage"] for h in body["rfq"]["history"]] == [
-        "Scoping", "Shortlisting", "Issued", "Clarifications",
+        "Shortlisting", "Issued", "Clarifications",
     ]
 
 
@@ -502,8 +511,8 @@ def test_removing_an_unknown_artifact_returns_404(tmp_path, monkeypatch):
 
 
 def test_a_frozen_package_refuses_a_later_edit_with_409(tmp_path, monkeypatch):
-    """Going back to Scoping after the freeze must not silently rewrite what
-    vendors were invited to bid against."""
+    """Re-opening the package editor after the freeze must not silently rewrite
+    what vendors were invited to bid against."""
     client = _client(tmp_path, monkeypatch)
     rfq_id = create_rfq(client)
     _freeze_package(client, rfq_id)

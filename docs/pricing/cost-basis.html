@@ -1,0 +1,536 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tender Cost Basis — Procurement Platform</title>
+<style>
+  /* minimal reset — the page sets all its own spacing via flex/grid gap */
+  *, *::before, *::after { box-sizing: border-box; }
+  body { margin: 0; }
+</style>
+<style>
+  /* ---------- tokens: complete light palette on bare :root ---------- */
+  :root {
+    --paper:      #F4F7F8;
+    --surface:    #FFFFFF;
+    --surface-2:  #EAEFF1;
+    --ink:        #131A1E;
+    --ink-2:      #3E4B52;
+    --ink-3:      #6B7A82;
+    --rule:       #CBD5D9;
+    --rule-soft:  #E2E9EB;
+    --accent:     #0C6C75;
+    --accent-2:   #0A5860;
+    --accent-wash:#DCEDEF;
+    --warn:       #94641A;
+    --crit:       #9E3226;
+    --shadow:     0 1px 2px rgba(19,26,30,.06), 0 8px 24px -16px rgba(19,26,30,.28);
+
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", "Roboto Mono", Menlo, Consolas, monospace;
+    --serif: ui-serif, "Iowan Old Style", Georgia, "Times New Roman", serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper:      #0D1214;
+      --surface:    #141C1F;
+      --surface-2:  #1B2529;
+      --ink:        #DDE6E8;
+      --ink-2:      #A6B5BA;
+      --ink-3:      #77878D;
+      --rule:       #2C3A3F;
+      --rule-soft:  #202B2F;
+      --accent:     #45B3BC;
+      --accent-2:   #6FCBD2;
+      --accent-wash:#152C2F;
+      --warn:       #D0A254;
+      --crit:       #E08076;
+      --shadow:     0 1px 2px rgba(0,0,0,.5), 0 8px 24px -16px rgba(0,0,0,.8);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --paper:      #0D1214;
+    --surface:    #141C1F;
+    --surface-2:  #1B2529;
+    --ink:        #DDE6E8;
+    --ink-2:      #A6B5BA;
+    --ink-3:      #77878D;
+    --rule:       #2C3A3F;
+    --rule-soft:  #202B2F;
+    --accent:     #45B3BC;
+    --accent-2:   #6FCBD2;
+    --accent-wash:#152C2F;
+    --warn:       #D0A254;
+    --crit:       #E08076;
+    --shadow:     0 1px 2px rgba(0,0,0,.5), 0 8px 24px -16px rgba(0,0,0,.8);
+  }
+
+  /* ---------- base ---------- */
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 17px;
+    line-height: 1.62;
+    margin: 0;
+    padding: 0 clamp(16px, 5vw, 48px) 96px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 940px; margin: 0 auto; }
+
+  p { max-width: 68ch; margin: 0; }
+  strong { font-weight: 700; }
+
+  .stack   { display: flex; flex-direction: column; gap: 18px; }
+  .stack-s { display: flex; flex-direction: column; gap: 10px; }
+
+  /* ---------- masthead ---------- */
+  .masthead {
+    border-bottom: 2px solid var(--ink);
+    padding: clamp(40px, 7vw, 72px) 0 22px;
+    display: flex; flex-direction: column; gap: 16px;
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--accent); font-weight: 600;
+  }
+  h1 {
+    font-family: var(--mono);
+    font-size: clamp(30px, 5.4vw, 46px);
+    line-height: 1.05; letter-spacing: -.02em; font-weight: 600;
+    margin: 0; text-wrap: balance; color: var(--ink);
+  }
+  .standfirst { font-size: 19px; color: var(--ink-2); max-width: 62ch; }
+
+  /* ---------- headline figures ---------- */
+  .figures {
+    display: grid; gap: 1px;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    margin: 34px 0 0;
+  }
+  .fig { background: var(--surface); padding: 20px 22px; display: grid;
+         grid-template-rows: auto auto 1fr; gap: 6px; align-content: start; }
+  .fig-label {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .13em;
+    text-transform: uppercase; color: var(--ink-3);
+  }
+  .fig-value {
+    font-family: var(--mono); font-size: 30px; font-weight: 600;
+    letter-spacing: -.02em; color: var(--ink); font-variant-numeric: tabular-nums;
+  }
+  .fig-note { font-size: 13.5px; color: var(--ink-3); line-height: 1.4; }
+
+  /* ---------- sections ---------- */
+  section { margin-top: 60px; }
+  h2 {
+    font-family: var(--mono); font-size: 13px; font-weight: 600;
+    letter-spacing: .13em; text-transform: uppercase; color: var(--accent);
+    margin: 0 0 6px; padding-bottom: 10px; border-bottom: 1px solid var(--rule);
+  }
+  h3 {
+    font-family: var(--mono); font-size: 15px; font-weight: 600;
+    letter-spacing: -.005em; color: var(--ink); margin: 26px 0 0;
+  }
+  .lede { font-size: 18px; color: var(--ink-2); margin-top: 14px; max-width: 66ch; }
+
+  /* ---------- tables ---------- */
+  .scroller { overflow-x: auto; margin-top: 20px; border: 1px solid var(--rule); background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-family: var(--mono); font-size: 13.5px; }
+  caption {
+    caption-side: bottom; text-align: left; padding: 12px 16px;
+    font-family: var(--serif); font-size: 13.5px; color: var(--ink-3);
+    border-top: 1px solid var(--rule-soft); line-height: 1.5;
+  }
+  th, td { padding: 10px 16px; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  th:first-child, td:first-child { text-align: left; white-space: normal; min-width: 190px; }
+  thead th {
+    font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--ink-3); font-weight: 600; border-bottom: 1px solid var(--rule);
+    background: var(--surface-2);
+  }
+  tbody tr + tr td { border-top: 1px solid var(--rule-soft); }
+  tbody tr.hi td { background: var(--accent-wash); font-weight: 600; }
+  tbody tr.total td { border-top: 2px solid var(--rule); font-weight: 600; }
+  td.num { color: var(--ink); }
+  td.dim { color: var(--ink-3); }
+
+  .tag {
+    font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase;
+    padding: 2px 7px; border: 1px solid var(--accent); color: var(--accent);
+    border-radius: 2px; margin-left: 8px; white-space: nowrap; font-weight: 600;
+  }
+
+  /* ---------- bar comparison ---------- */
+  .bars { display: flex; flex-direction: column; gap: 2px; margin-top: 20px;
+          border: 1px solid var(--rule); background: var(--surface); padding: 20px 22px; }
+  .bar-row { display: grid; grid-template-columns: minmax(120px, 190px) 1fr auto; align-items: center; gap: 16px; padding: 7px 0; }
+  .bar-name { font-family: var(--mono); font-size: 13px; color: var(--ink-2); }
+  /* both must be block: width/height do not apply to inline spans */
+  .bar-track { display: block; height: 20px; background: var(--surface-2); position: relative; }
+  .bar-fill { display: block; height: 100%; background: var(--accent); }
+  .bar-fill.muted { background: var(--ink-3); }
+  .bar-val { font-family: var(--mono); font-size: 14px; font-weight: 600; color: var(--ink);
+             font-variant-numeric: tabular-nums; min-width: 58px; text-align: right; }
+
+  /* ---------- callouts ---------- */
+  .note {
+    border-left: 3px solid var(--accent); background: var(--surface);
+    padding: 16px 20px; margin-top: 22px; font-size: 16px; color: var(--ink-2);
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .note.warn { border-left-color: var(--warn); }
+  .note-title {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--ink); font-weight: 600;
+  }
+
+  /* ---------- definition block ---------- */
+  .definition {
+    border: 1px solid var(--accent); background: var(--accent-wash);
+    padding: 26px 28px; margin-top: 22px;
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  .definition .eq {
+    font-family: var(--mono); font-size: clamp(17px, 2.7vw, 23px); font-weight: 600;
+    color: var(--ink); letter-spacing: -.01em; line-height: 1.4;
+  }
+  .definition p { font-size: 15.5px; color: var(--ink-2); }
+
+  /* ---------- ordered pipeline ---------- */
+  ol.pipeline { list-style: none; margin: 20px 0 0; padding: 0; display: flex; flex-direction: column; gap: 1px;
+                background: var(--rule); border: 1px solid var(--rule); }
+  ol.pipeline li { background: var(--surface); padding: 14px 18px; display: grid;
+                   grid-template-columns: 30px 1fr auto; gap: 14px; align-items: baseline; }
+  .step-n { font-family: var(--mono); font-size: 11px; color: var(--accent); font-weight: 600; }
+  .step-body { font-size: 15.5px; color: var(--ink-2); }
+  .step-body b { color: var(--ink); font-weight: 600; }
+  .step-cost { font-family: var(--mono); font-size: 13px; color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  ul.plain { margin: 14px 0 0; padding-left: 20px; color: var(--ink-2); font-size: 16px; }
+  ul.plain li { margin-bottom: 9px; }
+  ul.plain li::marker { color: var(--accent); }
+
+  code {
+    font-family: var(--mono); font-size: .88em; background: var(--surface-2);
+    padding: 1px 5px; border-radius: 2px; color: var(--ink);
+  }
+
+  footer {
+    margin-top: 72px; padding-top: 20px; border-top: 1px solid var(--rule);
+    font-family: var(--mono); font-size: 12px; color: var(--ink-3); line-height: 1.7;
+  }
+
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="eyebrow">Running cost · measured, not estimated</div>
+    <h1>Tender Cost Basis</h1>
+    <p class="standfirst">What it costs us to serve one tender comparison, one seat, and one AI credit — before any margin is applied.</p>
+  </header>
+
+  <div class="figures">
+    <div class="fig">
+      <div class="fig-label">Per tender ingest</div>
+      <div class="fig-value">$2.88</div>
+      <div class="fig-note">37 documents, 4 vendors, 102 model calls. Sonnet 5, the configured default.</div>
+    </div>
+    <div class="fig">
+      <div class="fig-label">Raw cost / credit</div>
+      <div class="fig-value">$0.0061</div>
+      <div class="fig-note">1 credit = 1,000 tokens of Sonnet-5-equivalent work.</div>
+    </div>
+    <div class="fig">
+      <div class="fig-label">10 seats / year</div>
+      <div class="fig-value">$1.4k</div>
+      <div class="fig-note">At 2 tenders per user per month, inference plus infrastructure.</div>
+    </div>
+  </div>
+
+  <!-- ============================================ -->
+  <section>
+    <h2>How this was measured</h2>
+    <p class="lede">Every input below comes from the repository or a real ingested tender. Nothing is a market comparable.</p>
+
+    <ul class="plain">
+      <li><strong>Workload</strong> — replayed <code>projects/phase4c-shipped-defaults</code> through the production code paths (<code>loaders.read_text</code>, <code>VENDOR_ROUTE</code>, <code>chunk_on_lines</code> at the shipped 12,000 and 8,000-character budgets). That yields the true call count and the exact character volume a real run sends.</li>
+      <li><strong>Prices</strong> — current Anthropic first-party rates per million tokens.</li>
+      <li><strong>Tokenisation</strong> — calibrated with <code>count_tokens</code> against synthetic text that reproduces the corpus's layout geometry exactly: same line lengths, same indentation, same 62% whitespace share. <strong>No client document text was sent anywhere.</strong></li>
+    </ul>
+
+    <div class="note">
+      <div class="note-title">The one number that is inferred</div>
+      <p>Output volume is taken from what the run actually stored — 217,819 characters of compact fact JSON — plus a 15% allowance for empty and failed calls and tool-call envelope. <code>ask_each_chunk</code> uses <code>items.extend</code> with no de-duplication, so stored output is a close proxy for what the model emitted rather than a compressed summary of it.</p>
+    </div>
+  </section>
+
+  <!-- ============================================ -->
+  <section>
+    <h2>Where the 102 calls come from</h2>
+    <p class="lede">The order matters here: each stage decides how much work the next one sees, and two of them are already doing real cost control.</p>
+
+    <ol class="pipeline">
+      <li>
+        <span class="step-n">01</span>
+        <span class="step-body"><b>Classification</b> — filename rules run first, and the model is consulted only when they decline, on 500 characters of head text. <b>34 of 37 documents matched a rule</b> and cost nothing.</span>
+        <span class="step-cost">3 calls</span>
+      </li>
+      <li>
+        <span class="step-n">02</span>
+        <span class="step-body"><b>Routing</b> — <code>VENDOR_ROUTE</code> sends specs, BOMs, drawings, minutes and datasheets all to the technical extractor. Quotations additionally take a secondary datasheet pass.</span>
+        <span class="step-cost">—</span>
+      </li>
+      <li>
+        <span class="step-n">03</span>
+        <span class="step-body"><b>Technical extraction</b> — chunked at 12,000 characters. This is the bulk of the bill: one 220,933-character proposal alone is 19 chunks.</span>
+        <span class="step-cost">88 calls</span>
+      </li>
+      <li>
+        <span class="step-n">04</span>
+        <span class="step-body"><b>Quotation, requirements and deviation</b> — whole-document for quotations, chunked at 8,000 for the client requirement sheet.</span>
+        <span class="step-cost">11 calls</span>
+      </li>
+    </ol>
+
+    <div class="scroller">
+      <table>
+        <caption>Extracted text and call count by route, one tender. Five vendor drawings yielded 1–42 characters and failed the <code>MIN_EXTRACTABLE_CHARS</code> guard — they still cost a call each.</caption>
+        <thead>
+          <tr><th scope="col">Route</th><th scope="col">Calls</th><th scope="col">Input chars</th><th scope="col">Share</th></tr>
+        </thead>
+        <tbody>
+          <tr class="hi"><td>Technical facts <span class="tag">chunked 12k</span></td><td class="num">88</td><td class="num">879,764</td><td class="num">73.5%</td></tr>
+          <tr><td>Quotation</td><td class="num">5</td><td class="num">258,760</td><td class="num">21.6%</td></tr>
+          <tr><td>Requirements <span class="tag">chunked 8k</span></td><td class="num">4</td><td class="num">46,341</td><td class="num">3.9%</td></tr>
+          <tr><td>Deviation</td><td class="num">2</td><td class="num">8,331</td><td class="num">0.7%</td></tr>
+          <tr><td>Classification</td><td class="num">3</td><td class="num">4,356</td><td class="num">0.4%</td></tr>
+          <tr class="total"><td>Total</td><td class="num">102</td><td class="num">1,197,552</td><td class="num">100%</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="scroller">
+      <table>
+        <caption>Token conversion. Input is layout-heavy technical text; output is dense JSON, which tokenises far harder — 2.06 characters per token against 3.41.</caption>
+        <thead>
+          <tr><th scope="col">Direction</th><th scope="col">Characters</th><th scope="col">Chars / token</th><th scope="col">Tokens</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Input (prompts + document chunks)</td><td class="num">1,197,552</td><td class="num">3.41</td><td class="num">351,188</td></tr>
+          <tr><td>Output (structured facts)</td><td class="num">250,492</td><td class="num">2.06</td><td class="num">121,598</td></tr>
+          <tr class="total"><td>Total per tender</td><td class="dim">—</td><td class="dim">—</td><td class="num">472,786</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============================================ -->
+  <section>
+    <h2>Cost per tender, by model</h2>
+    <p class="lede">Output is only 26% of the tokens but 63% of the bill, because output is priced at five times input on every model in the range.</p>
+
+    <div class="bars">
+      <div class="bar-row">
+        <span class="bar-name">Haiku 4.5</span>
+        <span class="bar-track"><span class="bar-fill muted" style="width:20%"></span></span>
+        <span class="bar-val">$0.96</span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-name">Sonnet 5 <span style="color:var(--ink-3)">intro</span></span>
+        <span class="bar-track"><span class="bar-fill muted" style="width:40%"></span></span>
+        <span class="bar-val">$1.92</span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-name">Sonnet 5 <span class="tag">default</span></span>
+        <span class="bar-track"><span class="bar-fill" style="width:60%"></span></span>
+        <span class="bar-val">$2.88</span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-name">Opus 5</span>
+        <span class="bar-track"><span class="bar-fill muted" style="width:100%"></span></span>
+        <span class="bar-val">$4.80</span>
+      </div>
+    </div>
+
+    <div class="scroller">
+      <table>
+        <caption>Your <code>.env</code> sets <code>LLM_MODEL=claude-sonnet-5</code>, so $2.88 is today's real figure. The Batch API halves every row at the cost of asynchronous turnaround — ingestion is already a background job, so this is close to free money.</caption>
+        <thead>
+          <tr><th scope="col">Model</th><th scope="col">Input $/M</th><th scope="col">Output $/M</th><th scope="col">Per tender</th><th scope="col">With Batch API</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Haiku 4.5</td><td class="dim">$1.00</td><td class="dim">$5.00</td><td class="num">$0.96</td><td class="num">$0.48</td></tr>
+          <tr><td>Sonnet 5 <span class="tag">intro to 31 Aug</span></td><td class="dim">$2.00</td><td class="dim">$10.00</td><td class="num">$1.92</td><td class="num">$0.96</td></tr>
+          <tr class="hi"><td>Sonnet 5 — current default</td><td class="dim">$3.00</td><td class="dim">$15.00</td><td class="num">$2.88</td><td class="num">$1.44</td></tr>
+          <tr><td>Opus 5</td><td class="dim">$5.00</td><td class="dim">$25.00</td><td class="num">$4.80</td><td class="num">$2.40</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============================================ -->
+  <section>
+    <h2>The credit unit</h2>
+    <p class="lede">A credit has to be model-agnostic, or every model swap silently re-prices the product. Define it against one reference model and express the others as multipliers.</p>
+
+    <div class="definition">
+      <div class="eq">1 credit = 1,000 tokens of Sonnet-5-equivalent work</div>
+      <p>The measured workload is 74% input / 26% output, which blends to <strong>$6.09 per million tokens</strong> on Sonnet 5. That makes one credit cost <strong>$0.006086</strong> to serve, and one tender ingest <strong>473 credits</strong>.</p>
+    </div>
+
+    <div class="scroller">
+      <table>
+        <caption>Multipliers are blended at this workload's 74/26 mix. If a future feature is output-heavy the multipliers shift, so recompute them per workload rather than treating these four as constants.</caption>
+        <thead>
+          <tr><th scope="col">Model</th><th scope="col">Credits per 1,000 tokens</th><th scope="col">Cost of one tender</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Haiku 4.5</td><td class="num">×0.33</td><td class="num">158 cr</td></tr>
+          <tr><td>Sonnet 5 <span class="tag">intro</span></td><td class="num">×0.67</td><td class="num">317 cr</td></tr>
+          <tr class="hi"><td>Sonnet 5 — reference</td><td class="num">×1.00</td><td class="num">473 cr</td></tr>
+          <tr><td>Opus 5</td><td class="num">×1.67</td><td class="num">790 cr</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Every other AI operation, for scale</h3>
+    <div class="scroller">
+      <table>
+        <caption>Tender ingest dominates by three orders of magnitude. Nothing else on this list is worth metering separately — but everything must still be metered, or the credit balance drifts from reality.</caption>
+        <thead>
+          <tr><th scope="col">Operation</th><th scope="col">Credits</th><th scope="col">Raw cost</th></tr>
+        </thead>
+        <tbody>
+          <tr class="hi"><td>Tender ingest — 37 docs, 4 vendors</td><td class="num">473</td><td class="num">$2.8800</td></tr>
+          <tr><td>RFQ enquiry extract <span class="tag">fixture today</span></td><td class="num">9.82</td><td class="num">$0.0598</td></tr>
+          <tr><td>Costing-sheet header map, per sheet</td><td class="num">1.25</td><td class="num">$0.0076</td></tr>
+          <tr><td>Vendor suggestions for one item</td><td class="num">1.06</td><td class="num">$0.0065</td></tr>
+          <tr><td>Document classification, model path only</td><td class="num">0.45</td><td class="num">$0.0027</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============================================ -->
+  <section>
+    <h2>Ten seats</h2>
+    <p class="lede">Seats do not consume anything. Tenders do. These rows are the same ten people at four different intensities.</p>
+
+    <div class="scroller">
+      <table>
+        <caption>Monthly inference cost for a 10-seat account. Credits are model-independent; the three cost columns are what those credits cost us to serve on each model.</caption>
+        <thead>
+          <tr>
+            <th scope="col">Tenders / user / month</th>
+            <th scope="col">Tenders / mo</th>
+            <th scope="col">Credits / mo</th>
+            <th scope="col">Haiku</th>
+            <th scope="col">Sonnet 5</th>
+            <th scope="col">Opus 5</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>1 — light</td><td class="num">10</td><td class="num">4,728</td><td class="num">$10</td><td class="num">$29</td><td class="num">$48</td></tr>
+          <tr class="hi"><td>2 — expected</td><td class="num">20</td><td class="num">9,456</td><td class="num">$19</td><td class="num">$58</td><td class="num">$96</td></tr>
+          <tr><td>4 — heavy</td><td class="num">40</td><td class="num">18,911</td><td class="num">$38</td><td class="num">$115</td><td class="num">$192</td></tr>
+          <tr><td>8 — very heavy</td><td class="num">80</td><td class="num">37,823</td><td class="num">$77</td><td class="num">$230</td><td class="num">$384</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Infrastructure</h3>
+    <div class="scroller">
+      <table>
+        <caption>Deliberately small, because the architecture is: the bidder registry is SQLite, project data is JSON snapshots on disk, and there is no managed database, queue or vector store. PDF parsing is <code>pdftotext</code> and <code>pypdf</code>, both local and free.</caption>
+        <thead>
+          <tr><th scope="col">Line</th><th scope="col">Low / mo</th><th scope="col">High / mo</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>App server — FastAPI plus built SPA, 2 vCPU / 4 GB</td><td class="num">$40</td><td class="num">$90</td></tr>
+          <tr><td>Object storage and backups — ~45 MB per tender</td><td class="num">$5</td><td class="num">$20</td></tr>
+          <tr><td>Domain, TLS, logging, uptime monitoring</td><td class="num">$10</td><td class="num">$30</td></tr>
+          <tr><td>Egress</td><td class="num">$2</td><td class="num">$10</td></tr>
+          <tr class="total"><td>Total infrastructure</td><td class="num">$57</td><td class="num">$150</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>All-in annual running cost, Sonnet 5</h3>
+    <div class="scroller">
+      <table>
+        <caption>The whole 10-seat account costs us four figures a year to run, and inference only overtakes infrastructure past roughly two tenders per user per month.</caption>
+        <thead>
+          <tr><th scope="col">Intensity</th><th scope="col">Tenders / yr</th><th scope="col">Inference / yr</th><th scope="col">Infrastructure / yr</th><th scope="col">Total / yr</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1 tender / user / mo</td><td class="num">120</td><td class="num">$345</td><td class="dim">$684 – $1,800</td><td class="num">$1,029 – $2,145</td></tr>
+          <tr class="hi"><td>2 tenders / user / mo</td><td class="num">240</td><td class="num">$691</td><td class="dim">$684 – $1,800</td><td class="num">$1,375 – $2,491</td></tr>
+          <tr><td>4 tenders / user / mo</td><td class="num">480</td><td class="num">$1,381</td><td class="dim">$684 – $1,800</td><td class="num">$2,065 – $3,181</td></tr>
+          <tr><td>8 tenders / user / mo</td><td class="num">960</td><td class="num">$2,762</td><td class="dim">$684 – $1,800</td><td class="num">$3,446 – $4,562</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============================================ -->
+  <section>
+    <h2>The eleventh seat</h2>
+    <p class="lede">Cost only — no margin applied, since that decision is still open.</p>
+
+    <div class="scroller">
+      <table>
+        <caption>Marginal cost of one additional seat per month, by how hard that seat works.</caption>
+        <thead>
+          <tr><th scope="col">That seat's usage</th><th scope="col">Haiku</th><th scope="col">Sonnet 5</th><th scope="col">Opus 5</th><th scope="col">+ infra</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1 tender / month</td><td class="num">$0.96</td><td class="num">$2.88</td><td class="num">$4.80</td><td class="dim">$1 – $3</td></tr>
+          <tr class="hi"><td>2 tenders / month</td><td class="num">$1.92</td><td class="num">$5.76</td><td class="num">$9.59</td><td class="dim">$1 – $3</td></tr>
+          <tr><td>4 tenders / month</td><td class="num">$3.84</td><td class="num">$11.51</td><td class="num">$19.18</td><td class="dim">$1 – $3</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">
+      <div class="note-title">Why this argues for the credit model</div>
+      <p>A seat costs us between one and three dollars a month in infrastructure and nothing else. All the real cost is the tenders that seat actually runs, and that varies by a factor of eight across the rows above. A flat per-seat price either overcharges the light user or loses money on the heavy one — <strong>which is exactly the case for charging the seat cheaply and the work by the credit.</strong></p>
+    </div>
+  </section>
+
+  <!-- ============================================ -->
+  <section>
+    <h2>What would move these numbers</h2>
+    <p class="lede">Four things, roughly in order of how much they matter. The first is a blocker, not an optimisation.</p>
+
+    <div class="note warn">
+      <div class="note-title">Blocker — nothing records token usage</div>
+      <p>There is no usage accounting anywhere in <code>shared/llm/</code> or <code>procurement/</code>. No call records <code>input_tokens</code> or <code>output_tokens</code>, and <code>events.jsonl</code> logs actions but not consumption. <strong>You cannot bill credits you do not measure</strong>, and the estimate on this page cannot be validated against reality until the client layer returns usage and the pipeline stores it per run. That is the first thing to build.</p>
+    </div>
+
+    <ul class="plain">
+      <li><strong>62% of what we send is whitespace.</strong> <code>pdftotext</code> preserves column layout, so nearly two thirds of the 1.2M input characters are padding. Collapsing runs would cut input volume by about half — but input is only 37% of the bill, so the ceiling here is roughly a 20% saving, and column alignment is exactly what lets the model keep a value with its unit. Measure recall before touching it.</li>
+      <li><strong>The Batch API halves everything.</strong> Ingestion already runs as a background job, so asynchronous turnaround costs almost nothing in user experience. This is the single largest lever on the page.</li>
+      <li><strong>Re-ingestion is already free.</strong> Extraction caches on content hash plus prompt version, so re-running a project only pays for documents that actually changed. A prompt-version bump re-prices every document in every stored project — budget for that when shipping one.</li>
+      <li><strong>Two features would add real cost.</strong> The LLM vision fallback for scanned PDFs is wired but production passes <code>pdf_fallback=None</code>, so those five unreadable drawings cost nothing today; turning it on prices images, not text. <code>LlamaParse</code> is in the tree but unreachable — production passes <code>pdf_reader=None</code> — and is per-page billed if it ever ships. The RFQ extractor is still a fixture; at ~10 credits a call it stays negligible.</li>
+    </ul>
+  </section>
+
+  <footer>
+    Measured 14 Aug 2026 · branch <code>rfq-platform-phase-1</code> · corpus <code>projects/phase4c-shipped-defaults</code><br>
+    Model prices are Anthropic first-party list rates and exclude any committed-spend discount.<br>
+    Vendor identities omitted. No client document text was transmitted in producing this analysis.
+  </footer>
+
+</div>
+</body>
+</html>
