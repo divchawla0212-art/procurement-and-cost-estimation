@@ -156,6 +156,18 @@ class Bm25Index:
     def add(self, rfq_id: str, passages: Iterable[Passage]) -> None:
         """Make the index hold **exactly** `passages` for `rfq_id`.
 
+        **Every document of an RFQ goes in one call.** Calling this once per
+        document leaves only the last document's passages indexed and silently
+        drops the rest — the method is named `add` for the protocol, and it
+        replaces. The failure that causes is the precise one this feature exists
+        to prevent: a question the enquiry package genuinely answers comes back
+        as "the package does not say", because the clause that answers it was in
+        a document a later call wiped. Build the list across every currently
+        issued document first, then call once:
+
+            index.add(rfq_id, [p for doc in issued
+                               for p in passages_for_document(root, doc)])
+
         Named `add` because that is the protocol's name, and a wholesale
         replacement because that is invariant I-G — see the module docstring.
         Wholesale rather than a diff for the reason `bidder_db.replace_all`

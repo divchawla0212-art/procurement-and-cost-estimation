@@ -102,6 +102,63 @@ def test_an_uncited_answer_escalates_however_confident_the_prose(tmp_path):
     assert result.escalation_reason
 
 
+def test_an_honest_empty_answer_is_a_finding_about_the_package_not_the_model(tmp_path):
+    """The commonest legitimate escalation there is, and it must not be reported
+    as the hallucination above.
+
+    `mr_answer_v1.txt` asks for exactly this shape when the passages are silent
+    — an empty answer and an empty `passage_ids` — so it is the model doing what
+    it was told, not going off-piste. Told "the drafted answer did not rest on
+    the passages", a buyer goes looking for a model bug that did not happen.
+    Nothing is relaxed by the distinction: `supported` is `False` either way."""
+    client = MockLLMClient(response={"answer": "", "passage_ids": []})
+
+    result = draft_answer(client, an_index(tmp_path), rfq_id="rfq_1",
+                          question=ARMOUR_QUESTION)
+
+    assert result.supported is False
+    assert result.answer is None
+    assert result.outcome == AnswerOutcome.NOT_IN_PACKAGE
+    assert result.provider_error is None
+    assert "do not appear to answer" in result.escalation_reason
+
+
+def test_an_honest_empty_answer_reads_differently_from_ungrounded_prose(tmp_path):
+    """Both escalate, and a buyer has to be able to tell "the MR is silent on
+    this" from "the model wrote something we could not stand behind" — the same
+    rule that keeps an outage apart from an absence, one door along."""
+    index = an_index(tmp_path)
+
+    silent = draft_answer(MockLLMClient(response={"answer": "", "passage_ids": []}),
+                          index, rfq_id="rfq_1", question=ARMOUR_QUESTION)
+    ungrounded = draft_answer(
+        MockLLMClient(response={"answer": "Galvanised steel, always.",
+                                "passage_ids": []}),
+        index, rfq_id="rfq_1", question=ARMOUR_QUESTION)
+
+    assert silent.supported is ungrounded.supported is False
+    assert silent.outcome != ungrounded.outcome
+    assert silent.escalation_reason != ungrounded.escalation_reason
+
+
+def test_a_silent_package_is_not_the_same_as_nothing_retrieved(tmp_path):
+    """Passages *were* retrieved and read here; `NOTHING_RETRIEVED` is the case
+    where BM25 matched none at all and the model was never asked. The next step
+    differs — one is a question to answer by hand, the other is often a question
+    worded in vocabulary the package does not use."""
+    index = an_index(tmp_path)
+
+    silent = draft_answer(MockLLMClient(response={"answer": "", "passage_ids": []}),
+                          index, rfq_id="rfq_1", question=ARMOUR_QUESTION)
+    unmatched = draft_answer(MockLLMClient(response={"answer": "", "passage_ids": []}),
+                             index, rfq_id="rfq_1",
+                             question="liquidated damages warranty period")
+
+    assert silent.outcome == AnswerOutcome.NOT_IN_PACKAGE
+    assert unmatched.outcome == AnswerOutcome.NOTHING_RETRIEVED
+    assert silent.retrieved_ids and not unmatched.retrieved_ids
+
+
 def test_a_fabricated_citation_escalates(tmp_path):
     """The second half of the formula. An id nobody retrieved is an id the model
     invented, and an invented citation reads on screen exactly like a real

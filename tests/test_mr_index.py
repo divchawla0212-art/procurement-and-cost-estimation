@@ -283,6 +283,48 @@ def test_re_adding_nothing_empties_the_rfq(tmp_path):
     assert index.search("rfq_1", "sheath", k=6) == []
 
 
+def test_two_documents_of_one_rfq_are_indexed_together(tmp_path):
+    """An enquiry package is several documents, and a bidder's question is
+    answered out of whichever one covers it — so the whole package has to be
+    retrievable at once, not merely the last one indexed.
+
+    This is the *intended* call shape, stated as a test because the wrong one is
+    silent: `add` replaces per RFQ, so a caller looping over documents and
+    calling once each would leave only the last document indexed and answer
+    "the package does not say" to questions the package does answer. Nothing
+    below this line can be built by calling `add` per document.
+    """
+    index = an_index(tmp_path)
+    mr = passages.split_text("rfq_1", CABLE_MR, document_id="rdoc_mr", budget=120)
+    datasheet = passages.split_text(
+        "rfq_1", "Item 12: the gland shall be brass, double compression.",
+        document_id="rdoc_ds")
+
+    index.add("rfq_1", [*mr, *datasheet])
+
+    from_the_mr = index.search("rfq_1", "outer sheath colour", k=6)
+    from_the_datasheet = index.search("rfq_1", "double compression gland", k=6)
+
+    assert from_the_mr and from_the_mr[0].document_id == "rdoc_mr"
+    assert from_the_datasheet and from_the_datasheet[0].document_id == "rdoc_ds"
+
+
+def test_indexing_a_second_document_on_its_own_replaces_the_first(tmp_path):
+    """The trap the docstring warns about, pinned as behaviour rather than left
+    to be discovered. `add` is a replacement, so this is I-G working exactly as
+    specified — and it is also how a caller who loops over documents loses most
+    of the package. If this ever stops being true, the warning on `add` is stale
+    and the batching rule above is no longer load-bearing."""
+    index = an_index(tmp_path)
+    index.add("rfq_1", passages.split_text("rfq_1", "The sheath shall be black.",
+                                           document_id="rdoc_mr"))
+    index.add("rfq_1", passages.split_text("rfq_1", "The gland shall be brass.",
+                                           document_id="rdoc_ds"))
+
+    assert index.search("rfq_1", "sheath", k=6) == []
+    assert index.search("rfq_1", "gland", k=6)[0].document_id == "rdoc_ds"
+
+
 def test_a_passage_belonging_to_another_rfq_is_refused(tmp_path):
     """The `rfq_id` argument is what the replacement is scoped to, so a passage
     carrying a different one would be filed under an enquiry it is not part of

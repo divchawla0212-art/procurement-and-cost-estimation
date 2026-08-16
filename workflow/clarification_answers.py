@@ -24,14 +24,18 @@ contractual position. `test_the_model_is_never_asked_for_a_verdict` asserts the
 other half of it against the prompt file, rather than against a sentence in this
 docstring.
 
-**An outage is not an absence.** Four outcomes, and they are four rather than
-two because "escalate" is the same destination for very different reasons: a
-provider failure is something to retry, an unsupported answer is something to
-answer by hand, and nothing retrieved is a question the package does not discuss
-at all. Collapsing them would send a buyer hunting through an MR for an answer
-that is in it, or hide an outage as a shrug. The distinction this repository
-keeps between `—` and `Nobody invited yet`, and between an empty approver list
-refused and no approver named.
+**An outage is not an absence, and neither is a wrong answer.** Five outcomes,
+and they are five rather than two because "escalate" is the same destination for
+very different reasons: a provider failure is something to retry; an unsupported
+answer is a model that went off the passages; a package that does not cover the
+question is an ordinary finding about the enquiry; and nothing retrieved at all
+means the question shares no vocabulary with the package, which is as often a
+badly worded question as a gap in the MR. Collapsing them would send a buyer
+hunting through an MR for an answer that is in it, hide an outage as a shrug, or
+report an honest "the package is silent on this" as ungrounded prose and send
+somebody looking for a model bug that did not happen. The distinction this
+repository keeps between `—` and `Nobody invited yet`, and between an empty
+approver list refused and no approver named.
 """
 from enum import Enum
 from pathlib import Path
@@ -59,6 +63,7 @@ class AnswerOutcome(str, Enum):
 
     ANSWERED = "Answered from the enquiry package"
     NOT_SUPPORTED = "The model's answer was not supported by the passages"
+    NOT_IN_PACKAGE = "The retrieved passages do not answer the question"
     NOTHING_RETRIEVED = "No passage of the enquiry package matched the question"
     PROVIDER_FAILED = "The model could not be reached"
 
@@ -212,6 +217,21 @@ def draft_answer(
     supported = bool(cited) and set(cited) <= set(retrieved)
     answer = parsed.answer.strip()
 
+    if not cited and not answer:
+        # The model read the passages and said they do not answer the question,
+        # which is exactly what the prompt asks it to do when they do not. That
+        # is an ordinary finding about the *package*, not a failure of the
+        # model, and it is the commonest legitimate escalation there is —
+        # reporting it as ungrounded prose sends a buyer looking for a model bug
+        # that did not happen. `not cited` already makes `supported` false, so
+        # this branch relaxes nothing; it only stops naming the wrong cause.
+        return _escalate(
+            AnswerOutcome.NOT_IN_PACKAGE,
+            "The passages retrieved from the enquiry package do not appear to "
+            "answer this question, and nothing was drafted from them. It needs "
+            "answering by hand.",
+            hits,
+        )
     if not supported:
         return _escalate(
             AnswerOutcome.NOT_SUPPORTED,
