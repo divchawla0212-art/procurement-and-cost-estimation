@@ -128,3 +128,16 @@ def test_a_refused_configuration_never_falls_back_to_the_outbox(tmp_path, monkey
     _smtp_env(monkeypatch, SMTP_HOST=None)
     with pytest.raises(MailConfigError):
         transport_for(str(tmp_path))
+
+
+def test_a_non_numeric_smtp_port_is_refused_and_named(tmp_path, monkeypatch):
+    _smtp_env(monkeypatch, SMTP_PORT="abc")
+    with pytest.raises(MailConfigError, match="SMTP_PORT"):
+        transport_for(str(tmp_path))
+
+
+def test_an_absent_smtp_port_still_defaults_to_587(tmp_path, monkeypatch):
+    _smtp_env(monkeypatch, SMTP_PORT=None)
+    transport = transport_for(str(tmp_path))
+    assert isinstance(transport, SmtpImapTransport)
+    assert transport._port == 587

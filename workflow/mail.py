@@ -92,6 +92,23 @@ def _required(name: str) -> str:
     return value
 
 
+def _smtp_port() -> int:
+    # Optional, unlike the other SMTP_* variables: an absent SMTP_PORT keeps
+    # defaulting to 587 rather than becoming a required variable. A *present*
+    # but non-numeric value is still a misconfiguration, though, and must name
+    # itself the same way every other failure in this function does rather
+    # than surface as a bare ValueError from int().
+    raw = os.environ.get("SMTP_PORT", "").strip()
+    if not raw:
+        return 587
+    try:
+        return int(raw)
+    except ValueError:
+        raise MailConfigError(
+            f"MAIL_TRANSPORT=smtp needs SMTP_PORT to be a number, got {raw!r}."
+        ) from None
+
+
 def transport_for(root: str) -> MailTransport:
     """The one place the environment is read.
 
@@ -107,7 +124,7 @@ def transport_for(root: str) -> MailTransport:
     # buyer who has just pressed Send.
     return SmtpImapTransport(
         host=_required("SMTP_HOST"),
-        port=int(os.environ.get("SMTP_PORT", "587")),
+        port=_smtp_port(),
         username=_required("SMTP_USERNAME"),
         password=_required("SMTP_PASSWORD"),
         sender=_required("MAIL_FROM"),
