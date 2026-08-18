@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from typing import Iterator
 
 from procurement.store import layout
-from workflow import bidder_db
+from workflow import bidder_db, contact_db
 from workflow.models.bid import Bid, BidShortlist, VdrlReceipt
 from workflow.models.bidder import Bidder
 from workflow.models.clarification import Addendum, ClarificationQuery
@@ -57,11 +57,20 @@ def to_document(store: WorkflowStore) -> dict:
         "version": VERSION,
         "projects": [p.model_dump(mode="json") for p in store._projects.values()],
         "items": [i.model_dump(mode="json") for i in store._items.values()],
-        # No `bidders` key. The registry lives in `<ROOT>/bidders.db` — see
-        # `workflow/bidder_db.py` for why that one collection is different —
-        # and `save` writes it there in the same call that writes this
-        # document. A key here would be a second copy for the first edit to
-        # disagree with.
+        # No `bidders` key, and no `vendor_contacts` key. **Two** collections
+        # live in `<ROOT>/bidders.db` — the registry and the vendor contact
+        # directory; see `workflow/bidder_db.py` and `workflow/contact_db.py`
+        # for why they are different — and `save` writes both there in the same
+        # call that writes this document. A key here would be a second copy for
+        # the first edit to disagree with.
+        #
+        # Both are therefore exempt from the rule that every field on
+        # `WorkflowStore.__init__` needs a line in this function and in
+        # `from_document`. That rule exists because a field without them
+        # silently fails to survive a restart, so an exemption is only safe
+        # while something else loads and saves it — `persistence.load` does,
+        # and a test in `test_vendor_contact_store.py` says the document stays
+        # clean.
         "rfqs": [r.model_dump(mode="json") for r in store._rfqs.values()],
         "packages": [p.model_dump(mode="json") for p in store._packages.values()],
         "shortlists": [
@@ -263,10 +272,20 @@ def load(root: str) -> WorkflowStore:
     # that has happened the key is gone and this branch never runs again.
     if not store._bidders:
         store._bidders = {b.id: b for b in bidder_db.list_all(root)}
+    # The database is the *only* source for the contact directory. Unlike
+    # `bidders` there is no document key to migrate from and never was, so
+    # this is unconditional — a `vendor_contacts` key in a hand-edited
+    # document must not be able to introduce a contact the directory does not
+    # hold.
+    store._vendor_contacts = {
+        contact_db.fold(c.vendor_name): c for c in contact_db.list_all(root)
+    }
     return store
 
 
-def save(root: str, store: WorkflowStore, *, registry: bool = True) -> None:
+def save(
+    root: str, store: WorkflowStore, *, registry: bool = True, contacts: bool = True
+) -> None:
     """Write both halves.
 
     The registry goes first: it is its own transaction, and a document written
@@ -283,6 +302,8 @@ def save(root: str, store: WorkflowStore, *, registry: bool = True) -> None:
     """
     if registry:
         bidder_db.replace_all(root, store._bidders.values())
+    if contacts:
+        contact_db.replace_all(root, store._vendor_contacts.values())
     layout.atomic_write_json(workflow_path(root), to_document(store))
 
 
@@ -310,5 +331,13 @@ def locked_update(root: str) -> Iterator[WorkflowStore]:
         # mutation of a stored `Bidder` would defeat this — there is none, and
         # this comment is why there must not be one.
         registry_before = dict(store._bidders)
+        # Same shallow copy, same reasoning: `set_vendor_contacts` rebuilds the
+        # dict rather than mutating stored models in place, so a rebind is the
+        # only way the directory can change and `!=` sees all of them.
+        contacts_before = dict(store._vendor_contacts)
         yield store
-        save(root, store, registry=store._bidders != registry_before)
+        save(
+            root, store,
+            registry=store._bidders != registry_before,
+            contacts=store._vendor_contacts != contacts_before,
+        )

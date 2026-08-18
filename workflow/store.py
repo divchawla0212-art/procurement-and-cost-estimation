@@ -4,6 +4,7 @@ from typing import NamedTuple
 
 from workflow import clarifications
 from workflow.bidders import evaluate
+from workflow.disciplines import fold
 from workflow.models.bid import Bid, BidShortlist, ReceiptState, VdrlReceipt
 from workflow.models.clarification import (
     Addendum,
@@ -30,6 +31,7 @@ from workflow.models.rfq import (
     VdrlLine,
 )
 from workflow.models.rfq_document import RfqDocument
+from workflow.models.vendor_contact import VendorContact
 from workflow.gates import check_gate
 from workflow.stages import Stage, is_allowed
 
@@ -159,6 +161,17 @@ class WorkflowStore:
         # `submitted_by_vendor_id` on each record, so grouping by it here would
         # be a second place for the key to disagree with what it groups.
         self._rfq_documents: dict[str, list[RfqDocument]] = {}
+        # Keyed by `fold(vendor_name)`. **The second field with no line in
+        # `to_document` / `from_document`, after `_bidders`, and for the same
+        # reason** — it lives in `bidders.db`, hydrated by `persistence.load`
+        # and written by `contact_db.replace_all`. A `vendor_contacts` key in
+        # the document would be a second copy for the first edit to disagree
+        # with, which is the argument that moved the registry out.
+        #
+        # No `vendor_id` on any of these, deliberately: the sheet they come
+        # from carries no vendor number, so a registry link could only be made
+        # by comparing names.
+        self._vendor_contacts: dict[str, VendorContact] = {}
 
     # -- projects ---------------------------------------------------------
 
@@ -473,6 +486,50 @@ class WorkflowStore:
                 f"{project.live_period_end.isoformat()})"
             )
         return None
+
+    # -- vendor contacts ---------------------------------------------------
+    #
+    # Where an enquiry goes, keyed by folded vendor name. Organisation-wide,
+    # like the registry beside it and for the same reason — an address is a
+    # fact about a company, not about one RFQ. There is **no registry link**:
+    # the sheet these come from carries no vendor number, so a `vendor_id`
+    # here could only come from comparing names, which this repository has
+    # recorded as a shipped defect twice.
+
+    def set_vendor_contacts(self, contacts: Iterable[VendorContact]) -> int:
+        """Replace the directory wholesale, returning how many it now holds.
+
+        Wholesale because an upload is a document: a vendor dropped from the
+        sheet must not survive in the directory. Rebuilds the dict rather than
+        mutating it, which is what lets `locked_update` notice the change by
+        comparing against a shallow copy taken at load — the same mechanism,
+        and the same requirement, as the registry.
+        """
+        self._vendor_contacts = {fold(c.vendor_name): c for c in contacts}
+        return len(self._vendor_contacts)
+
+    def vendor_contacts(self) -> list[VendorContact]:
+        return sorted(self._vendor_contacts.values(), key=lambda c: fold(c.vendor_name))
+
+    def emails_for(self, vendor_name: str) -> list[str] | None:
+        """Where to send this vendor's enquiry, or `None` if nothing is held.
+
+        Keyed on the **name**, folded — there is no `vendor_id` in the
+        directory, so a hand-typed shortlist row resolves exactly as a
+        registry-linked one does. That is the upside of name-keying: a vendor
+        on nobody's register still has an address.
+
+        Folding is `disciplines.fold` and nothing more, so `L.L.C` against
+        `LLC` is a miss. Widening it to strip punctuation is how an enquiry
+        reaches the wrong company, and the failure would be invisible.
+
+        Two states and never three: `[]` cannot occur, because a contact with
+        no address is refused at parse.
+
+        A copy, so a caller cannot edit the directory through the answer.
+        """
+        contact = self._vendor_contacts.get(fold(vendor_name))
+        return list(contact.emails) if contact else None
 
     # -- bidders ----------------------------------------------------------
     #
