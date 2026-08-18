@@ -32,8 +32,9 @@ from pydantic import BaseModel
 
 from api.auth.deps import current_user
 from api.auth.models import User
-from workflow import clarifications, persistence
+from workflow import clarifications, contact_db, persistence
 from workflow import bidder_db, disciplines, doc_store, item_vendor_lists
+from workflow.contact_import import parse_contacts_counted
 from workflow.eligibility import assess as assess_eligibility
 from workflow.models.rfq_document import EligibilityCategory, RfqDocument
 from workflow.safe_extract import safe_destination, safe_relative_path
@@ -847,6 +848,102 @@ def _shortlist_payload(store: WorkflowStore, entry: ShortlistEntry) -> dict:
             None if bidder is None else missing_client_approval(bidder) is None
         ),
         "approved_by": None if bidder is None else list(bidder.approved_by),
+        # Derived on read, like the two keys above and for the same reason: a
+        # copy taken at invitation is wrong the moment the directory is
+        # corrected, and correcting it is the common case. Keyed on the
+        # **name**, not `vendor_id` — the directory holds no registry link, so
+        # a hand-typed row resolves exactly as a registry-linked one does.
+        # Two states: a list, or `None` for no contact held. Never `[]`.
+        "email": store.emails_for(entry.vendor_name),
+    }
+
+
+@router.post("/vendor-contacts")
+def upload_vendor_contacts(
+    file: UploadFile = File(...),
+    user: User = Depends(current_user),
+) -> dict:
+    """Replace the organisation-wide vendor contact directory from a sheet.
+
+    **Organisation-wide, not per-RFQ**, even though the control that calls this
+    sits on one RFQ's Shortlisting step. The screen says so; this docstring is
+    the other half of saying it.
+
+    Parse outside the lock, write inside it — parsing is pure CPU over a file
+    and holding the store lock through it blocks every other writer. The
+    workbook is not kept: the entries are the record and `source_document`
+    holds the file name, the rule `/vendor-list` and `/rfqs/extract` keep.
+
+    **Nothing here touches the registry.** A sheet of addresses must not enrol
+    a company or grant an approval; `approved_by` moves only through
+    `python -m workflow.avl_db`.
+    """
+    if not file.filename:
+        raise HTTPException(status_code=422, detail="The upload has no file name.")
+
+    suffix = os.path.splitext(file.filename)[1] or ".xlsx"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as scratch:
+        scratch.write(file.file.read())
+        scratch_path = scratch.name
+    try:
+        parsed, rows_read = parse_contacts_counted(
+            scratch_path,
+            uploaded_by=user.email,
+            uploaded_at=datetime.now(timezone.utc),
+            source_document=file.filename,
+        )
+    except ValueError as exc:
+        # The parser's own sentence, which names the missing column or the
+        # offending row. A refusal that does not say what is wrong with the
+        # file leaves the reader nothing to act on.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        # A file that is not a workbook at all — openpyxl raises its own
+        # exception types for a corrupt or non-xlsx upload, not ValueError.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        os.unlink(scratch_path)
+
+    with persistence.locked_update(_root()) as store:
+        stored = store.set_vendor_contacts(parsed)
+        # Informational only, computed here and kept nowhere: nothing else in
+        # the system consults it and no stored field is written from it. An
+        # upload that matches nobody is almost always a spelling problem, and
+        # a bare "8 rows stored" hides that.
+        registered = {contact_db.fold(b.name) for b in store.list_bidders()}
+        matched = sum(
+            1 for c in store.vendor_contacts()
+            if contact_db.fold(c.vendor_name) in registered
+        )
+        contacts = [c.model_dump(mode="json") for c in store.vendor_contacts()]
+        addresses = sum(len(c.emails) for c in store.vendor_contacts())
+
+    return {
+        "contacts": contacts,
+        "summary": {
+            "parsed": rows_read, "stored": stored,
+            "addresses": addresses, "matched": matched,
+        },
+    }
+
+
+@router.get("/vendor-contacts")
+def read_vendor_contacts() -> dict:
+    """The whole directory, plus who loaded it and when.
+
+    The provenance rides alongside so the screen can say *organisation-wide,
+    uploaded by … on …* — a control that sits inside one RFQ while writing a
+    shared directory has to say which it is.
+    """
+    store = _read()
+    contacts = store.vendor_contacts()
+    latest = max(contacts, key=lambda c: c.uploaded_at, default=None)
+    return {
+        "contacts": [c.model_dump(mode="json") for c in contacts],
+        "count": len(contacts),
+        "uploaded_by": latest.uploaded_by if latest else None,
+        "uploaded_at": latest.uploaded_at.isoformat() if latest else None,
+        "source_document": latest.source_document if latest else None,
     }
 
 

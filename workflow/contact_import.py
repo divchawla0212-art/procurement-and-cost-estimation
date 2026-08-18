@@ -47,6 +47,33 @@ def parse_contacts(
 ) -> list[VendorContact]:
     """The sheet's contacts, in sheet order, with duplicate vendors merged.
 
+    A thin wrapper over `parse_contacts_counted`, kept for callers that only
+    want the merged list — the count is the addition, not a second parser.
+    """
+    contacts, _rows_read = parse_contacts_counted(
+        path,
+        uploaded_by=uploaded_by,
+        uploaded_at=uploaded_at,
+        source_document=source_document,
+    )
+    return contacts
+
+
+def parse_contacts_counted(
+    path: str,
+    *,
+    uploaded_by: str,
+    uploaded_at: datetime,
+    source_document: str,
+) -> tuple[list[VendorContact], int]:
+    """The sheet's contacts, in sheet order, with duplicate vendors merged —
+    and how many data rows were read, before the merge.
+
+    The count is what lets an upload's summary distinguish "8 rows became 8
+    contacts" from "9 rows became 8 contacts because two of them were the same
+    vendor". `len(contacts)` alone cannot draw that distinction, since it is
+    already post-merge.
+
     Raises `ValueError` naming what is wrong: a missing column and the columns
     found instead, a malformed address and its row number, or a vendor with no
     address at all. A refusal that does not say what is wrong with the file
@@ -62,7 +89,12 @@ def parse_contacts(
     case an error. The first spelling of the name wins, and the addresses
     union with their order preserved.
     """
+    # Closed in `finally`, not left to the garbage collector: `read_only=True`
+    # holds the underlying zip open, so a caller that wants to delete the file
+    # afterwards — the upload route, which parses a temporary copy — cannot,
+    # and on Windows the unlink raises outright. Mirrors `avl_import.parse_avl`.
     workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    rows = None
     try:
         sheet = workbook.worksheets[0]
         rows = sheet.iter_rows(values_only=True)
@@ -76,6 +108,7 @@ def parse_contacts(
         vendor_at, email_at = _columns(header, source_document)
 
         merged: dict[str, VendorContact] = {}
+        rows_read = 0
         for number, row in enumerate(rows, start=2):
             name = _text(row, vendor_at)
             addresses = _addresses(_text(row, email_at), number)
@@ -91,6 +124,7 @@ def parse_contacts(
                 raise ValueError(
                     f"{name} (row {number}) has no email address."
                 )
+            rows_read += 1
             key = fold(name)
             existing = merged.get(key)
             if existing is None:
@@ -109,8 +143,14 @@ def parse_contacts(
             # An upload that stored nobody would empty the directory silently,
             # and a reader could not tell that from a file that parsed.
             raise ValueError(f"{source_document} holds no vendors.")
-        return list(merged.values())
+        return list(merged.values()), rows_read
     finally:
+        # The generator too, not just the workbook. A refusal raises while
+        # `rows` is still suspended, and a suspended read-only row iterator
+        # holds its own handle into the archive — so closing only the
+        # workbook leaves the file locked on exactly the error path.
+        if rows is not None:
+            rows.close()
         workbook.close()
 
 

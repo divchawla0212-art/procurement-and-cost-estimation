@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 import openpyxl
 import pytest
 
-from workflow.contact_import import parse_contacts
+from workflow.contact_import import parse_contacts, parse_contacts_counted
 
 WHEN = datetime(2026, 8, 18, 9, 0, tzinfo=timezone.utc)
 
@@ -148,6 +148,29 @@ def test_two_rows_for_one_vendor_merge_rather_than_being_refused(tmp_path):
     assert contacts[0].emails == [
         "sales@danway.example", "bids@danway.example",
     ]
+
+
+def test_the_counted_form_reports_rows_read_separately_from_contacts_stored(
+    tmp_path,
+):
+    """`len(parse_contacts(...))` is already post-merge, so a route that only
+    had that number could never tell "8 rows became 8 contacts" apart from
+    "9 rows became 8 because two folded together" — exactly the case a
+    summary line exists to report. Two rows, one vendor: `rows_read` counts
+    the rows, not the merged contacts."""
+    path = _book(
+        [("DANWAY  ABU DHABI L.L.C", "sales@danway.example"),
+         ("danway abu dhabi l.l.c", "bids@danway.example")],
+        tmp_path / "dupe.xlsx",
+    )
+    contacts, rows_read = parse_contacts_counted(
+        path,
+        uploaded_by="buyer@example.com",
+        uploaded_at=WHEN,
+        source_document="vendors.xlsx",
+    )
+    assert rows_read == 2
+    assert len(contacts) == 1
 
 
 def test_a_repeated_address_for_one_vendor_is_held_once(tmp_path):
