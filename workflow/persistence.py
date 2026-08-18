@@ -29,6 +29,7 @@ from workflow.models.clarification import Addendum, ClarificationQuery
 from workflow.models.draft_shortlist import DraftShortlistEntry
 from workflow.models.project import Item, ItemVendorEntry, Project
 from workflow.models.rfq import (
+    EnquirySend,
     RfqRecord,
     ShortlistEntry,
     StageTransition,
@@ -134,6 +135,14 @@ def to_document(store: WorkflowStore) -> dict:
             for documents in store._rfq_documents.values()
             for d in documents
         ],
+        # What actually went out, per RFQ. `to` is stored rather than derived
+        # — see `EnquirySend`'s own docstring — so this list is the one place
+        # re-uploading the vendor contact sheet cannot rewrite.
+        "enquiry_sends": [
+            r.model_dump(mode="json")
+            for records in store._enquiry_sends.values()
+            for r in records
+        ],
     }
 
 
@@ -238,6 +247,13 @@ def from_document(doc: dict) -> WorkflowStore:
         if document.rfq_id not in store._rfqs:
             continue
         store._rfq_documents.setdefault(document.rfq_id, []).append(document)
+    # Same shape as the loop above, one entity type down: a record whose RFQ
+    # has gone is dropped rather than loaded as a row pointing at nothing.
+    for record in doc.get("enquiry_sends", []):
+        send = EnquirySend(**record)
+        if send.rfq_id not in store._rfqs:
+            continue
+        store._enquiry_sends.setdefault(send.rfq_id, []).append(send)
     for record in doc.get("receipts", []):
         receipt = VdrlReceipt(**record)
         store._receipts.setdefault(receipt.bid_id, []).append(receipt)

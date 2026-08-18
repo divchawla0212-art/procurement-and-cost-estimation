@@ -23,6 +23,7 @@ from workflow.models.project import (
 )
 from workflow.models.rfq import (
     Attachment,
+    EnquirySend,
     RfqRecord,
     ShortlistEntry,
     StageTransition,
@@ -31,6 +32,7 @@ from workflow.models.rfq import (
     VdrlLine,
 )
 from workflow.models.rfq_document import RfqDocument
+from workflow.models.mail import SentRef
 from workflow.models.vendor_contact import VendorContact
 from workflow.gates import check_gate
 from workflow.stages import Stage, is_allowed
@@ -161,6 +163,11 @@ class WorkflowStore:
         # `submitted_by_vendor_id` on each record, so grouping by it here would
         # be a second place for the key to disagree with what it groups.
         self._rfq_documents: dict[str, list[RfqDocument]] = {}
+        # Keyed by RFQ id. I-E's shape a second time: `record_enquiry_send`
+        # refuses an RFQ that is not there, and `persistence.from_document`
+        # drops a record whose RFQ has gone, rather than loading a row
+        # pointing at nothing.
+        self._enquiry_sends: dict[str, list[EnquirySend]] = {}
         # Keyed by `fold(vendor_name)`. **The second field with no line in
         # `to_document` / `from_document`, after `_bidders`, and for the same
         # reason** — it lives in `bidders.db`, hydrated by `persistence.load`
@@ -867,6 +874,56 @@ class WorkflowStore:
         self._relist_package_documents(rfq_id)
         key = self._blob_key(removed)
         return removed, not any(self._blob_key(e) == key for e in kept)
+
+    def record_enquiry_send(
+        self,
+        rfq_id: str,
+        *,
+        shortlist_entry_id: str,
+        vendor_name: str,
+        to: list[str],
+        ref: SentRef,
+        by: str,
+    ) -> EnquirySend:
+        """Record what actually went out to one shortlisted vendor.
+
+        Both reads that gate this write are here, not in the route: the route
+        runs this whole method inside `locked_update`, so a check made outside
+        it would be a second critical section — the sixth time this store has
+        needed that rule.
+
+        The RFQ must exist (I-E's other half, the same shape `add_rfq_document`
+        keeps). And an RFQ holds at most one record per `shortlist_entry_id` —
+        a second send to the same entry is refused rather than recorded twice.
+        """
+        if rfq_id not in self._rfqs:
+            raise KeyError(f"Unknown RFQ: {rfq_id}")
+        if shortlist_entry_id in self.already_sent_entry_ids(rfq_id):
+            raise ValueError(
+                f"{vendor_name} has already been sent this enquiry."
+            )
+        record = EnquirySend(
+            rfq_id=rfq_id,
+            shortlist_entry_id=shortlist_entry_id,
+            vendor_name=vendor_name,
+            to=list(to),
+            sent_at=datetime.now(timezone.utc),
+            by=by,
+            message_id=ref.message_id,
+            transport=ref.transport,
+        )
+        self._enquiry_sends.setdefault(rfq_id, []).append(record)
+        return record
+
+    def enquiry_sends_for(self, rfq_id: str) -> list[EnquirySend]:
+        """This RFQ's sent records. Absent reads as empty — nothing has gone
+        out yet."""
+        return list(self._enquiry_sends.get(rfq_id, []))
+
+    def already_sent_entry_ids(self, rfq_id: str) -> set[str]:
+        """The shortlist entry ids a dispatch has already covered, so a second
+        pass over the shortlist knows what to skip."""
+        return {r.shortlist_entry_id for r in self._enquiry_sends.get(rfq_id, [])}
 
     def add_shortlist_entry(
         self,

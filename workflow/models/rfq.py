@@ -146,3 +146,31 @@ class VdrlLine(BaseModel):
     title: str
     doc_type: str
     mandatory: bool = True
+
+
+def new_enquiry_send_id() -> str:
+    return f"esd_{uuid4().hex[:8]}"
+
+
+class EnquirySend(BaseModel):
+    """One vendor's copy of the enquiry, as it actually went out.
+
+    `to` is stored rather than derived. The `email` key on a shortlist row is
+    derived on read, so correcting the contact sheet corrects every shortlist at
+    once — this is the opposite and deliberately so. It records something that
+    happened, and re-uploading the sheet must not rewrite who a tender reached.
+    Frozen for the same reason `ShortlistEntry.prequal_status` is frozen.
+
+    `transport` is here because "this went to the outbox" and "this reached a
+    real mailbox" must not be indistinguishable later.
+    """
+
+    id: str = Field(default_factory=new_enquiry_send_id)
+    rfq_id: str
+    shortlist_entry_id: str
+    vendor_name: str
+    to: list[str]
+    sent_at: datetime
+    by: str
+    message_id: str
+    transport: str
