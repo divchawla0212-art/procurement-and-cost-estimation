@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { ShortlistingStep } from './ShortlistingStep'
+import { fetchVendorContacts, uploadVendorContacts } from '../../api'
 import type { RfqDetail, ShortlistEntry } from '../../types'
 
 vi.mock('../../api', () => ({
@@ -8,6 +9,19 @@ vi.mock('../../api', () => ({
   approveShortlist: vi.fn().mockResolvedValue({}),
   removeShortlistEntry: vi.fn().mockResolvedValue({}),
   setTbeTemplate: vi.fn().mockResolvedValue({}),
+  // Every render of this step now calls `fetchVendorContacts`, so every
+  // pre-existing test in this file goes through it too — a bare `vi.fn()`
+  // resolves to `undefined` and `useAsync` calls `.then` on that. The
+  // 'vendor contact directory' describe block below overrides this with its
+  // own fixture per test.
+  uploadVendorContacts: vi.fn(),
+  fetchVendorContacts: vi.fn().mockResolvedValue({
+    contacts: [],
+    count: 0,
+    uploaded_by: null,
+    uploaded_at: null,
+    source_document: null,
+  }),
 }))
 
 const BASE: RfqDetail = {
@@ -50,6 +64,7 @@ const entry = (over: Partial<ShortlistEntry> = {}): ShortlistEntry => ({
   approved_by: ['ADNOC', 'Astra'],
   override_by: null,
   override_reason: null,
+  email: null,
   ...over,
 })
 
@@ -141,5 +156,142 @@ describe('ShortlistingStep vendor selection', () => {
     expect(
       button.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy()
+  })
+})
+
+// The Scope fit column came out of the invited-bidders table: it is a snapshot
+// of a whole-string discipline match taken at invitation, and on a real
+// shortlist it reads `no` for most rows without saying what did not match —
+// a verdict nobody can act on sitting beside the approvals that can be.
+// `scope_code_fit` is untouched on the record and still posted by the escape
+// hatch below; only the column is gone.
+describe('ShortlistingStep invited bidders', () => {
+  it('has no Scope fit column', () => {
+    step([entry()])
+
+    expect(
+      screen.queryByRole('columnheader', { name: /scope fit/i }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('still shows the approvals, prequalification and exception columns', () => {
+    step([entry()])
+
+    for (const name of [/vendor/i, /approvals/i, /prequalification/i, /recorded exception/i]) {
+      expect(screen.getByRole('columnheader', { name })).toBeInTheDocument()
+    }
+  })
+})
+
+// Task 5: the vendor contact directory. `email` on a shortlist row is derived
+// server-side against the organisation-wide directory, keyed on the vendor's
+// folded name — see `docs/superpowers/specs/2026-08-18-vendor-contact-directory-design.md`
+// §7-8. This step both shows it (the Email column) and is the one place that
+// can replace the whole directory (the upload control), so the tests below
+// cover both directions.
+const DIRECTORY = {
+  contacts: [],
+  count: 8,
+  uploaded_by: 'buyer@example.com',
+  uploaded_at: '2026-08-18T09:00:00+00:00',
+  source_document: 'vendors.xlsx',
+}
+
+describe('vendor contact directory', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(fetchVendorContacts).mockResolvedValue(DIRECTORY)
+  })
+
+  it('shows an invited bidder’s address', async () => {
+    render(
+      <ShortlistingStep
+        data={{ ...BASE, shortlist: [entry({ email: ['sales@danway.example'] })] }}
+        run={vi.fn()} busy={false} tick={0}
+      />,
+    )
+    expect(await screen.findByText('sales@danway.example')).toBeInTheDocument()
+  })
+
+  it('shows every address a vendor holds, not just the first', async () => {
+    render(
+      <ShortlistingStep
+        data={{ ...BASE, shortlist: [entry({
+          email: ['sales@danway.example', 'bids@danway.example'],
+        })] }}
+        run={vi.fn()} busy={false} tick={0}
+      />,
+    )
+    expect(await screen.findByText('bids@danway.example')).toBeInTheDocument()
+  })
+
+  it('says no address is on file rather than rendering an empty cell', async () => {
+    render(
+      <ShortlistingStep
+        data={{ ...BASE, shortlist: [entry({ email: null })] }}
+        run={vi.fn()} busy={false} tick={0}
+      />,
+    )
+    expect(await screen.findByText(/no address on file/i)).toBeInTheDocument()
+  })
+
+  it('says the directory is organisation-wide, not this RFQ’s', async () => {
+    // The control sits inside one RFQ and writes a shared directory. Without
+    // this caption a buyer overwrites everyone else's addresses believing they
+    // are editing their own enquiry.
+    render(<ShortlistingStep data={BASE} run={vi.fn()} busy={false} tick={0} />)
+    const caption = await screen.findByText(/organisation-wide/i)
+    expect(caption).toHaveTextContent('8')
+    expect(caption).toHaveTextContent('buyer@example.com')
+  })
+
+  it('uploads the chosen sheet through run, so the wizard reloads', async () => {
+    vi.mocked(uploadVendorContacts).mockResolvedValue({
+      contacts: [],
+      summary: { parsed: 9, stored: 8, addresses: 8, matched: 6 },
+    })
+    const run = vi.fn(async (action: () => Promise<unknown>) => {
+      await action()
+    })
+    render(<ShortlistingStep data={BASE} run={run} busy={false} tick={0} />)
+    const file = new File(['x'], 'vendors.xlsx')
+    fireEvent.change(screen.getByLabelText(/add vendor email list/i), {
+      target: { files: [file] },
+    })
+    await waitFor(() => expect(uploadVendorContacts).toHaveBeenCalledWith(file))
+    expect(run).toHaveBeenCalled()
+  })
+
+  it('reads the counts back rather than showing a bare tick', async () => {
+    // An upload that matched nobody is a spelling problem, not a success, and
+    // only the numbers say which.
+    vi.mocked(uploadVendorContacts).mockResolvedValue({
+      contacts: [],
+      summary: { parsed: 9, stored: 8, addresses: 8, matched: 6 },
+    })
+    const run = vi.fn(async (action: () => Promise<unknown>) => {
+      await action()
+    })
+    render(<ShortlistingStep data={BASE} run={run} busy={false} tick={0} />)
+    fireEvent.change(screen.getByLabelText(/add vendor email list/i), {
+      target: { files: [new File(['x'], 'vendors.xlsx')] },
+    })
+    const line = await screen.findByText(/8 of 9/i)
+    expect(line).toHaveTextContent('6')
+  })
+
+  it('keeps the email column inside a horizontally scrolling wrapper', async () => {
+    const { container } = render(
+      <ShortlistingStep
+        data={{ ...BASE, shortlist: [entry()] }}
+        run={vi.fn()} busy={false} tick={0}
+      />,
+    )
+    await screen.findByText('Al Munara Switchgear LLC')
+    const wrapper = container.querySelector('.table-scroll .table')
+    expect(wrapper).toBeTruthy()
+    // Not just "a table sits in a scroll wrapper" — the sixth column is in
+    // it, since that is the one this task added.
+    expect(within(wrapper as HTMLElement).getByRole('columnheader', { name: 'Email' })).toBeInTheDocument()
   })
 })

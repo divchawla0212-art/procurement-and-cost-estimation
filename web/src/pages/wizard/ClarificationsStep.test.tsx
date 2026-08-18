@@ -50,6 +50,7 @@ const BASE: RfqDetail = {
       approved_by: ['ADNOC', 'Astra'],
       override_by: null,
       override_reason: null,
+      email: null,
     },
   ],
   shortlist_approved: true,

@@ -370,6 +370,43 @@ export interface ShortlistEntry {
   approved_by: string[] | null
   override_by: string | null
   override_reason: string | null
+  /** Where this vendor's enquiry goes, from the organisation-wide contact
+   *  directory, derived by the server on every read like `client_approved`
+   *  above it. `null` means no contact is held for this vendor's name — never
+   *  an empty array, because a contact with no address is refused at upload.
+   *  Matched on the **name**, folded: the directory holds no registry link. */
+  email: string[] | null
+}
+
+/** One row of the organisation-wide vendor contact directory, keyed on a
+ *  folded vendor name — no `id`, no `vendor_id`. See
+ *  `docs/superpowers/specs/2026-08-18-vendor-contact-directory-design.md` §1:
+ *  the sheet carries no vendor number, and matching it to a registry row by
+ *  name would repeat a shipped defect this repository has already recorded
+ *  twice. */
+export interface VendorContact {
+  vendor_name: string
+  emails: string[]
+  source_document: string
+  uploaded_by: string
+  uploaded_at: string
+}
+
+/** The directory, plus who loaded it — the screen says *organisation-wide*
+ *  rather than letting a control inside one RFQ read as that RFQ's own. */
+export interface VendorContactDirectory {
+  contacts: VendorContact[]
+  count: number
+  uploaded_by: string | null
+  uploaded_at: string | null
+  source_document: string | null
+}
+
+export interface VendorContactSummary {
+  parsed: number
+  stored: number
+  addresses: number
+  matched: number
 }
 
 export interface TbeTemplate {

@@ -9,13 +9,23 @@ vi.mock('../api', async (importOriginal) => {
     ...actual,
     fetchRfq: vi.fn(),
     transitionRfq: vi.fn(),
-    freezeTechnicalPackage: vi.fn(),
     addShortlistEntry: vi.fn(),
     removeShortlistEntry: vi.fn(),
     approveShortlist: vi.fn(),
     setTbeTemplate: vi.fn(),
-    addVdrlLine: vi.fn(),
-    removeVdrlLine: vi.fn(),
+    uploadRfqDocuments: vi.fn(),
+    removeRfqDocument: vi.fn(),
+    // ShortlistingStep now reads the organisation-wide contact directory on
+    // every render. Mocked explicitly rather than left to `actual` so this
+    // suite never makes a real network call.
+    uploadVendorContacts: vi.fn(),
+    fetchVendorContacts: vi.fn().mockResolvedValue({
+      contacts: [],
+      count: 0,
+      uploaded_by: null,
+      uploaded_at: null,
+      source_document: null,
+    }),
   }
 })
 
@@ -23,7 +33,6 @@ import {
   addShortlistEntry,
   approveShortlist,
   fetchRfq,
-  freezeTechnicalPackage,
   removeShortlistEntry,
   transitionRfq,
 } from '../api'
@@ -43,6 +52,7 @@ function entry(over: Partial<ShortlistEntry> = {}): ShortlistEntry {
     approved_by: ['ADNOC', 'Astra'],
     override_by: null,
     override_reason: null,
+    email: null,
     ...over,
   }
 }
@@ -294,38 +304,18 @@ describe('RfqWizard', () => {
     await waitFor(() => expect(approveShortlist).toHaveBeenCalledWith('rfq_abc'))
   })
 
-  // The technical package moved into the Issued step when Scoping was removed
-  // from the process. It is the same editor and the same freeze rule; what
-  // changed is which step you find it under, so these three drive it there.
-  it('edits the technical package under Issued', async () => {
+  // Three tests stood here and are deleted rather than skipped: they drove the
+  // package editor's revision field, its Freeze button and its attachment
+  // register, none of which exists. The Issued step is one upload control and
+  // the list of what has been uploaded; `RaiseRfqStep.test.tsx` covers it, and
+  // what this file still owns is that the step is reachable at all.
+  it('uploads enquiry documents under Issued', async () => {
     await show(detail({ rfq: { ...detail().rfq, stage: 'Issued' } }))
-    expect(screen.getByLabelText('Package revision')).toBeInTheDocument()
-    expect(screen.getByLabelText('Document code')).toBeInTheDocument()
+    expect(screen.getByText('Add documents')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Package revision')).not.toBeInTheDocument()
   })
 
-  it('freezes the package', async () => {
-    vi.mocked(freezeTechnicalPackage).mockResolvedValue({
-      rfq_id: 'rfq_abc', revision: 'Rev. B', basis_of_design: 'b',
-      attachments: [],
-      documents: [], frozen_at: '2026-08-13T10:00:00Z', frozen_by: 'admin@gmail.com',
-    })
-    await show(
-      detail({
-        rfq: { ...detail().rfq, stage: 'Issued' },
-        technical_package: {
-          rfq_id: 'rfq_abc', revision: 'Rev. B', basis_of_design: 'basis',
-          attachments: [],
-          documents: [], frozen_at: null, frozen_by: null,
-        },
-      }),
-    )
-
-    fireEvent.click(screen.getByRole('button', { name: 'Freeze package' }))
-
-    await waitFor(() => expect(freezeTechnicalPackage).toHaveBeenCalledWith('rfq_abc'))
-  })
-
-  it('replaces the package editor with a read-only view once frozen', async () => {
+  it('shows a frozen package read-only, with nothing to press', async () => {
     await show(
       detail({
         rfq: { ...detail().rfq, stage: 'Issued' },
@@ -337,24 +327,9 @@ describe('RfqWizard', () => {
         },
       }),
     )
-    expect(screen.queryByLabelText('Package revision')).not.toBeInTheDocument()
+    expect(screen.queryByText('Add documents')).not.toBeInTheDocument()
     expect(screen.getByText(/frozen by lead@adp\.ae/)).toBeInTheDocument()
     expect(screen.getByText(/cannot be edited/)).toBeInTheDocument()
-  })
-
-  it('flags an attachment with no definite revision, since that blocks the freeze', async () => {
-    await show(
-      detail({
-        rfq: { ...detail().rfq, stage: 'Issued' },
-        technical_package: {
-          rfq_id: 'rfq_abc', revision: 'Rev. B', basis_of_design: 'basis',
-          attachments: [{ doc_code: 'HAL-PID-001', title: 'P&ID', revision: null }],
-          documents: [],
-          frozen_at: null, frozen_by: null,
-        },
-      }),
-    )
-    expect(screen.getByText('none')).toBeInTheDocument()
   })
 
   it('keeps the whole stage history visible while stepping', async () => {

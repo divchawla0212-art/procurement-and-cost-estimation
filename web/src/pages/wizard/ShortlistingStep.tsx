@@ -1,11 +1,14 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import {
   addShortlistEntry,
   approveShortlist,
+  fetchVendorContacts,
   removeShortlistEntry,
   setTbeTemplate,
+  uploadVendorContacts,
 } from '../../api'
 import { ApprovalPills } from '../../components/primitives'
+import { useAsync } from '../../useAsync'
 import type { StepProps } from './types'
 
 /**
@@ -25,8 +28,15 @@ import type { StepProps } from './types'
  * only meets after scrolling past the table it approves invites approving
  * without having looked at what is on it.
  */
-export function ShortlistingStep({ data, run, busy }: StepProps) {
+export function ShortlistingStep({ data, run, busy, tick }: StepProps) {
   const [criteria, setCriteria] = useState((data.tbe_template?.criteria ?? []).join('\n'))
+
+  // The directory is a *second* resource, shared across every RFQ rather than
+  // scoped to this one, so it is keyed on `tick` like the RFQ data itself:
+  // `run` ticks the wizard on a successful write, which refetches both.
+  const { data: directory } = useAsync(() => fetchVendorContacts(), [tick])
+  const [contactSummary, setContactSummary] = useState<string | null>(null)
+  const contactFileRef = useRef<HTMLInputElement>(null)
 
   return (
     <>
@@ -45,6 +55,46 @@ export function ShortlistingStep({ data, run, busy }: StepProps) {
       </button>
 
       <h3>Invited bidders</h3>
+      {/* The directory is shared by every RFQ. This caption is the only thing
+          that says so, and without it a buyer overwrites everyone else's
+          addresses believing they are editing their own enquiry. */}
+      <p className="muted">
+        Vendor addresses are organisation-wide
+        {directory ? ` · ${directory.count} vendors` : ''}
+        {directory?.uploaded_by ? ` · uploaded by ${directory.uploaded_by}` : ''}
+      </p>
+      <input
+        id="vendor-contacts"
+        className="sr-only"
+        ref={contactFileRef}
+        type="file"
+        accept=".xlsx"
+        aria-label="Add vendor email list"
+        disabled={busy}
+        onChange={(e) => {
+          const file = e.target.files?.[0]
+          // Cleared so picking the same file twice reads it twice — the retry
+          // after a refused workbook is the case that needs it.
+          e.target.value = ''
+          if (!file) return
+          void run(async () => {
+            const { summary: s } = await uploadVendorContacts(file)
+            setContactSummary(
+              `${s.stored} of ${s.parsed} stored · ${s.addresses} addresses · ` +
+                `${s.matched} in the registry`,
+            )
+          })
+        }}
+      />
+      <button
+        type="button"
+        className="btn btn-sm"
+        disabled={busy}
+        onClick={() => contactFileRef.current?.click()}
+      >
+        Add vendor email list
+      </button>
+      {contactSummary && <p className="muted">{contactSummary}</p>}
       {data.shortlist.length === 0 ? (
         <p className="muted">Nobody invited yet.</p>
       ) : (
@@ -54,8 +104,8 @@ export function ShortlistingStep({ data, run, busy }: StepProps) {
               <tr>
                 <th scope="col">Vendor</th>
                 <th scope="col">Approvals</th>
+                <th scope="col">Email</th>
                 <th scope="col">Prequalification</th>
-                <th scope="col">Scope fit</th>
                 <th scope="col">Recorded exception</th>
                 <th scope="col" />
               </tr>
@@ -98,10 +148,21 @@ export function ShortlistingStep({ data, run, busy }: StepProps) {
                       </>
                     )}
                   </td>
+                  {/* Live, like Approvals beside it: re-uploading the sheet
+                      corrects every shortlist with nothing rewritten. `null`
+                      is 'no contact held', which is a real finding — the
+                      directory was consulted, and rendering nothing here
+                      would report a check that never ran. */}
+                  <td>
+                    {e.email === null ? (
+                      <span className="muted">No address on file</span>
+                    ) : (
+                      e.email.map((address) => <div key={address}>{address}</div>)
+                    )}
+                  </td>
                   {/* The status as it was when the invitation was issued, not as
                       it is today. That is what makes this row an audit trail. */}
                   <td>{e.prequal_status}</td>
-                  <td>{e.scope_code_fit ? 'yes' : 'no'}</td>
                   <td>
                     {e.override_reason ? (
                       <>

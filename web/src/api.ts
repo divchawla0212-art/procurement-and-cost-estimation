@@ -19,8 +19,6 @@ import type {
   RfqRoster,
   ShortlistEntry,
   TbeTemplate,
-  TechnicalPackage,
-  VdrlLine,
   Statement,
   RfqInput,
   WorkflowItemInput,
@@ -36,6 +34,9 @@ import type {
   SuggestedVendor,
   VendorListSource,
   VendorListSummary,
+  VendorContact,
+  VendorContactDirectory,
+  VendorContactSummary,
 } from './types'
 
 /** The server's `detail` if it sent one, else the status line. */
@@ -470,16 +471,11 @@ export function fetchRfq(rfqId: string): Promise<RfqDetail> {
 /* The wizard's writes. Each maps to one control in one step; the server owns
    every rule, so these deliberately carry no validation of their own. */
 
-export function setTechnicalPackage(
-  rfqId: string,
-  body: { revision: string; basis_of_design: string; attachments: Attachment[] },
-): Promise<TechnicalPackage> {
-  return sendJson<TechnicalPackage>(
-    `/api/workflow/rfqs/${encodeURIComponent(rfqId)}/technical-package`,
-    'PUT',
-    body,
-  )
-}
+/* `setTechnicalPackage`, `freezeTechnicalPackage`, `addVdrlLine` and
+   `removeVdrlLine` stood here. Their routes are still served and still covered
+   by the Python suite; nothing in the browser calls them since the Issued step
+   became one upload control and a list — the same treatment the removed
+   Bidders screen's writes got. */
 
 /** Store real files against the RFQ: several at once, a folder, or a zip.
  *
@@ -515,14 +511,6 @@ export function removeRfqDocument(rfqId: string, documentId: string): Promise<vo
       `${encodeURIComponent(documentId)}`,
     { method: 'DELETE' },
   ).then(expectNoContent)
-}
-
-export function freezeTechnicalPackage(rfqId: string): Promise<TechnicalPackage> {
-  return sendJson<TechnicalPackage>(
-    `/api/workflow/rfqs/${encodeURIComponent(rfqId)}/technical-package/freeze`,
-    'POST',
-    {},
-  )
 }
 
 /** Two shapes, one route. With a `vendor_id` the server takes the vendor's
@@ -583,22 +571,18 @@ export function setTbeTemplate(
   )
 }
 
-export function addVdrlLine(
-  rfqId: string,
-  body: { doc_code: string; title: string; doc_type: string; mandatory: boolean },
-): Promise<VdrlLine> {
-  return sendJson<VdrlLine>(
-    `/api/workflow/rfqs/${encodeURIComponent(rfqId)}/vdrl`,
-    'POST',
-    body,
-  )
+/** Replace the organisation-wide vendor contact directory.
+ *
+ *  Shared, despite the control living on one RFQ's Shortlisting step: this
+ *  overwrites the directory every RFQ reads. */
+export function uploadVendorContacts(
+  file: File,
+): Promise<{ contacts: VendorContact[]; summary: VendorContactSummary }> {
+  return sendFile('/api/workflow/vendor-contacts', file)
 }
 
-export function removeVdrlLine(rfqId: string, lineId: string): Promise<void> {
-  return fetch(
-    `/api/workflow/rfqs/${encodeURIComponent(rfqId)}/vdrl/${encodeURIComponent(lineId)}`,
-    { method: 'DELETE' },
-  ).then(expectNoContent)
+export function fetchVendorContacts(): Promise<VendorContactDirectory> {
+  return getJson('/api/workflow/vendor-contacts')
 }
 
 /** Tick a step off: advance the RFQ. A closed gate answers 409 and `unwrap`

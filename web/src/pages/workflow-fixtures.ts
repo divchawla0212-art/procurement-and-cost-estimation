@@ -190,6 +190,7 @@ export function shortlistEntry(
     approved_by: ['ADNOC', 'Astra'],
     override_by: null,
     override_reason: null,
+    email: null,
     ...over,
   }
 }
