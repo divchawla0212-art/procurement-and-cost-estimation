@@ -898,10 +898,21 @@ worker onto the same port otherwise, and it never crosses into this script's own
 ancestry — the terminal running `run.ps1` also carries the repo path.
 
 `.claude/launch.json` still defines `procurement-api` and `enterprise-web` for
-the preview tooling, and both hardcode their ports. They can no longer both be
-up *by accident*: a preview-started vite matches the "ours" test, so `run.ps1`
-now reclaims its port instead of refusing to start. Stop the preview server
-first if you wanted it.
+the preview tooling. `procurement-api` hardcodes 8000; **`enterprise-web` no
+longer hardcodes 5173** — it carries `autoPort`, and `vite.config.ts` reads
+`process.env.PORT` before falling back to 5173, so a preview dev server starts
+*beside* one that is already running rather than refusing the port. Nothing
+needs 5173 specifically: `/api` is proxied to `127.0.0.1:8000`, so the browser
+is same-origin with the API and the CORS allowlist in `api/main.py` — which
+does name 5173, and is left alone — is never consulted in development. That
+`process.env` read is in `vite.config.ts`, a node module outside
+`tsconfig.app.json`'s `include: ["src"]`; the same line in app source would be
+the mistake the `"node"` types entry no longer catches.
+
+`run.ps1` is unaffected and still hardcodes both ports. A preview-started vite
+on an assigned port is simply not on 5173 for it to reclaim; one that *did* get
+5173 still matches the "ours" test and is still reclaimed rather than refused.
+Stop the preview server first if you wanted it.
 
 ## Store invariants — violating these corrupts award decisions
 
