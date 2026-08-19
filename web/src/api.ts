@@ -55,7 +55,18 @@ async function failure(res: Response): Promise<Error> {
 }
 
 async function unwrap<T>(res: Response): Promise<T> {
-  if (!res.ok) throw await failure(res)
+  if (!res.ok) {
+    if (res.status === 401 && typeof window !== 'undefined') {
+      // The session was cleared server-side (e.g. after a backend restart) —
+      // send the user back to the login screen rather than parking them on a
+      // broken page. The 401 still throws so callers stay correct.
+      const here = window.location.pathname + window.location.search
+      if (!window.location.pathname.startsWith('/login')) {
+        window.location.assign('/login?returnTo=' + encodeURIComponent(here))
+      }
+    }
+    throw await failure(res)
+  }
   return res.json() as Promise<T>
 }
 

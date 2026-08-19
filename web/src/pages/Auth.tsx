@@ -186,23 +186,29 @@ export function Auth(): JSX.Element {
               id="auth-submit"
               type="submit"
               disabled={submitting}
-              className="btn-navy w-full h-11 flex items-center justify-center gap-2 disabled:opacity-70 mt-1"
+              className="btn-navy btn-navy-lg w-full mt-2 relative disabled:opacity-70"
               data-testid="auth-submit-button"
             >
-              {submitting ? (
-                isLogin ? 'Signing in…' : 'Creating account…'
-              ) : (
-                <>
-                  {isLogin ? 'Sign in' : 'Create account'} <ArrowRight size={15} />
-                </>
-              )}
+              <span className="btn-navy-lg-label">
+                {submitting
+                  ? isLogin
+                    ? 'Signing in…'
+                    : 'Creating account…'
+                  : isLogin
+                    ? 'Sign in'
+                    : 'Create account'}
+              </span>
+              {!submitting && <ArrowRight size={16} className="btn-navy-lg-icon" />}
             </button>
           </form>
 
           {isLogin && (
             <div className="mt-8">
-              <div className="eyebrow">Demo Accounts</div>
-              <div className="mt-3 grid grid-cols-2 gap-2">
+              <div className="demo-heading">
+                <span className="eyebrow">Demo accounts</span>
+                <span className="demo-sub">Tap a tile to fill credentials</span>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2.5">
                 {DEMO_TILES.map((t) => (
                   <button
                     key={t.id}
@@ -212,21 +218,19 @@ export function Auth(): JSX.Element {
                     className="demo-tile"
                     data-testid={`demo-account-${t.id}`}
                   >
-                    <div className="flex items-center gap-2">
+                    <div className="demo-tile-head">
                       <span className="role-dot" style={{ background: t.color }} />
-                      <span className="text-[12.5px] font-semibold text-[var(--ink)]">
-                        {t.title}
-                      </span>
+                      <span className="demo-tile-title">{t.title}</span>
                     </div>
-                    <div className="mt-1 text-[11.5px] text-[var(--muted)] leading-snug">
-                      {t.desc}
-                    </div>
+                    <div className="demo-tile-desc">{t.desc}</div>
+                    {t.password ? (
+                      <div className="demo-tile-badge demo-tile-badge--ready">Ready</div>
+                    ) : (
+                      <div className="demo-tile-badge demo-tile-badge--admin">Ask admin</div>
+                    )}
                   </button>
                 ))}
               </div>
-              <p className="mt-2.5 text-[11px] text-[var(--muted-2)]">
-                Click a tile to fill demo credentials.
-              </p>
             </div>
           )}
 

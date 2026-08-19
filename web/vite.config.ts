@@ -17,9 +17,11 @@ export default defineConfig({
     // consulted. Without this, a second dev server cannot start beside a
     // running one.
     port: Number(process.env.PORT) || 5173,
+    host: '0.0.0.0',
+    allowedHosts: true,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:8000',
+        target: 'http://127.0.0.1:8001',
         changeOrigin: true,
       },
     },

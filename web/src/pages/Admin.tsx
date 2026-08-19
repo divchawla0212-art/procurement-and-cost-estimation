@@ -148,7 +148,7 @@ export function Admin({ projects, meId }: AdminProps) {
       )}
 
       <Card title="Add a user">
-        <form onSubmit={submitNewUser} data-testid="add-user-form">
+        <form onSubmit={submitNewUser} data-testid="add-user-form" className="form-grid">
           <div className="form-row">
             <label htmlFor="new-email">Email</label>
             <input
@@ -180,7 +180,7 @@ export function Admin({ projects, meId }: AdminProps) {
               they can change it once they sign in.
             </p>
           </div>
-          <div className="form-row">
+          <div className="form-row form-row-wide">
             <label htmlFor="new-role">Role</label>
             <select
               id="new-role"
@@ -194,9 +194,11 @@ export function Admin({ projects, meId }: AdminProps) {
               <option value="admin">Admin — sees everything, manages users</option>
             </select>
           </div>
-          <button type="submit" className="btn btn-primary" data-testid="add-user-submit-button" disabled={adding}>
-            {adding ? 'Adding…' : 'Add user'}
-          </button>
+          <div className="form-actions">
+            <button type="submit" className="btn btn-primary" data-testid="add-user-submit-button" disabled={adding}>
+              {adding ? 'Adding…' : 'Add user'}
+            </button>
+          </div>
         </form>
       </Card>
 

@@ -1,8 +1,11 @@
 # Test credentials
 
-These credentials were already present in the frontend before this visual refresh and were not created or changed by this task.
+## Admin (seeded via ADMIN_EMAIL / ADMIN_PASSWORD)
+- Email: admin@gmail.com
+- Password: Admin@1234
+- Role: admin
 
-- Admin: `admin@gmail.com` / `Admin@1234`
-- Project Lead demo: `lead@bks.ai` / password managed by the existing environment
-- Vendor Lead demo: `vendor@kerui.com` / password managed by the existing environment
-- Technology Admin demo: `tech@bks.ai` / password managed by the existing environment
+Seeded automatically at backend startup from `/app/.env` (see `api/auth/bootstrap.py`).
+
+## Demo tiles on /login
+The `/login` screen exposes a "Business Admin" demo tile that fills in the credentials above. The other three demo tiles (Project Lead, Vendor Lead, Technology Admin) are placeholder emails only — the tile fills the email but no password, so the admin account is the only working seed.

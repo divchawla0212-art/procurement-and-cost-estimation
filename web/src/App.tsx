@@ -10,7 +10,8 @@ import { Landing } from './pages/Landing'
 import { AppRoutes } from './routes'
 import { BackForwardControls, NavHistoryProvider } from './NavHistory'
 import { ShieldMark, BRAND_NAME } from './components/ShieldMark'
-import { BarChart3, ClipboardList, FileCheck2, FolderKanban, Gauge, Settings2, ShieldCheck, Users } from 'lucide-react'
+import { GlobalSearch } from './components/GlobalSearch'
+import { BarChart3, ClipboardList, FileCheck2, FolderKanban, Gauge, Search, Settings2, ShieldCheck, Users } from 'lucide-react'
 
 const NAV_ICONS = [FolderKanban, ClipboardList, FolderKanban, Settings2, Gauge, BarChart3, FileCheck2, ClipboardList, Users]
 
@@ -56,6 +57,18 @@ export default function App() {
 
   const active = projects?.find((p) => p.slug === slug) ?? null
   const reload = () => setTick((t) => t + 1)
+
+  const [searchOpen, setSearchOpen] = useState(false)
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault()
+        setSearchOpen((v) => !v)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   // Every hook above must run on every render regardless of auth state, so
   // these gates come after them rather than before.
@@ -167,7 +180,17 @@ export default function App() {
               </span>
             )}
             <span className="sb-spacer" />
-            <span className="sb-item">API :8000</span>
+            <button
+              type="button"
+              className="sb-search"
+              onClick={() => setSearchOpen(true)}
+              data-testid="statusbar-search-trigger"
+              aria-label="Open global workflow search"
+            >
+              <Search size={13} aria-hidden />
+              <span>Search workflow…</span>
+              <kbd className="sb-kbd">⌘K</kbd>
+            </button>
           </div>
 
           <main className="canvas-scroll">
@@ -188,6 +211,7 @@ export default function App() {
           </main>
         </div>
       </div>
+      <GlobalSearch open={searchOpen} onClose={() => setSearchOpen(false)} />
     </NavHistoryProvider>
   )
 }

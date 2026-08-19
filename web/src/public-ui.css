@@ -108,11 +108,48 @@
   color: #fff;
   border-radius: var(--radius);
   font-weight: 600;
-  transition: background 140ms ease;
+  transition: background 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0 1.1rem;
+  height: 2.5rem;
+  font-size: 13.5px;
+  letter-spacing: -0.005em;
+  border: 1px solid var(--navy-800);
+  box-shadow: 0 6px 18px -12px rgba(15, 23, 42, 0.55);
+  cursor: pointer;
 }
-.btn-navy:hover {
+.btn-navy:hover:not(:disabled) {
   background: var(--navy-900);
+  border-color: var(--navy-900);
+  box-shadow: 0 10px 24px -14px rgba(15, 23, 42, 0.55);
 }
+.btn-navy:active:not(:disabled) { transform: translateY(1px); }
+.btn-navy:disabled { cursor: not-allowed; }
+
+/* Large primary CTA — used on the sign-in submit and any hero action. The
+   label centres and the trailing chevron sits flush right so the row reads as
+   one intent rather than a floating word next to a floating arrow. */
+.btn-navy-lg {
+  height: 2.9rem;
+  padding: 0 1.15rem 0 1.35rem;
+  font-size: 14.5px;
+  border-radius: calc(var(--radius) + 2px);
+  gap: 0;
+}
+.btn-navy-lg-label {
+  flex: 1;
+  text-align: center;
+  padding-right: 1rem; /* keeps the label optically centred against the icon */
+}
+.btn-navy-lg-icon {
+  flex: none;
+  opacity: 0.9;
+  transition: transform 140ms ease;
+}
+.btn-navy-lg:hover:not(:disabled) .btn-navy-lg-icon { transform: translateX(2px); }
 
 .btn-ghost {
   border: 1px solid var(--line);
@@ -180,16 +217,74 @@
 }
 
 .demo-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
   text-align: left;
-  padding: 0.875rem;
+  padding: 0.85rem 0.9rem 0.9rem;
   border-radius: var(--radius);
   border: 1px solid var(--line);
   background: var(--paper-2);
-  transition: border-color 140ms ease, background 140ms ease;
+  transition: border-color 140ms ease, background 140ms ease, transform 140ms ease,
+    box-shadow 140ms ease;
+  cursor: pointer;
+  min-height: 6.4rem;
 }
-.demo-tile:hover {
+.demo-tile:hover:not(:disabled) {
   border-color: #cbd5e1;
   background: var(--white);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px -12px rgba(15, 23, 42, 0.18);
+}
+.demo-tile:disabled { opacity: 0.55; cursor: not-allowed; }
+.demo-tile-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.demo-tile-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: -0.005em;
+}
+.demo-tile-desc {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.demo-tile-badge {
+  align-self: flex-start;
+  margin-top: auto;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  border: 1px solid transparent;
+}
+.demo-tile-badge--ready {
+  color: #047857;
+  background: #ecfdf5;
+  border-color: #d1fae5;
+}
+.demo-tile-badge--admin {
+  color: var(--muted);
+  background: #f1f5f9;
+  border-color: #e2e8f0;
+}
+.demo-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.demo-sub {
+  font-size: 11px;
+  color: var(--muted-2);
 }
 
 .public-input {

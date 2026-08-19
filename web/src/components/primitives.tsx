@@ -1,5 +1,6 @@
 import { useId, useState } from 'react'
 import type { ReactNode } from 'react'
+import { AlertTriangle, Inbox } from 'lucide-react'
 import type { Coverage } from '../types'
 import { VERDICT_LABEL, VERDICTS, pct } from '../constants'
 
@@ -431,7 +432,7 @@ export function ErrorState({ message }: { message: string }) {
   return (
     <div className="state error" data-testid="error-state" role="alert">
       <div className="glyph" aria-hidden>
-        !
+        <AlertTriangle size={22} strokeWidth={1.75} />
       </div>
       <h2>Could not load</h2>
       <p>{message}</p>
@@ -440,18 +441,18 @@ export function ErrorState({ message }: { message: string }) {
 }
 
 export function EmptyState({
-  glyph = '∅',
+  glyph,
   title,
   children,
 }: {
-  glyph?: string
+  glyph?: ReactNode
   title: string
   children?: ReactNode
 }) {
   return (
     <div className="state" data-testid="empty-state">
       <div className="glyph" aria-hidden>
-        {glyph}
+        {glyph ?? <Inbox size={22} strokeWidth={1.75} />}
       </div>
       <h2>{title}</h2>
       {children && <p>{children}</p>}

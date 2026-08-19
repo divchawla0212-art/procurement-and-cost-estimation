@@ -86,11 +86,11 @@ function Actions({
   onCancel: () => void
 }) {
   return (
-    <div style={{ display: 'flex', gap: '0.5rem' }}>
+    <div className="form-actions">
       <button type="submit" className="btn btn-primary" disabled={busy}>
-        {submitLabel}
+        {busy ? 'Saving…' : submitLabel}
       </button>
-      <button type="button" className="btn btn-ghost" onClick={onCancel}>
+      <button type="button" className="btn" onClick={onCancel} disabled={busy}>
         Cancel
       </button>
     </div>
