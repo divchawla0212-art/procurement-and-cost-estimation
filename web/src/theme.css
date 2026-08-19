@@ -23,20 +23,22 @@
   --ink-line: rgba(255, 255, 255, 0.1);
   --ink-text: #e2e8f0;
   --ink-muted: #94a3b8;
-  --paper: #f8fafc;
+  --paper: #f7f8fb;
   --surface: #ffffff;
   --surface-2: #f1f5f9;
-  --border: #e2e8f0;
+  --border: #e4e8ef;
   --border-strong: #cbd5e1;
   --text: #0f172a;
   --muted: #64748b;
   --muted-2: #94a3b8;
 
-  /* primary actions — navy, same as marketing CTAs */
-  --accent: var(--marketing-navy);
-  --accent-ink: #060f1f;
-  --accent-soft: #eef2ff;
-  --accent-line: #3b82f6;
+  /* primary CTA — vibrant enterprise blue, not the marketing navy. The navy
+     is chrome; primary actions need to *pop* against neutral surfaces. */
+  --accent: #2457c5;
+  --accent-hover: #19439f;
+  --accent-ink: #17347a;
+  --accent-soft: #eef3ff;
+  --accent-line: #93b4f5;
 
   /* verdict signal palette (colorblind-aware: paired with mono text + marks) */
   --pass: #1b7a5a;
@@ -901,13 +903,13 @@ table.grid.rank .rank-row:hover td { background: var(--accent-soft); }
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
-  box-shadow: 0 6px 18px -10px rgba(11, 26, 51, 0.45);
+  box-shadow: 0 6px 18px -8px rgba(36, 87, 197, 0.55);
 }
 .btn-primary:hover:not(:disabled) {
-  background: var(--ink-2);
-  border-color: var(--ink-2);
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
   transform: translateY(-1px);
-  box-shadow: 0 10px 22px -12px rgba(11, 26, 51, 0.55);
+  box-shadow: 0 10px 22px -10px rgba(36, 87, 197, 0.6);
 }
 .btn-primary:active:not(:disabled) { transform: translateY(0); }
 .btn-ink {
@@ -1308,18 +1310,19 @@ p.warn { margin: 0.5rem 0 0; }
 .pcard {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
-  padding: 1.05rem 1.15rem 1.15rem;
+  gap: 0.7rem;
+  padding: 1.1rem 1.15rem 1.15rem;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow-1);
-  transition: box-shadow 120ms ease, border-color 120ms ease;
+  transition: box-shadow 160ms ease, border-color 160ms ease, transform 160ms ease;
 }
 
 .pcard:hover {
-  border-color: var(--border-strong);
-  box-shadow: var(--shadow-2);
+  border-color: var(--accent-line);
+  box-shadow: 0 12px 32px -18px rgba(36, 87, 197, 0.28), var(--shadow-1);
+  transform: translateY(-2px);
 }
 
 .pcard-head {
@@ -1475,19 +1478,21 @@ p.warn { margin: 0.5rem 0 0; }
 }
 
 .pcard-open {
-  align-self: flex-start;
+  align-self: flex-end;
   margin-top: auto;
   padding: 0 0.9rem;
   height: 2rem;
   font-size: 0.815rem;
+  background: var(--accent);
   border-color: var(--accent);
-  color: var(--accent-ink);
-  background: var(--surface);
+  color: #fff;
+  box-shadow: 0 4px 12px -6px rgba(36, 87, 197, 0.55);
 }
 .pcard-open:hover:not(:disabled) {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-  color: var(--accent-ink);
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  color: #fff;
+  transform: translateY(-1px);
 }
 
 @media (prefers-reduced-motion: reduce) {

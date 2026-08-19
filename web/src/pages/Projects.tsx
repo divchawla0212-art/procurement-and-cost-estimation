@@ -49,7 +49,7 @@ function ProjectCard({
   onOpen: () => void
 }): JSX.Element {
   return (
-    <article className="pcard">
+    <article className="pcard" data-testid={`workflow-project-card-${project.id}`}>
       <header className="pcard-head">
         <h3 className="pcard-title">
           {/* A button, not a clickable card: a div with an onClick is
@@ -105,7 +105,12 @@ function ProjectCard({
         </dl>
       </details>
 
-      <button type="button" className="btn btn-sm pcard-open" onClick={onOpen}>
+      <button
+        type="button"
+        className="btn btn-sm pcard-open"
+        onClick={onOpen}
+        data-testid={`open-project-${project.id}`}
+      >
         Open project
       </button>
     </article>

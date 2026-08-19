@@ -1,0 +1,33 @@
+{
+  "summary": "Frontend E2E testing completed against the preview URL. Sign-in with admin@gmail.com/Admin@1234 works, /projects renders 3 seeded workflow cards with no 'Could not load / authentication required' banner, clicking 'Open project' successfully navigates to /projects/prj_ffd4c679 with the full KPI strip (LIVE PERIOD, CURRENCY, STATUS, ITEMS) visible — the reported 'not able to open the page' bug is fixed. Sidebar nav 01/02/09 all load without 401. Global search palette opens via Ctrl+K and via statusbar-search-trigger; typing 'sohar' returns exactly 1 Workflow project (Sohar Solar Farm); Save filter adds the 'sohar' chip under Saved filters. Primary enterprise blue (#2457c5) is applied to CTAs.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/projects list", "issues": [
+        "Button alignment across the three project cards is inconsistent: on the 'Abu Dhabi 400kV Substation' card (whose title wraps to 2 lines) the 'Open project' button sits closer to the left/center, while on Fujairah LNG and Sohar Solar cards it sits bottom-right. Recommend using a consistent flex/justify-end footer row inside each pcard so 'Open project' is always bottom-right regardless of title height.",
+        "Floating 'RFQ workflow \u203a' pill anchored mid-viewport on the right edge feels visually detached from the content grid and can overlap card actions on narrower widths — consider anchoring it to the header row or the page footer.",
+        "The 'workflow-project-card-<id>' data-testid appears to be missing on individual project cards (only workflow-project-list wrapper exists). Adding per-card testids and an 'open-project-<id>' testid would harden E2E targeting; today we had to fall back to text selectors."
+      ]}
+    ]
+  },
+  "test_report_links": ["/app/test_reports/iteration_2.json"],
+  "action_items": [
+    "Normalize card footer layout so 'Open project' is bottom-right on every workflow-project card (fix multi-line title case).",
+    "Add data-testid='workflow-project-card-<id>' and data-testid='open-project-<id>' to each card for stable E2E hooks.",
+    "Reposition or restyle the floating 'RFQ workflow' shortcut so it doesn't overlap card actions."
+  ],
+  "critical_code_review_comments": [
+    "Auth.tsx still ships demo credentials in the bundle — acceptable for internal preview but should be behind an env flag before any external release.",
+    "api.ts 401 -> /login redirect is good; ensure the redirect only fires for authenticated routes so the /login page itself doesn't loop when the bootstrap ping returns 401."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "not tested (skipped per request)", "frontend": "100% of requested flows passing"},
+  "test_credentials": "admin@gmail.com / Admin@1234 (from /app/memory/test_credentials.md — file present)",
+  "seed_data_creation": "None — used the 3 seeded workflow projects (Abu Dhabi 400kV Substation, Fujairah LNG Terminal, Sohar Solar Farm).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Supervisor now runs the real services (backend + frontend both RUNNING). Preview URL https://560cbcb5-94d1-45d9-bab9-dcb8cfc9a201.preview.emergentagent.com is healthy (/api/health = 200). All 6 requested frontend scenarios pass. Only remaining feedback is cosmetic (button alignment on the first card with a 2-line title, and floating RFQ workflow pill position).",
+  "rca of the issue": "The originally reported 'after sign-in not able to open the page' bug is resolved: 401s no longer leave the user on a broken 'authentication required' state — api.ts unwrap() now redirects to /login, session cookie is set correctly on login, and /projects/:id renders the full detail screen after clicking Open project."
+}
