@@ -21,7 +21,7 @@ from fastapi.testclient import TestClient
 from tests.auth_helpers import signed_in_admin
 from workflow import persistence
 from workflow.eligibility import EligibilityVerdict, assess
-from workflow.models.rfq import ShortlistEntry
+from workflow.models.rfq import ChecklistItem, ShortlistEntry
 from workflow.models.rfq_document import EligibilityCategory, RfqDocument
 
 C = EligibilityCategory
@@ -308,3 +308,113 @@ def test_it_challenges_a_caller_without_a_session(tmp_path, monkeypatch):
     r = client.get("/api/workflow/rfqs/rfq_1/bidders/bdr_1/eligibility")
 
     assert r.status_code == 401
+
+
+# -- custom checklist items ----------------------------------------------------
+#
+# The nine categories are a fixed vocabulary; a buyer may append items of their
+# own to one RFQ's checklist, and mark them must-have. Those cannot ride in
+# `missing`, which is typed to the enum, so they arrive in `missing_items`
+# beside it — a genuinely different kind of thing (per-RFQ, not vocabulary),
+# not the same thing spelled twice.
+#
+# A custom item is satisfied by a submitted document naming it in
+# `checklist_item_id`. Without that field a must-have custom item would be
+# unsatisfiable *by construction* rather than merely unsatisfied, which is the
+# trap this field exists to avoid.
+
+
+def an_item(label: str = "Site acceptance test plan", mandatory: bool = True) -> ChecklistItem:
+    return ChecklistItem(label=label, mandatory=mandatory)
+
+
+def test_a_mandatory_custom_item_nobody_submitted_blocks_the_bid():
+    item = an_item()
+    result = assess(
+        issued=[],
+        submitted=[submitted(c) for c in THE_THREE],
+        extra_items=[item],
+    )
+    assert result.admissible is False
+    assert [i.label for i in result.missing_items] == ["Site acceptance test plan"]
+    assert result.reason == "The bid is missing Site acceptance test plan."
+
+
+def test_an_optional_custom_item_never_blocks():
+    result = assess(
+        issued=[],
+        submitted=[submitted(c) for c in THE_THREE],
+        extra_items=[an_item(mandatory=False)],
+    )
+    assert result.admissible is True
+    assert result.missing_items == []
+    assert result.reason is None
+
+
+def test_a_document_naming_the_item_satisfies_it():
+    item = an_item()
+    result = assess(
+        issued=[],
+        submitted=[submitted(c) for c in THE_THREE]
+        + [a_document(submitted_by_vendor_id="bdr_1", checklist_item_id=item.id)],
+        extra_items=[item],
+    )
+    assert result.admissible is True
+    assert result.missing_items == []
+
+
+def test_a_document_naming_a_different_item_does_not_satisfy_it():
+    """The one that catches a satisfaction check written as `is not None`. A
+    bidder who returned something for item A has not answered item B."""
+    wanted, other = an_item("Spare parts list"), an_item("Welding procedure")
+    result = assess(
+        issued=[],
+        submitted=[submitted(c) for c in THE_THREE]
+        + [a_document(submitted_by_vendor_id="bdr_1", checklist_item_id=other.id)],
+        extra_items=[wanted],
+    )
+    assert result.admissible is False
+    assert [i.label for i in result.missing_items] == ["Spare parts list"]
+
+
+def test_a_document_naming_an_item_does_not_satisfy_a_category():
+    """`checklist_item_id` and `category` answer different questions. A file
+    tagged only to a custom item leaves the technical offer still missing."""
+    item = an_item()
+    result = assess(
+        issued=[],
+        submitted=[
+            submitted(C.COMMERCIAL_OFFER),
+            submitted(C.TBE_SHEET),
+            a_document(submitted_by_vendor_id="bdr_1", checklist_item_id=item.id),
+        ],
+        extra_items=[item],
+    )
+    assert result.missing == [C.TECHNICAL_OFFER]
+    assert result.missing_items == []
+
+
+def test_a_missing_category_and_a_missing_item_read_as_one_sentence():
+    """Both kinds in one reason, categories first, so a bidder is told
+    everything at once — the same rule `missing` already keeps for the three."""
+    result = assess(
+        issued=[],
+        submitted=[submitted(C.COMMERCIAL_OFFER), submitted(C.TBE_SHEET)],
+        extra_items=[an_item("Spare parts list")],
+    )
+    assert result.reason == (
+        "The bid is missing a technical offer and Spare parts list."
+    )
+
+
+def test_extras_default_to_none_so_every_existing_caller_is_unchanged():
+    result = assess(issued=[], submitted=[submitted(c) for c in THE_THREE])
+    assert result.admissible is True
+    assert result.missing_items == []
+
+
+def test_no_verdict_is_stored_on_a_checklist_item_either():
+    """The absence rule of `test_no_document_or_shortlist_entry_carries_a_verdict_field`,
+    extended to the record this change adds."""
+    assert "verdict" not in ChecklistItem.model_fields
+    assert "satisfied" not in ChecklistItem.model_fields
