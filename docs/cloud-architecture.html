@@ -1,0 +1,603 @@
+<title>RFQ Platform Cloud Architecture</title>
+<style>
+  :root{
+    --paper:#F1F4F6; --card:#FFFFFF; --sunk:#E7ECF0;
+    --ink:#16232E; --muted:#5B6B78; --faint:#8C9AA6;
+    --rule:#D5DDE4; --rule-strong:#B6C2CC;
+    --steel:#26597F; --copper:#9E5423; --verdigris:#26705F; --alarm:#9B2C2C;
+    --shadow:rgba(22,35,46,.07);
+    --serif:"Iowan Old Style","Palatino Linotype","Book Antiqua",Palatino,Georgia,serif;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+    --mono:ui-monospace,"Cascadia Mono","SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --paper:#0E151B; --card:#18212A; --sunk:#131C24;
+      --ink:#E2E9EF; --muted:#93A3B0; --faint:#6D7E8B;
+      --rule:#26323C; --rule-strong:#3A4A56;
+      --steel:#77AEDA; --copper:#DE9457; --verdigris:#5FBBA4; --alarm:#E8807F;
+      --shadow:rgba(0,0,0,.34);
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#0E151B; --card:#18212A; --sunk:#131C24;
+    --ink:#E2E9EF; --muted:#93A3B0; --faint:#6D7E8B;
+    --rule:#26323C; --rule-strong:#3A4A56;
+    --steel:#77AEDA; --copper:#DE9457; --verdigris:#5FBBA4; --alarm:#E8807F;
+    --shadow:rgba(0,0,0,.34);
+  }
+
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font-family:var(--sans); font-size:16px; line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:60rem; margin:0 auto; padding:clamp(1.5rem,4vw,3.5rem) clamp(1rem,4vw,2rem) 5rem}
+
+  .mast{border-bottom:2px solid var(--ink); padding-bottom:1.5rem; margin-bottom:2.5rem}
+  .eyebrow{
+    font-family:var(--mono); font-size:.7rem; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--steel); margin:0 0 .9rem;
+  }
+  h1{
+    font-family:var(--serif); font-weight:600; font-size:clamp(2rem,5vw,3rem);
+    line-height:1.1; margin:0 0 .8rem; text-wrap:balance; letter-spacing:-.01em;
+  }
+  .standfirst{font-size:1.075rem; color:var(--muted); margin:0; max-width:62ch}
+  .standfirst strong{color:var(--ink); font-weight:600}
+
+  .figs{
+    display:grid; grid-template-columns:repeat(auto-fit,minmax(9.5rem,1fr));
+    gap:1px; background:var(--rule); border:1px solid var(--rule);
+    margin:2.5rem 0; border-radius:2px; overflow:hidden;
+  }
+  .fig{background:var(--card); padding:1rem 1.1rem}
+  .fig dt{
+    font-family:var(--mono); font-size:.66rem; letter-spacing:.1em;
+    text-transform:uppercase; color:var(--muted); margin:0 0 .35rem;
+  }
+  .fig dd{
+    margin:0; font-family:var(--serif); font-size:1.5rem; font-weight:600;
+    font-variant-numeric:tabular-nums; line-height:1.15;
+  }
+  .fig small{display:block; font-family:var(--sans); font-size:.72rem; color:var(--faint); font-weight:400; margin-top:.2rem}
+
+  section{margin:3.5rem 0 0}
+  h2{
+    font-family:var(--serif); font-size:1.6rem; font-weight:600; margin:0 0 .4rem;
+    text-wrap:balance; letter-spacing:-.005em;
+  }
+  .h2note{color:var(--muted); margin:0 0 1.75rem; max-width:64ch; font-size:.95rem}
+  h2 .count{
+    font-family:var(--mono); font-size:.8rem; color:var(--steel);
+    vertical-align:.55em; margin-left:.5rem; letter-spacing:.06em;
+  }
+  p{max-width:65ch}
+
+  .comp{
+    background:var(--card); border:1px solid var(--rule);
+    border-left:3px solid var(--steel); border-radius:2px;
+    padding:1.15rem 1.3rem; margin-bottom:.85rem; box-shadow:0 1px 2px var(--shadow);
+  }
+  .comp.is-shared{border-left-color:var(--verdigris)}
+  .comp.is-build{border-left-color:var(--copper)}
+  .comp.is-absent{border-left-color:var(--rule-strong); background:var(--sunk); box-shadow:none}
+  .comp-head{display:flex; flex-wrap:wrap; align-items:baseline; gap:.5rem .75rem; margin-bottom:.55rem}
+  .comp-name{font-weight:650; font-size:1.02rem; margin:0}
+  .svc{
+    font-family:var(--mono); font-size:.73rem; color:var(--muted);
+    background:var(--sunk); padding:.12rem .45rem; border-radius:2px; white-space:nowrap;
+  }
+  .comp.is-absent .svc{background:var(--card)}
+  .price{
+    margin-left:auto; font-family:var(--mono); font-size:.78rem;
+    font-variant-numeric:tabular-nums; color:var(--copper); white-space:nowrap;
+  }
+  .comp p{margin:0 0 .55rem; font-size:.94rem}
+  .comp p:last-child{margin-bottom:0}
+  .without{
+    color:var(--muted); font-size:.89rem; padding-left:.85rem;
+    border-left:2px solid var(--rule); margin-top:.7rem !important;
+  }
+  .without b{
+    font-family:var(--mono); font-size:.68rem; letter-spacing:.09em; text-transform:uppercase;
+    color:var(--alarm); font-weight:600; display:block; margin-bottom:.15rem;
+  }
+  .comp.is-shared .without b{color:var(--verdigris)}
+
+  figure{margin:2rem 0; padding:0}
+  .diagram{
+    background:var(--card); border:1px solid var(--rule); border-radius:2px;
+    padding:1.25rem; overflow-x:auto;
+  }
+  .diagram svg{display:block; min-width:37rem; width:100%; height:auto}
+  figcaption{font-size:.82rem; color:var(--muted); margin-top:.65rem; max-width:64ch}
+
+  .tablewrap{overflow-x:auto; border:1px solid var(--rule); border-radius:2px; background:var(--card)}
+  table{border-collapse:collapse; width:100%; font-size:.9rem; min-width:32rem}
+  th,td{text-align:left; padding:.6rem .85rem; border-bottom:1px solid var(--rule)}
+  thead th{
+    font-family:var(--mono); font-size:.68rem; letter-spacing:.09em; text-transform:uppercase;
+    color:var(--muted); font-weight:600; background:var(--sunk);
+  }
+  tbody tr:last-child td{border-bottom:none}
+  td.num{text-align:right; font-family:var(--mono); font-variant-numeric:tabular-nums; white-space:nowrap}
+  tfoot td{font-weight:650; border-top:2px solid var(--rule-strong); background:var(--sunk)}
+
+  .caveat{
+    margin-top:3.5rem; padding:1.1rem 1.3rem; background:var(--sunk);
+    border:1px solid var(--rule); border-radius:2px; font-size:.9rem; color:var(--muted);
+  }
+  .caveat strong{color:var(--ink)}
+  .keypoint{
+    margin:1.5rem 0; padding:1.1rem 1.3rem; background:var(--card);
+    border:1px solid var(--rule); border-left:3px solid var(--copper); border-radius:2px;
+  }
+  .keypoint p{margin:0; font-size:.95rem}
+  .keypoint p + p{margin-top:.6rem}
+  code{font-family:var(--mono); font-size:.87em; background:var(--sunk); padding:.08rem .3rem; border-radius:2px}
+  .comp code{background:var(--paper)}
+  a{color:var(--steel)}
+  a:focus-visible{outline:2px solid var(--steel); outline-offset:2px}
+</style>
+
+<div class="wrap">
+
+  <header class="mast">
+    <p class="eyebrow">Deployment design · one platform, five always-running job workers</p>
+    <h1>RFQ Platform Cloud Architecture</h1>
+    <p class="standfirst">
+      Why every piece of this deployment exists, what it costs, and what breaks without it.
+      One platform for one organisation: <strong>six components that do the work</strong> and
+      eleven that support them.
+    </p>
+  </header>
+
+  <dl class="figs">
+    <div class="fig"><dt>Job workers</dt><dd>5<small>always running</small></dd></div>
+    <div class="fig"><dt>Containers at rest</dt><dd>7<small>5 workers + 2 web</small></dd></div>
+    <div class="fig"><dt>Typical month</dt><dd>$615<small>everything included</small></dd></div>
+    <div class="fig"><dt>Peak month</dt><dd>$1,385<small>a ceiling, not a forecast</small></dd></div>
+    <div class="fig"><dt>Per year</dt><dd>$7,383<small>at typical volume</small></dd></div>
+  </dl>
+
+  <section>
+    <h2>The shape of it</h2>
+    <p class="h2note">
+      Two tiers that never block each other. The web containers serve screens and finish in
+      milliseconds; the five job workers chew through tenders that take half an hour each.
+    </p>
+
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 0 720 340" role="img" aria-label="Users reach a load balancer, which sends them to two web containers. Those containers put jobs on a queue, and five always-running job workers take one tender each from it. Both tiers share one file store and one document store.">
+          <defs>
+            <marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+              <path d="M0,0 L8,4 L0,8 z" fill="var(--rule-strong)"/>
+            </marker>
+          </defs>
+          <g font-family="ui-monospace, Menlo, Consolas, monospace" font-size="11" fill="var(--ink)">
+
+            <rect x="14" y="14" width="120" height="42" rx="2" fill="var(--sunk)" stroke="var(--rule-strong)"/>
+            <text x="74" y="32" text-anchor="middle">50 users</text>
+            <text x="74" y="47" text-anchor="middle" font-size="9.5" fill="var(--muted)">~10 at once</text>
+
+            <rect x="164" y="14" width="150" height="42" rx="2" fill="var(--card)" stroke="var(--steel)" stroke-width="1.5"/>
+            <text x="239" y="32" text-anchor="middle">Load balancer</text>
+            <text x="239" y="47" text-anchor="middle" font-size="9.5" fill="var(--muted)">one entry point · TLS</text>
+            <line x1="134" y1="35" x2="158" y2="35" stroke="var(--rule-strong)" marker-end="url(#ar)"/>
+
+            <rect x="344" y="14" width="160" height="42" rx="2" fill="var(--sunk)" stroke="var(--rule-strong)"/>
+            <text x="424" y="32" text-anchor="middle">Web container × 2</text>
+            <text x="424" y="47" text-anchor="middle" font-size="9.5" fill="var(--muted)">screens + API</text>
+            <line x1="314" y1="35" x2="338" y2="35" stroke="var(--rule-strong)" marker-end="url(#ar)"/>
+
+            <rect x="534" y="14" width="172" height="42" rx="2" fill="var(--sunk)" stroke="var(--rule-strong)"/>
+            <text x="620" y="32" text-anchor="middle">Job queue</text>
+            <text x="620" y="47" text-anchor="middle" font-size="9.5" fill="var(--muted)">one message per tender</text>
+            <line x1="504" y1="35" x2="528" y2="35" stroke="var(--rule-strong)" marker-end="url(#ar)"/>
+
+            <!-- queue down into workers -->
+            <path d="M620 56 L620 76 L360 76 L360 96" stroke="var(--rule-strong)" fill="none" marker-end="url(#ar)"/>
+
+            <!-- worker band -->
+            <rect x="14" y="100" width="692" height="96" rx="3" fill="var(--card)" stroke="var(--copper)"/>
+            <text x="28" y="120" font-size="9.5" letter-spacing="1.2" fill="var(--copper)">FIVE JOB WORKERS — ALWAYS RUNNING</text>
+            <g>
+              <rect x="28" y="130" width="124" height="52" rx="2" fill="var(--sunk)" stroke="var(--rule-strong)"/>
+              <text x="90" y="150" text-anchor="middle">Worker 1</text>
+              <text x="90" y="165" text-anchor="middle" font-size="9.5" fill="var(--muted)">1 core · 4 GB</text>
+              <rect x="164" y="130" width="124" height="52" rx="2" fill="var(--sunk)" stroke="var(--rule-strong)"/>
+              <text x="226" y="150" text-anchor="middle">Worker 2</text>
+              <text x="226" y="165" text-anchor="middle" font-size="9.5" fill="var(--muted)">1 core · 4 GB</text>
+              <rect x="300" y="130" width="124" height="52" rx="2" fill="var(--sunk)" stroke="var(--rule-strong)"/>
+              <text x="362" y="150" text-anchor="middle">Worker 3</text>
+              <text x="362" y="165" text-anchor="middle" font-size="9.5" fill="var(--muted)">1 core · 4 GB</text>
+              <rect x="436" y="130" width="124" height="52" rx="2" fill="var(--sunk)" stroke="var(--rule-strong)"/>
+              <text x="498" y="150" text-anchor="middle">Worker 4</text>
+              <text x="498" y="165" text-anchor="middle" font-size="9.5" fill="var(--muted)">1 core · 4 GB</text>
+              <rect x="572" y="130" width="120" height="52" rx="2" fill="var(--sunk)" stroke="var(--rule-strong)"/>
+              <text x="632" y="150" text-anchor="middle">Worker 5</text>
+              <text x="632" y="165" text-anchor="middle" font-size="9.5" fill="var(--muted)">1 core · 4 GB</text>
+            </g>
+
+            <!-- storage -->
+            <g stroke="var(--rule-strong)" marker-end="url(#ar)">
+              <line x1="200" y1="196" x2="200" y2="222"/>
+              <line x1="500" y1="196" x2="500" y2="222"/>
+            </g>
+            <rect x="60" y="226" width="280" height="48" rx="2" fill="var(--card)" stroke="var(--rule-strong)"/>
+            <text x="200" y="246" text-anchor="middle">System file store</text>
+            <text x="200" y="261" text-anchor="middle" font-size="9.5" fill="var(--muted)">accounts · workflow · bidder registry</text>
+
+            <rect x="380" y="226" width="280" height="48" rx="2" fill="var(--card)" stroke="var(--rule-strong)"/>
+            <text x="520" y="246" text-anchor="middle">Document store</text>
+            <text x="520" y="261" text-anchor="middle" font-size="9.5" fill="var(--muted)">every drawing, datasheet, proposal</text>
+
+            <!-- outbound -->
+            <rect x="248" y="292" width="224" height="40" rx="2" fill="var(--sunk)" stroke="var(--verdigris)" stroke-dasharray="3 3"/>
+            <text x="360" y="309" text-anchor="middle" fill="var(--verdigris)">Model provider API</text>
+            <text x="360" y="324" text-anchor="middle" font-size="9.5" fill="var(--muted)">outbound only · charged per document</text>
+            <path d="M632 182 L632 292 L478 292" stroke="var(--rule-strong)" fill="none" marker-end="url(#ar)" stroke-dasharray="3 3"/>
+          </g>
+        </svg>
+      </div>
+      <figcaption>
+        The queue is the join between the two tiers. A web container's job is to accept the upload
+        and put a message on the queue — which takes milliseconds — so the browser gets an answer
+        immediately while the real work happens somewhere the user is not waiting.
+      </figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <h2>The six components that do the work<span class="count">$269/mo</span></h2>
+    <p class="h2note">
+      Everything a tender actually passes through, from the upload to the stored result.
+    </p>
+
+    <div class="comp is-build">
+      <div class="comp-head">
+        <h3 class="comp-name">Job worker container</h3>
+        <span class="svc">ECS Fargate · ×5 · 1 core / 4 GB</span>
+        <span class="price">$213 / mo</span>
+      </div>
+      <p>
+        The five always-running instances, and the reason this design exists. Each one takes a
+        single tender off the queue and works through it: unpack the vendor folders, classify each
+        document, send the text to be read, store the extracted facts. Five run in parallel, so
+        five tenders can be in flight at once.
+      </p>
+      <p class="without"><b>Why they cost the same idle as busy</b>
+        They are up around the clock whether work is arriving or not — that is what "always
+        running" means. On a quiet day four of the five sit warm and empty, and the bill is
+        identical. You are buying <em>readiness</em>: a tender that arrives at 4pm starts at 4pm
+        instead of waiting for a machine to boot.
+      </p>
+    </div>
+
+    <div class="comp">
+      <div class="comp-head">
+        <h3 class="comp-name">Web / API container</h3>
+        <span class="svc">ECS Fargate · ×2 · ½ core / 1 GB</span>
+        <span class="price">$36 / mo</span>
+      </div>
+      <p>
+        Everything people actually see. One process serves every screen and every <code>/api</code>
+        route from a single address — the front end is compiled into the same image, so there is no
+        separate web server to configure.
+      </p>
+      <p class="without"><b>Why two, not one</b>
+        A single container makes every deployment an outage and every crash a total one. Two is the
+        availability floor, not a capacity decision. It scales to four when a lot of people are on
+        the system at once.
+      </p>
+    </div>
+
+    <div class="comp is-build">
+      <div class="comp-head">
+        <h3 class="comp-name">Job queue</h3>
+        <span class="svc">SQS + dead-letter queue</span>
+        <span class="price">$0.20 / mo</span>
+      </div>
+      <p>
+        The handover between the two tiers, and the single most important component on this page
+        despite costing twenty cents. An upload becomes a message; a worker takes it when it has
+        capacity. If a worker dies mid-tender the message reappears and another one picks it up.
+      </p>
+      <p class="without"><b>What it is really solving</b>
+        A tender is roughly 102 model calls in sequence — about 34 minutes. A load balancer closes
+        an idle connection after 60 seconds. Without the queue the browser's request dies less than
+        two minutes in, and there is no way to finish the job at all.
+      </p>
+    </div>
+
+    <div class="comp is-build">
+      <div class="comp-head">
+        <h3 class="comp-name">System file store</h3>
+        <span class="svc">EFS · 50 GB</span>
+        <span class="price">$15 / mo</span>
+      </div>
+      <p>
+        The system of record: user accounts, the RFQ workflow, the bidder registry, and every
+        stored tender result. Shared by all seven containers, which is precisely why it cannot be
+        local disk — container storage disappears when the container does.
+      </p>
+      <p class="without"><b>The expensive tier</b>
+        Thirteen times the price per gigabyte of the document store beside it. That is the argument
+        for keeping only small, frequently-written files here and putting bulk documents in S3.
+      </p>
+    </div>
+
+    <div class="comp is-build">
+      <div class="comp-head">
+        <h3 class="comp-name">Document store</h3>
+        <span class="svc">S3 · 500 MB today</span>
+        <span class="price">$0.01 / mo</span>
+      </div>
+      <p>
+        Every uploaded drawing, datasheet and vendor proposal, stored under a fingerprint of its
+        contents so the same file uploaded twice takes one copy. At 500 MB it costs about a penny a
+        month; at 5 terabytes it would still cost less than the load balancer.
+      </p>
+      <p class="without"><b>Worth knowing about the 500 MB</b>
+        That is roughly eleven tenders. At the measured rate of paperwork arriving, the store passes
+        500 MB in the first week and reaches about 26 GB after a year — which is still under a
+        dollar a month. Storage is genuinely not where the money goes here.
+      </p>
+    </div>
+
+    <div class="comp">
+      <div class="comp-head">
+        <h3 class="comp-name">Logs</h3>
+        <span class="svc">CloudWatch Logs</span>
+        <span class="price">$5 / mo</span>
+      </div>
+      <p>
+        What happened, and when. Answers "why did this tender fail last Tuesday" without anyone
+        guessing. Ingestion is the cost, not storage — writing logs is what you pay for, keeping
+        them is nearly free.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h2>The eleven that support them<span class="count">$184/mo</span></h2>
+    <p class="h2note">
+      None of it processes a tender. All of it is needed for the six above to be reachable, secure
+      and recoverable.
+    </p>
+
+    <div class="comp is-shared">
+      <div class="comp-head">
+        <h3 class="comp-name">Load balancer</h3><span class="svc">Application Load Balancer</span>
+        <span class="price">$46 / mo</span>
+      </div>
+      <p>
+        The single public front door. Terminates HTTPS once, then sends each visitor to a web
+        container that is actually healthy — and stops sending traffic to one that is not, which is
+        what makes a crash invisible rather than an outage.
+      </p>
+    </div>
+
+    <div class="comp is-shared">
+      <div class="comp-head">
+        <h3 class="comp-name">Internet egress</h3><span class="svc">NAT Gateway ×2</span>
+        <span class="price">$68 / mo</span>
+      </div>
+      <p>
+        Lets the workers reach the model provider's API while remaining unreachable from the
+        internet themselves. Two, one per availability zone, so losing a zone does not stop every
+        tender at once.
+      </p>
+      <p class="without"><b>The line to question first</b>
+        The second-largest supporting cost, and charged by the hour whether traffic flows or not.
+        Dropping to one is the cheapest saving available here and the only one that buys a worse
+        system — not recommended.
+      </p>
+    </div>
+
+    <div class="comp is-shared">
+      <div class="comp-head">
+        <h3 class="comp-name">Private AWS access</h3><span class="svc">VPC endpoints ×8</span>
+        <span class="price">$58 / mo</span>
+      </div>
+      <p>
+        Direct private routes for pulling the container image, writing logs and reading secrets,
+        instead of pushing that traffic out through the NAT gateway and back. Pays for itself,
+        because image pulls and log shipping are most of what would otherwise be metered there.
+      </p>
+    </div>
+
+    <div class="comp is-shared">
+      <div class="comp-head">
+        <h3 class="comp-name">Backup</h3><span class="svc">AWS Backup</span>
+        <span class="price">$10 / mo</span>
+      </div>
+      <p>
+        Scheduled snapshots of the file store. That store holds award decisions and there is no
+        second copy anywhere, nor any way to re-derive it. The cheapest insurance on this page
+        against the most expensive possible failure.
+      </p>
+    </div>
+
+    <div class="comp is-shared">
+      <div class="comp-head">
+        <h3 class="comp-name">Secret storage</h3><span class="svc">Secrets Manager ×3</span>
+        <span class="price">$1 / mo</span>
+      </div>
+      <p>
+        Keeps the model provider's API key out of the container image. The project's own build file
+        spells out the alternative: anyone who can pull an image with a baked-in key can read that
+        key, and image layers cannot be edited afterwards — only replaced, and the key rotated.
+      </p>
+    </div>
+
+    <div class="comp is-shared">
+      <div class="comp-head">
+        <h3 class="comp-name">Image registry, network, scheduler, DNS, certificate, monitoring</h3>
+        <span class="svc">ECR · VPC · ECS · Route 53 · ACM · CloudWatch</span>
+        <span class="price">$1 / mo</span>
+      </div>
+      <p>
+        Grouped because together they cost about a dollar. One stored image that both the workers
+        and the web containers run — the only difference between them is the start command. The
+        private network the containers sit in with no public address. The scheduler that restarts
+        anything that dies. The hostname, the auto-renewing certificate, and the alarms.
+      </p>
+      <p class="without"><b>The alarm that matters</b>
+        Queue depth. A queue that stops draining means work is arriving faster than five workers can
+        clear it — which is the one signal that the "five" in this design has become too few.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Five things that must be built<span class="count">not purchasable</span></h2>
+    <p class="h2note">
+      Every component above can be bought. These cannot — the software is written today as a single
+      machine doing everything, and three of these gaps stop the design working at all.
+    </p>
+
+    <div class="comp is-build">
+      <div class="comp-head"><h3 class="comp-name">Move tender processing into the queue</h3>
+        <span class="svc">C1</span><span class="price" style="color:var(--alarm)">blocks launch</span></div>
+      <p>
+        Today a tender is processed inside the browser's own request, which cannot survive the 34
+        minutes it takes. It needs to become a queue message a worker picks up, with the browser
+        checking back for progress.
+      </p>
+    </div>
+
+    <div class="comp is-build">
+      <div class="comp-head"><h3 class="comp-name">Replace the in-process job lock</h3>
+        <span class="svc">C2</span><span class="price" style="color:var(--alarm)">blocks launch</span></div>
+      <p>
+        The guard that stops one tender being processed twice lives inside a single Python process,
+        so it cannot see the other four workers. With five running, two can start the same tender
+        and write over each other's results.
+      </p>
+    </div>
+
+    <div class="comp is-build">
+      <div class="comp-head"><h3 class="comp-name">Implement the S3 document store</h3>
+        <span class="svc">C3</span><span class="price" style="color:var(--alarm)">blocks launch</span></div>
+      <p>
+        Documents are written to local disk today, which no other container can read. The storage
+        interface was written expecting this, so it is a new implementation rather than a redesign.
+      </p>
+    </div>
+
+    <div class="comp is-build">
+      <div class="comp-head"><h3 class="comp-name">Decide how the bidder registry is written</h3>
+        <span class="svc">C4</span><span class="price">workaround available</span></div>
+      <p>
+        The registry is a SQLite file, and SQLite on shared network storage with several writers can
+        corrupt. The free fix is to route every registry write through one nominated worker; the
+        durable fix is a managed database, which adds cost.
+      </p>
+    </div>
+
+    <div class="comp is-build">
+      <div class="comp-head"><h3 class="comp-name">Add token metering</h3>
+        <span class="svc">C5</span><span class="price">billing only</span></div>
+      <p>
+        Nothing counts the tokens spent. The costs here can be budgeted, but not attributed to a
+        particular department, project or tender. This one does not block launch — it blocks
+        charging anyone for it.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Where the money goes</h2>
+    <p class="h2note">
+      Two halves that behave completely differently — and understanding the difference is more
+      useful than any single number here.
+    </p>
+
+    <div class="keypoint">
+      <p><strong>Cloud services are rented by the hour, like a hire car.</strong> An idle container
+      costs exactly what a busy one costs. The five workers are $213 a month whether they process
+      one tender or a hundred.</p>
+      <p><strong>Reading documents is charged per document, like postage.</strong> A quiet month
+      costs almost nothing on this half. It only rises when more paperwork genuinely arrives.</p>
+    </div>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>Block</th><th>What it is</th><th class="num">Typical</th><th class="num">Peak</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Five job workers</td><td>The always-running instances</td><td class="num">$213</td><td class="num">$213</td></tr>
+          <tr><td>Web / API tier</td><td>The screens and the API</td><td class="num">$36</td><td class="num">$144</td></tr>
+          <tr><td>Storage, queue, logs</td><td>File store, documents, queue, logging</td><td class="num">$21</td><td class="num">$83</td></tr>
+          <tr><td>Supporting services</td><td>Load balancer, egress, backup, registry</td><td class="num">$184</td><td class="num">$298</td></tr>
+          <tr><td>Reading the documents</td><td>Charged per document by the model provider</td><td class="num">$162</td><td class="num">$647</td></tr>
+        </tbody>
+        <tfoot>
+          <tr><td colspan="2">Total per month</td><td class="num">$615</td><td class="num">$1,385</td></tr>
+        </tfoot>
+      </table>
+    </div>
+
+    <p style="margin-top:1.1rem">
+      Notice the first row does not move. Because the five workers run around the clock either way,
+      a busy month costs more almost entirely because more documents arrived — not because the
+      servers worked harder. Peak assumes that rush is sustained for a whole month, which no month
+      ever does; it is a ceiling, not a forecast.
+    </p>
+    <p>
+      The largest single saving available is running the five workers on spare capacity, which cuts
+      that $213 by about 70% and costs nothing in design — an interrupted job already returns to the
+      queue for another worker to pick up.
+    </p>
+  </section>
+
+  <section>
+    <h2>What is deliberately absent</h2>
+    <p class="h2note">Things a reader may expect to find, and the reason each one is not here.</p>
+
+    <div class="comp is-absent">
+      <div class="comp-head"><h3 class="comp-name">A separate web server</h3><span class="svc">nginx</span></div>
+      <p>The application already serves the API and the front end from one process and one address. A proxy would add a hop and a second configuration to keep in step.</p>
+    </div>
+    <div class="comp is-absent">
+      <div class="comp-head"><h3 class="comp-name">A managed database</h3><span class="svc">RDS</span></div>
+      <p>Every store is a file today. This appears only if the bidder registry (C4) is solved by moving to a database rather than by narrowing who writes to it.</p>
+    </div>
+    <div class="comp is-absent">
+      <div class="comp-head"><h3 class="comp-name">A cache layer</h3><span class="svc">Redis</span></div>
+      <p>There is no cache in the software, and nothing here is read-heavy enough to need one. It would be a component to operate in exchange for no measurable gain.</p>
+    </div>
+    <div class="comp is-absent">
+      <div class="comp-head"><h3 class="comp-name">A content delivery network</h3><span class="svc">CloudFront</span></div>
+      <p>The front-end bundle is small and comes from the same address as the API. Worth adding when users are spread across continents.</p>
+    </div>
+    <div class="comp is-absent">
+      <div class="comp-head"><h3 class="comp-name">GPU capacity</h3><span class="svc">accelerated instances</span></div>
+      <p>No model runs on our own hardware. Every model call is an outbound request to the provider, which is why the workers need memory rather than processing power.</p>
+    </div>
+    <div class="comp is-absent">
+      <div class="comp-head"><h3 class="comp-name">Kubernetes</h3><span class="svc">EKS</span></div>
+      <p>Roughly $75/month of control plane plus real operational burden, to schedule seven containers that the simpler scheduler already handles.</p>
+    </div>
+    <div class="comp is-absent">
+      <div class="comp-head"><h3 class="comp-name">Separate infrastructure per team or project</h3><span class="svc">—</span></div>
+      <p>One organisation, one shared store. Who can see what is controlled inside the application, not by running separate copies of it.</p>
+    </div>
+  </section>
+
+  <div class="caveat">
+    <strong>How firm are these numbers.</strong> The document-reading figures are derived from
+    replaying a real tender through the production code, so the rates behind them are measured rather
+    than guessed. Everything about the cloud is an estimate: prices are US list prices copied by hand
+    and will go stale, and the workers are sized at one core and 4 GB each because a container's size
+    is fixed when it starts — so it has to be sized for the largest tender, not the average one.
+    Hosting in the UAE rather than Virginia adds roughly 15–20%. Every assumption is listed and
+    editable on the Assumptions tab of the accompanying workbook.
+  </div>
+
+</div>

@@ -6,8 +6,26 @@ Two pages and the four scripts that produced every number in them.
 |---|---|
 | [`cost-basis.html`](cost-basis.html) | What it costs to serve one tender, one credit, one seat. No margin. |
 | [`pricing-tiers.html`](pricing-tiers.html) | Three plans with margin applied, the per-seat overage, credit packs, sensitivity. |
+| [`consumption-model.md`](consumption-model.md) | Megabytes to credits to dollars, with every constant and its derivation. |
 
 Open either in a browser — they are self-contained and need no server.
+
+## Pitching it
+
+| File | Audience |
+|---|---|
+| [`pitch-deck-with-pricing.pptx`](pitch-deck-with-pricing.pptx) | Client. The 16-slide deck with three pricing slides added after slide 12. |
+| [`client-one-pager.html`](client-one-pager.html) | Client. The pilot offer as a leave-behind. |
+| [`talk-track.html`](talk-track.html) | **Internal only.** Sequence, objection handling, the floor and the walk-away. |
+
+The strategy is **pilot at a fixed fee, then value-price the renewal**: $7,500 for
+90 days credited back in full, then an annual plan sized from what the pilot
+actually measured. The pilot price is set to sit inside a manager's signing
+authority, not to recover cost — check the client's delegated-authority
+threshold before quoting it.
+
+`talk-track.html` carries three figures that must not reach a client, the
+cost-plus tier among them. Read its red box before using any of this.
 
 ## The scripts
 
