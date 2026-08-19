@@ -221,6 +221,41 @@ describe('RfqDetail', () => {
     expect(screen.getByText(/cannot be issued without one/)).toBeInTheDocument()
   })
 
+  // The server serialises a TbeTemplate as `{ rfq_id, items, source_rfq_reference }`
+  // and has no `criteria` key at all. This card read one and called `.map` on it,
+  // which threw and blanked the entire page — and only here, because the wizard
+  // steps guard with `?? []`. That is why every RFQ past the wizard's three
+  // stages (Bids Received onward) rendered nothing at all.
+  it('lists the checklist from the shape the server actually sends', async () => {
+    const d = detail()
+    d.tbe_template = {
+      rfq_id: 'rfq_abc',
+      items: [
+        { id: 'cli_1', label: 'Accuracy class', mandatory: true },
+        { id: 'cli_2', label: 'Turndown ratio', mandatory: false },
+      ],
+      source_rfq_reference: null,
+    }
+
+    await show(d)
+
+    expect(screen.getByText('Accuracy class')).toBeInTheDocument()
+    expect(screen.getByText('Turndown ratio')).toBeInTheDocument()
+  })
+
+  // A template that exists but lists nothing is not the same as no template,
+  // and an empty `<ul>` says neither. Every template in the store reads this way
+  // today, because `set_tbe_template` still passes the retired `criteria=` kwarg
+  // and Pydantic drops it — so this is the branch a reader actually meets.
+  it('says a template lists nothing rather than drawing an empty list', async () => {
+    const d = detail()
+    d.tbe_template = { rfq_id: 'rfq_abc', items: [], source_rfq_reference: null }
+
+    await show(d)
+
+    expect(screen.getByText(/lists no items yet/i)).toBeInTheDocument()
+  })
+
   it('shows the clarification register read-only, with circulation stated', async () => {
     const base = {
       rfq_id: 'rfq_abc',

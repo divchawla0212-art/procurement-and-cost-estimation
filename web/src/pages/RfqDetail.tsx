@@ -295,11 +295,18 @@ function TbeCard({ data }: { data: RfqDetailData }) {
     <Card title="TBE template">
       {!tbe ? (
         <Empty>No TBE template attached — the RFQ cannot be issued without one.</Empty>
+      ) : tbe.items.length === 0 ? (
+        // Attached but listing nothing is a third state, and an empty `<ul>`
+        // renders identically to a card that failed to load. Say it.
+        <Empty>This template lists no items yet.</Empty>
       ) : (
         <>
           <ul>
-            {tbe.criteria.map((c) => (
-              <li key={c}>{c}</li>
+            {tbe.items.map((item) => (
+              <li key={item.id}>
+                {item.label}
+                {item.mandatory ? null : <span className="muted"> · optional</span>}
+              </li>
             ))}
           </ul>
           {tbe.source_rfq_reference ? (

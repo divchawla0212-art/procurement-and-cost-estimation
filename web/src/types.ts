@@ -409,9 +409,22 @@ export interface VendorContactSummary {
   matched: number
 }
 
+/** One line a buyer added to an RFQ's eligibility checklist. */
+export interface ChecklistItem {
+  id: string
+  label: string
+  mandatory: boolean
+}
+
 export interface TbeTemplate {
   rfq_id: string
-  criteria: string[]
+  /** The buyer's own additions. This was `criteria: string[]` until the
+   *  checklist landed server-side; the key is **gone** from the payload, not
+   *  renamed alongside a compatibility alias. Declaring the old name here is
+   *  what let `RfqDetail` call `.map` on `undefined` and blank the page while
+   *  `tsc` stayed green — a type that outlives its field hides exactly the
+   *  bug it should catch. */
+  items: ChecklistItem[]
   source_rfq_reference: string | null
 }
 
