@@ -318,7 +318,44 @@ The web suite is separate and not part of either row above — both rows are
 `python -m pytest` counts. Run it with `npm test` under `web/` (vitest,
 non-watching, exits non-zero on failure); `npm run build` also type-checks the
 test files, since `web/tsconfig.app.json` includes `src`. CI runs both, in the
-`web` job of the same workflow. It stands at **335 passed** across 23 files.
+`web` job of the same workflow. It stands at **379 passed** across 24 files,
+measured on 2026-08-19. The 335 this line carried before was stale by 36 —
+the count is only worth anything measured, which is the same argument the two
+Python rows make above.
+
+The last **8** are the enquiry card's zero state, all in `SendEnquiry.test.tsx`.
+A preview that reaches nobody used to render a live `Send to 0 vendors` button
+under `This sends real email to 0 vendors.` — a control whose only honest
+outcome is nothing happening, sitting where the action goes, on precisely the
+screen a buyer reaches once the enquiry has gone out. There is now no send
+control for nobody: the card says which audience reached nobody, and offers the
+one act that would change it.
+
+**That resend is one press, and it is the one place a send happens without the
+addresses being on screen first.** Under `unsent` an already-sent vendor's row
+shows why they are out of scope, not the mailbox they would be written to, so a
+contact sheet re-uploaded since the first send changes where the mail goes
+without this table showing it. It was chosen deliberately over
+widening-then-previewing — the vendors are the ones already listed above, and
+the second press was the thing being removed — and the send re-previews
+afterwards, so the table is never left describing a state the press just
+changed.
+
+Two of the eight assert an **absence** — no `Send to 0` control, and no resend
+offered when `all` is already the audience — so both passed the moment they were
+written. All eight were watched failing against the previous component
+(`git show HEAD:web/src/pages/wizard/SendEnquiry.tsx` swapped in), which is the
+only thing that makes an absence-assertion known to be wired to anything.
+
+Three existing tests changed with them, and the reason is the same in each: they
+previewed an **empty** recipient list and then clicked a send control that no
+longer exists there. One of the three had been asserting that `smtp` says "real
+email" against a preview reaching nobody — a sentence that is now simply not
+rendered, because promising real mail to zero people is the defect. None of the
+three assertions moved; only the fixtures they run against.
+
+No server change: `AUDIENCES`, `resend` and the append-only `EnquirySend` rule
+already did all of this, and the Python suite is untouched by it.
 
 The last **12** are the collapsible card: 5 in `primitives.test.tsx`, which had
 no `Card` block at all, and 7 in `ItemDetail.test.tsx`. The item screen's four

@@ -4,6 +4,15 @@ import { previewEnquiry, sendEnquiry } from '../../api'
 import type { EnquiryAudience } from '../../types'
 import type { StepProps } from './types'
 
+/** What each audience is called on screen. The browser spells the labels; the
+ *  server owns the values, which is why the picker's `value`s come from
+ *  `EnquiryAudience` and never from a string typed here. */
+const AUDIENCE_LABELS: Record<EnquiryAudience, string> = {
+  unsent: 'vendors not yet sent to',
+  outdated: 'vendors without the latest documents',
+  all: 'everyone on the shortlist',
+}
+
 /**
  * Preview the recipients, then send — and the send control does not exist
  * until a preview is on screen.
@@ -18,6 +27,24 @@ import type { StepProps } from './types'
  * string with an interpolated word — "writes to the outbox" and "sends real
  * email" must not read alike, or a real tender goes out during a demo and
  * nobody notices.
+ *
+ * **There is no send control for nobody.** A preview that reaches zero
+ * vendors used to render a live `Send to 0 vendors` button under
+ * `This sends real email to 0 vendors.` — a control whose only honest
+ * outcome is nothing happening, sitting where the action goes, on exactly
+ * the screen a buyer reaches when every vendor has already been sent. The
+ * zero case now says so in a sentence and offers the only thing that would
+ * change it: sending the enquiry again to the whole shortlist.
+ *
+ * **That resend is one press, and it is the one place a send happens without
+ * the addresses being on screen first.** Under `unsent` an already-sent
+ * vendor's row shows the reason they are out of scope, not the mailbox they
+ * would be written to, so a contact sheet re-uploaded since the first send
+ * changes where the mail goes without this table showing it. Chosen
+ * deliberately over widening-then-previewing: the vendors are the same
+ * vendors, listed above, and the second press was the thing being removed.
+ * The send always re-previews afterwards, so the table is never left
+ * describing a state that has since changed.
  *
  * **The preview does not go through `run`.** `run`'s own docstring says
  * "every write goes through here" — a preview stores nothing (asserted
@@ -53,6 +80,23 @@ export function SendEnquiry({ data, run, busy }: Omit<StepProps, 'tick'>): JSX.E
     }
   }
 
+  /** Send, then re-read who is left.
+   *
+   *  `run` swallows the server's refusal into the wizard's banner, so it
+   *  cannot be asked whether the send landed — the flag is set beside the
+   *  `setResult` that only a successful call reaches. Without it a refused
+   *  send would move the picker to an audience nothing was sent to. */
+  async function send(pick: EnquiryAudience) {
+    let sent = false
+    await run(async () => {
+      setResult(await sendEnquiry(data.rfq.id, pick))
+      sent = true
+    })
+    if (!sent) return
+    setAudience(pick)
+    await loadPreview(pick)
+  }
+
   /* The control renders in **both** branches, and that is the whole point.
      It used to live only before the preview, so the moment a buyer discovered
      everybody had already been sent — which is exactly when they need to widen
@@ -72,12 +116,25 @@ export function SendEnquiry({ data, run, busy }: Omit<StepProps, 'tick'>): JSX.E
           if (preview !== null) void loadPreview(pick)
         }}
       >
-        <option value="unsent">vendors not yet sent to</option>
-        <option value="outdated">vendors without the latest documents</option>
-        <option value="all">everyone on the shortlist</option>
+        {(Object.keys(AUDIENCE_LABELS) as EnquiryAudience[]).map((value) => (
+          <option key={value} value={value}>
+            {AUDIENCE_LABELS[value]}
+          </option>
+        ))}
       </select>
     </label>
   )
+
+  // Nobody in scope, but somebody is on the shortlist and the audience is
+  // narrower than everyone: widening is the one action that would change the
+  // answer, so it is the only one offered. With `all` already on screen there
+  // is nothing left to widen to — every remaining row is a missing address or
+  // an oversized package, and neither is fixed from this card.
+  const canResendToEveryone =
+    preview !== null &&
+    reachable === 0 &&
+    preview.recipients.length > 0 &&
+    preview.audience !== 'all'
 
   return (
     <>
@@ -99,7 +156,25 @@ export function SendEnquiry({ data, run, busy }: Omit<StepProps, 'tick'>): JSX.E
         <>
           {picker}
           {previewError ? <p className="warn">{previewError}</p> : null}
-          {preview.transport === 'smtp' ? (
+          {reachable === 0 ? (
+            <>
+              <p className="muted">
+                {preview.recipients.length === 0
+                  ? 'Nobody is on the shortlist for this enquiry.'
+                  : `Nobody is in scope for “${AUDIENCE_LABELS[preview.audience]}” — ` +
+                    'every vendor below has a reason beside them.'}
+              </p>
+              {canResendToEveryone && preview.transport === 'smtp' ? (
+                <p className="warn">
+                  Sending again writes real email to every vendor below with an
+                  address on file.
+                </p>
+              ) : null}
+              {canResendToEveryone && preview.transport !== 'smtp' ? (
+                <p className="muted">This writes to the outbox. Nobody receives anything.</p>
+              ) : null}
+            </>
+          ) : preview.transport === 'smtp' ? (
             <p className="warn">This sends real email to {reachable} vendors.</p>
           ) : (
             <p className="muted">This writes to the outbox. Nobody receives anything.</p>
@@ -128,18 +203,34 @@ export function SendEnquiry({ data, run, busy }: Omit<StepProps, 'tick'>): JSX.E
               </tbody>
             </table>
           </div>
-          <button
-            type="button"
-            className="btn"
-            disabled={busy}
-            onClick={() =>
-              run(async () => setResult(await sendEnquiry(data.rfq.id, preview.audience)))
-            }
-          >
-            {preview.audience === 'unsent' ? 'Send to' : 'Send again to'} {reachable} vendors
-          </button>
+          {reachable === 0 ? (
+            canResendToEveryone ? (
+              <button
+                type="button"
+                className="btn"
+                disabled={busy}
+                onClick={() => void send('all')}
+              >
+                Send again to everyone on the shortlist
+              </button>
+            ) : null
+          ) : (
+            <button
+              type="button"
+              className="btn"
+              disabled={busy}
+              onClick={() => void send(preview.audience)}
+            >
+              {preview.audience === 'unsent' ? 'Send to' : 'Send again to'} {reachable} vendors
+            </button>
+          )}
         </>
       )}
+      {result ? (
+        <p className="muted">
+          Sent to {result.sent.length} vendor{result.sent.length === 1 ? '' : 's'}.
+        </p>
+      ) : null}
       {result?.skipped.length ? (
         <ul>
           {result.skipped.map((s) => (

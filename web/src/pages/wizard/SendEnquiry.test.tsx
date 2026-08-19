@@ -79,14 +79,30 @@ describe('SendEnquiry', () => {
   it('says the outbox and real mail in different words', async () => {
     // The two must not read identically — that is how a real tender goes out
     // during a demo.
-    vi.mocked(previewEnquiry).mockResolvedValue({ transport: 'smtp', recipients: [] , audience: 'unsent', audiences: ['unsent', 'outdated', 'all'] })
+    // A reachable vendor, because an empty preview now says nobody is on the
+    // shortlist rather than promising real mail to zero people.
+    vi.mocked(previewEnquiry).mockResolvedValue({
+      transport: 'smtp',
+      recipients: [
+        { shortlist_entry_id: 'sle_0', vendor_name: 'Galfar', to: ['sales@galfar.example'], skip_reason: null },
+      ],
+      audience: 'unsent',
+      audiences: ['unsent', 'outdated', 'all'],
+    })
     render(<SendEnquiry {...props()} />)
     fireEvent.click(screen.getByRole('button', { name: /Preview recipients/ }))
     expect(await screen.findByText(/real email/i)).toBeInTheDocument()
   })
 
   it('says the outbox in different words from real mail', async () => {
-    vi.mocked(previewEnquiry).mockResolvedValue({ transport: 'outbox', recipients: [], audience: 'unsent', audiences: ['unsent', 'outdated', 'all'] })
+    vi.mocked(previewEnquiry).mockResolvedValue({
+      transport: 'outbox',
+      recipients: [
+        { shortlist_entry_id: 'sle_0', vendor_name: 'Galfar', to: ['sales@galfar.example'], skip_reason: null },
+      ],
+      audience: 'unsent',
+      audiences: ['unsent', 'outdated', 'all'],
+    })
     render(<SendEnquiry {...props()} />)
     fireEvent.click(screen.getByRole('button', { name: /Preview recipients/ }))
     expect(await screen.findByText(/outbox/i)).toBeInTheDocument()
@@ -94,9 +110,13 @@ describe('SendEnquiry', () => {
   })
 
   it('renders every skipped vendor with its reason, not a count', async () => {
+    // One reachable vendor beside the skipped one: with nobody reachable there
+    // is no send control at all any more, and this test is about what the
+    // *result* renders, not about the empty case.
     vi.mocked(previewEnquiry).mockResolvedValue({
       transport: 'outbox',
       recipients: [
+        { shortlist_entry_id: 'sle_0', vendor_name: 'Galfar', to: ['sales@galfar.example'], skip_reason: null },
         { shortlist_entry_id: 'sle_1', vendor_name: 'Nowhere Trading', to: null, skip_reason: 'No address on file for Nowhere Trading.' },
       ],
       audience: 'unsent',
@@ -116,7 +136,14 @@ describe('SendEnquiry', () => {
   })
 
   it('calls the two routes with the RFQ id', async () => {
-    vi.mocked(previewEnquiry).mockResolvedValue({ transport: 'outbox', recipients: [], audience: 'unsent', audiences: ['unsent', 'outdated', 'all'] })
+    vi.mocked(previewEnquiry).mockResolvedValue({
+      transport: 'outbox',
+      recipients: [
+        { shortlist_entry_id: 'sle_0', vendor_name: 'Galfar', to: ['sales@galfar.example'], skip_reason: null },
+      ],
+      audience: 'unsent',
+      audiences: ['unsent', 'outdated', 'all'],
+    })
     vi.mocked(sendEnquiry).mockResolvedValue({ sent: [], skipped: [] })
     render(<SendEnquiry {...props()} />)
 
@@ -217,5 +244,118 @@ describe('SendEnquiry audience', () => {
 
     expect(await screen.findByRole('button', { name: /^Send to 1 vendors/ })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Send again/ })).toBeNull()
+  })
+})
+
+/** The screen a buyer reaches once the enquiry has gone out: every vendor is
+ *  already sent, the narrow default resolves to nobody, and what used to sit
+ *  here was a live `Send to 0 vendors` button under a warning that real email
+ *  was about to reach zero people. */
+describe('SendEnquiry with nobody in scope', () => {
+  const alreadySent = {
+    shortlist_entry_id: 'sle_1',
+    vendor_name: 'Galfar',
+    to: null,
+    skip_reason: 'Galfar has already been sent this enquiry.',
+  }
+
+  const preview = (over: Partial<EnquiryPreview> = {}): EnquiryPreview => ({
+    transport: 'outbox',
+    recipients: [alreadySent],
+    audience: 'unsent',
+    audiences: ['unsent', 'outdated', 'all'],
+    ...over,
+  })
+
+  async function previewed(over: Partial<EnquiryPreview> = {}) {
+    vi.mocked(previewEnquiry).mockResolvedValue(preview(over))
+    render(<SendEnquiry {...props()} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Preview recipients' }))
+    return screen.findByText('Galfar')
+  }
+
+  // The whole point of the change: a control whose only honest outcome is
+  // nothing happening does not render, and neither does the count of nobody.
+  it('offers no send-to-zero control and no count of zero', async () => {
+    await previewed()
+
+    expect(screen.queryByRole('button', { name: /Send to 0/ })).toBeNull()
+    expect(screen.queryByText(/0 vendors/)).toBeNull()
+  })
+
+  it('says nobody is in scope, naming the audience that reached nobody', async () => {
+    await previewed()
+
+    expect(screen.getByText(/Nobody is in scope for/)).toHaveTextContent(
+      'vendors not yet sent to',
+    )
+  })
+
+  // One press. Not "widen the picker, wait for a preview, then press send" --
+  // the vendors are the ones already listed above.
+  it('sends to everyone on the shortlist in one press', async () => {
+    await previewed()
+
+    fireEvent.click(screen.getByRole('button', { name: /Send again to everyone/ }))
+
+    await waitFor(() => expect(sendEnquiry).toHaveBeenCalledWith('rfq_1', 'all'))
+  })
+
+  it('says a one-press resend is real mail in different words from the outbox', async () => {
+    await previewed({ transport: 'smtp' })
+
+    expect(screen.getByText(/writes real email to every vendor below/)).toBeInTheDocument()
+    expect(screen.queryByText(/Nobody receives anything/)).toBeNull()
+  })
+
+  // Re-reading after the send is what keeps the table from describing a state
+  // that the press just changed -- and it is also the buyer's confirmation
+  // that the vendors above are now sent.
+  it('re-previews the audience it sent to, so the table is not left stale', async () => {
+    await previewed()
+
+    fireEvent.click(screen.getByRole('button', { name: /Send again to everyone/ }))
+
+    await waitFor(() => expect(previewEnquiry).toHaveBeenLastCalledWith('rfq_1', 'all'))
+  })
+
+  it('reports how many vendors the send actually reached', async () => {
+    vi.mocked(sendEnquiry).mockResolvedValue({
+      sent: [{ vendor_name: 'Galfar' }] as never,
+      skipped: [],
+    })
+    await previewed()
+
+    fireEvent.click(screen.getByRole('button', { name: /Send again to everyone/ }))
+
+    expect(await screen.findByText('Sent to 1 vendor.')).toBeInTheDocument()
+  })
+
+  // Nothing left to widen to: every remaining row is a missing address or an
+  // oversized package, and neither is fixed by sending again.
+  it('offers no resend when everyone on the shortlist is already the audience', async () => {
+    await previewed({
+      audience: 'all',
+      recipients: [
+        {
+          shortlist_entry_id: 'sle_1',
+          vendor_name: 'Galfar',
+          to: null,
+          skip_reason: 'No address on file for Galfar.',
+        },
+      ],
+    })
+
+    expect(screen.queryByRole('button', { name: /^Send/ })).toBeNull()
+  })
+
+  it('says the shortlist is empty rather than that nobody is in scope', async () => {
+    vi.mocked(previewEnquiry).mockResolvedValue(preview({ recipients: [] }))
+    render(<SendEnquiry {...props()} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Preview recipients' }))
+
+    expect(await screen.findByText(/Nobody is on the shortlist/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Send/ })).toBeNull()
   })
 })
