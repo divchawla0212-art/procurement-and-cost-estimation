@@ -810,6 +810,15 @@ table.grid.rank .rank-row:hover td { background: var(--accent-soft); }
   border-color: var(--accent-ink);
 }
 .btn-ink { background: var(--ink); border-color: var(--ink); color: #fff; }
+/* The end-of-page forward control. Deliberately larger and heavier than any
+   button inside a card: it is the last thing on the screen and has to read as
+   the way onward rather than as one more action in a row of them. */
+.btn-lg { font-size: 1rem; font-weight: 700; padding: 0.7rem 1.4rem; border-radius: var(--radius); }
+.page-next { display: flex; justify-content: flex-end; margin: 1.6rem 0 0.4rem; }
+/* Several at once -- an item covered by more than one RFQ gets one button per
+   RFQ, so they wrap rather than overflowing the page sideways. */
+.page-next { flex-wrap: wrap; gap: 0.6rem; }
+
 .btn-ink:hover:not(:disabled) { background: var(--ink-2); border-color: var(--ink-2); }
 .btn-ghost { background: transparent; border-color: transparent; color: var(--accent-ink); }
 .btn-ghost:hover:not(:disabled) { background: var(--accent-soft); }

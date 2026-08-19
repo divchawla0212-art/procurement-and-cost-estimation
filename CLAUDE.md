@@ -318,10 +318,56 @@ The web suite is separate and not part of either row above — both rows are
 `python -m pytest` counts. Run it with `npm test` under `web/` (vitest,
 non-watching, exits non-zero on failure); `npm run build` also type-checks the
 test files, since `web/tsconfig.app.json` includes `src`. CI runs both, in the
-`web` job of the same workflow. It stands at **379 passed** across 24 files,
+`web` job of the same workflow. It stands at **394 passed** across 25 files,
 measured on 2026-08-19. The 335 this line carried before was stale by 36 —
 the count is only worth anything measured, which is the same argument the two
 Python rows make above.
+
+The last **15** are the end-of-page forward control: 8 in `nav.test.ts` for
+`nextPage`, 4 in the new `components/PageNext.test.tsx` and 3 in
+`ItemDetail.test.tsx`.
+
+**`NAV` moved out of `App.tsx` into `nav.ts`, and that is the whole design.**
+The rail down the side of the page and the button at the foot of it answer the
+same question — what comes after this screen — so they read one ordered table
+rather than two. A hand-written list of destinations beside an ordered one is a
+list that disagrees with it after the first insertion, which is why `nextPage`
+walks `NAV` and why every test above is written as a *position* in that table
+rather than as a pair of strings.
+
+**`null` means no control, never a disabled one.** `nextPage` answers `null`
+for a next screen that cannot be reached — no slug, or `needsReview` with no
+stored extraction — reusing `reviewReachable`, the rail's own rule. A large
+primary at the foot of the page that cannot be pressed is the `Send to 0
+vendors` defect wearing different clothes, and `renders nothing at all when
+there is nowhere to go` is the assertion that fails if anyone renders it
+`disabled` instead. Both `null` branches in `nextPage` were watched failing —
+by turning the `to === null` refusal into a `continue` and deleting the
+`needsReview` line — because an absence-assertion nobody has seen fail is not
+known to be wired to anything.
+
+Two screens opt out, and they are the reason `<PageNext />` is rendered per
+route in `routes.tsx` rather than once around `<Routes>`: the **wizard**
+already ends with its gate card (`Mark Issued complete → Clarifications`), and
+a second primary under it would compete with the real forward action — while
+`/rfqs/:id` is the wizard *or* the read-only detail depending on a stage that
+table has to fetch, so nothing outside it can tell the two apart. The **item
+screen** ends with its own controls instead, one per covering RFQ: that next
+step is not a rail entry, and an item covered twice has two next steps with no
+rule a reader could see to pick between them.
+
+Those replaced the one-character `›` control that used to sit in each row of
+the covering-RFQ table — the same act, the same accessible name (the
+reference, never the glyph), moved to where the forward control on every other
+screen now is. `leaves no open control inside the table rows` is what makes it
+a move rather than an addition: two buttons opening one RFQ is the same way in
+twice, and it would break every `getByRole` query for that name. It was
+verified against the previous component.
+
+The geometry was measured in a browser rather than assumed, since jsdom sees
+none of it: 48px tall, weight 700, solid accent, flush to the right edge of
+`.wrap`, 26px clear of the card above, and no sideways scroll on the widest
+screen in the app.
 
 The last **8** are the enquiry card's zero state, all in `SendEnquiry.test.tsx`.
 A preview that reaches nobody used to render a live `Send to 0 vendors` button

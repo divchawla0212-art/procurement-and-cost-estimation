@@ -6,6 +6,7 @@ import { reviewReachable } from './nav'
 import type { ProjectSummary } from './types'
 import type { User } from './auth/context'
 import { ErrorState, LoadingState } from './components/primitives'
+import { PageNext } from './components/PageNext'
 import { Projects } from './pages/Projects'
 import { ProjectDetail } from './pages/ProjectDetail'
 import { ItemDetail } from './pages/ItemDetail'
@@ -35,6 +36,11 @@ import { Admin } from './pages/Admin'
  * unifying them is phase 2, and until then the paths say so.
  */
 export interface AppRoutesProps {
+  /** Where the end-of-page control goes from the current address, resolved by
+   *  `nav.nextPage` in `App` — where the rail's own `slug` and `has_results`
+   *  already are, so the button and the rail cannot disagree about what comes
+   *  next or about whether it can be reached. `null` renders no control. */
+  next: { to: string; label: string } | null
   /** The ingestion project roster, from `App`'s loader. `null` while in flight. */
   projects: ProjectSummary[] | null
   loading: boolean
@@ -44,6 +50,13 @@ export interface AppRoutesProps {
 }
 
 export function AppRoutes(props: AppRoutesProps): JSX.Element {
+  /* Rendered per route rather than once around `<Routes>`, because two screens
+     opt out and neither can be told apart from the outside: the item screen
+     ends with its own controls into the RFQs covering it, and `/rfqs/:id` is
+     the wizard *or* the read-only detail depending on a stage this table has
+     to fetch. Listing it per route is a line each and cannot go wrong quietly
+     -- the same argument `NAV`'s `matches` makes against a prefix rule. */
+  const Next = () => <PageNext next={props.next} />
   return (
     <Routes>
       {/* `replace` on every redirect in this table. A redirect that pushes puts
@@ -53,22 +66,22 @@ export function AppRoutes(props: AppRoutesProps): JSX.Element {
       <Route path="/" element={<Navigate to="/projects" replace />} />
 
       {/* ---- RFQ process: the workflow store, addressed by id ---- */}
-      <Route path="/projects" element={<Projects />} />
-      <Route path="/projects/:projectId" element={<ProjectDetailRoute />} />
+      <Route path="/projects" element={<><Projects /><Next /></>} />
+      <Route path="/projects/:projectId" element={<><ProjectDetailRoute /><Next /></>} />
       <Route path="/projects/:projectId/items/:itemId" element={<ItemDetailRoute />} />
-      <Route path="/rfqs" element={<RfqWorkflow />} />
-      <Route path="/rfqs/:rfqId" element={<RfqRoute />} />
+      <Route path="/rfqs" element={<><RfqWorkflow /><Next /></>} />
+      <Route path="/rfqs/:rfqId" element={<RfqRoute next={props.next} />} />
 
       {/* ---- Bid evaluation: the ingestion store, addressed by slug ---- */}
-      <Route path="/bid-sets" element={<DashboardRoute {...props} />} />
-      <Route path="/bid-sets/new" element={<SetupRoute {...props} />} />
-      <Route path="/bid-sets/:slug/setup" element={<SetupRoute {...props} />} />
+      <Route path="/bid-sets" element={<><DashboardRoute {...props} /><Next /></>} />
+      <Route path="/bid-sets/new" element={<><SetupRoute {...props} /><Next /></>} />
+      <Route path="/bid-sets/:slug/setup" element={<><SetupRoute {...props} /><Next /></>} />
       <Route
         path="/bid-sets/:slug/extraction"
         element={
           <RequireProject {...props}>
             {(project) => (
-              <ExtractionStatus slug={project.slug} projectName={project.name} />
+              <><ExtractionStatus slug={project.slug} projectName={project.name} /><Next /></>
             )}
           </RequireProject>
         }
@@ -77,7 +90,7 @@ export function AppRoutes(props: AppRoutesProps): JSX.Element {
         path="/bid-sets/:slug/overview"
         element={
           <RequireResults {...props}>
-            {(project) => <OverviewRoute project={project} />}
+            {(project) => <><OverviewRoute project={project} /><Next /></>}
           </RequireResults>
         }
       />
@@ -85,7 +98,7 @@ export function AppRoutes(props: AppRoutesProps): JSX.Element {
         path="/bid-sets/:slug/matrix"
         element={
           <RequireResults {...props}>
-            {(project) => <MatrixRoute project={project} />}
+            {(project) => <><MatrixRoute project={project} /><Next /></>}
           </RequireResults>
         }
       />
@@ -94,11 +107,14 @@ export function AppRoutes(props: AppRoutesProps): JSX.Element {
         element={
           <RequireResults {...props}>
             {(project) => (
-              <ComparativeStatement
-                slug={project.slug}
-                projectName={project.name}
-                status={project.status}
-              />
+              <>
+                <ComparativeStatement
+                  slug={project.slug}
+                  projectName={project.name}
+                  status={project.status}
+                />
+                <Next />
+              </>
             )}
           </RequireResults>
         }
@@ -108,7 +124,10 @@ export function AppRoutes(props: AppRoutesProps): JSX.Element {
         path="/admin"
         element={
           <RequireAdmin user={props.user}>
-            <Admin projects={props.projects ?? []} meId={props.user.id} />
+            <>
+              <Admin projects={props.projects ?? []} meId={props.user.id} />
+              <Next />
+            </>
           </RequireAdmin>
         }
       />
@@ -227,7 +246,7 @@ function ItemDetailRoute() {
  */
 const WIZARD_RANGE = ['Shortlisting', 'Issued', 'Clarifications']
 
-function RfqRoute() {
+function RfqRoute({ next }: { next: AppRoutesProps['next'] }) {
   const { rfqId = '' } = useParams<{ rfqId: string }>()
   const navigate = useNavigate()
   const { data, error, loading } = useAsync(() => fetchRfqRoster(), [])
@@ -242,13 +261,21 @@ function RfqRoute() {
   if (!open || WIZARD_RANGE.includes(open.stage)) {
     return <RfqWizard rfqId={rfqId} stages={data.stages} onBack={() => navigate('/rfqs')} />
   }
+  /* The wizard above gets no end-of-page control and the read-only detail
+     does. The wizard already ends with its gate card -- `Mark Issued complete
+     -> Clarifications` -- which is the forward action for that screen and is
+     already a primary; a second one under it would compete with the real one
+     and send the reader somewhere the process does not. */
   return (
-    <RfqDetail
-      rfqId={rfqId}
-      stages={data.stages}
-      stageCodes={data.stage_codes}
-      onBack={() => navigate('/rfqs')}
-    />
+    <>
+      <RfqDetail
+        rfqId={rfqId}
+        stages={data.stages}
+        stageCodes={data.stage_codes}
+        onBack={() => navigate('/rfqs')}
+      />
+      <PageNext next={next} />
+    </>
   )
 }
 

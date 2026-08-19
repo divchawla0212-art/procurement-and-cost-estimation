@@ -81,12 +81,17 @@ function renderAt(
     loading?: boolean
     error?: string | null
     user?: User
+    next?: { to: string; label: string } | null
   } = {},
 ) {
   return render(
     <MemoryRouter initialEntries={[path]}>
       <LocationProbe />
       <AppRoutes
+        // Resolved by `App` from `nav.nextPage`; these tests are about which
+        // screen a URL mounts, so the end-of-page control is off unless a case
+        // asks for it.
+        next={opts.next ?? null}
         projects={opts.projects === undefined ? [HALIBA, BAB] : opts.projects}
         loading={opts.loading ?? false}
         error={opts.error ?? null}

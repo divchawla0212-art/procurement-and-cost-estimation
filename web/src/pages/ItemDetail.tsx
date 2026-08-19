@@ -1680,11 +1680,6 @@ export function ItemDetail({
                   <th scope="col">Discipline</th>
                   <th scope="col">Stage</th>
                   <th scope="col">Shortlist</th>
-                  {onOpenRfq && (
-                    <th scope="col">
-                      <span className="sr-only">Open</span>
-                    </th>
-                  )}
                 </tr>
               </thead>
               <tbody>
@@ -1709,23 +1704,6 @@ export function ItemDetail({
                           summarise(found.shortlist, found.clientApprover ?? '')
                         )}
                       </td>
-                      {onOpenRfq && (
-                        <td>
-                          <button
-                            type="button"
-                            className="btn btn-sm btn-ghost"
-                            // The reference, not the glyph. `›` is the visible
-                            // label because the column is one character wide;
-                            // a screen reader and a test both need to know
-                            // which RFQ this row's control opens, which is the
-                            // same rule the Shortlist button follows.
-                            aria-label={`Open ${r.reference}`}
-                            onClick={() => onOpenRfq(r.id)}
-                          >
-                            ›
-                          </button>
-                        </td>
-                      )}
                     </tr>
                   )
                 })}
@@ -1734,6 +1712,29 @@ export function ItemDetail({
           </div>
         )}
       </Card>
+
+      {/* The way onward from this screen, and the one screen whose next step is
+          not a rail entry -- so `PageNext` is deliberately not rendered here
+          and these are rendered instead. One per covering RFQ: an item covered
+          twice has two next steps and no rule this reader can see would pick
+          between them, so both are offered rather than one chosen. They
+          replace the single-character control that used to sit in each row --
+          same act, same accessible name, at the end of the page where the
+          forward control on every other screen now is. */}
+      {onOpenRfq && covering.length > 0 && (
+        <div className="page-next">
+          {covering.map((r) => (
+            <button
+              key={r.id}
+              type="button"
+              className="btn btn-primary btn-lg"
+              onClick={() => onOpenRfq(r.id)}
+            >
+              Open {r.reference} <span aria-hidden="true">›</span>
+            </button>
+          ))}
+        </div>
+      )}
     </>
   )
 }

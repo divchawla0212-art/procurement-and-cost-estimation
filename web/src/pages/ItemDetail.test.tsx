@@ -1967,10 +1967,11 @@ describe('ItemDetail', () => {
   /* ------------------------------------------------- opening a covering RFQ */
 
   describe('the covering RFQ table', () => {
-    it('opens a covering RFQ from its row', async () => {
+    it('opens a covering RFQ from the control at the end of the page', async () => {
       // The accessible name is the reference, not the glyph - the same rule the
-      // vendor row button follows: the glyph is the visible label and the name
-      // is what a screen reader and a test read.
+      // vendor row button follows: the chevron is decoration and the name is
+      // what a screen reader and a test read. It used to be a one-character
+      // control inside the row; it is the same act from the foot of the page.
       const onOpenRfq = vi.fn()
       vi.mocked(fetchWorkflowProject).mockResolvedValue(
         detail({
@@ -1995,6 +1996,65 @@ describe('ItemDetail', () => {
       )
 
       expect(onOpenRfq).toHaveBeenCalledWith('rfq_1')
+    })
+
+    // Two covering RFQs are two next steps, and nothing on this screen could
+    // pick between them without inventing a rule the reader cannot see.
+    it('draws one control per covering RFQ', async () => {
+      vi.mocked(fetchWorkflowProject).mockResolvedValue(
+        detail({
+          items: [GENERATOR],
+          rfqs: [
+            rfq('rfq_1', 'ADP-RFQ-2026-014', ['itm_1']),
+            rfq('rfq_2', 'ADP-RFQ-2026-015', ['itm_1']),
+          ],
+          item_vendor_lists: { itm_1: vendorLists() },
+        }),
+      )
+
+      render(
+        <ItemDetail projectId="prj_1" itemId="itm_1" onBack={vi.fn()} onHome={vi.fn()}
+                    onOpenRfq={vi.fn()} />,
+      )
+
+      expect(await screen.findByRole('button', { name: /open ADP-RFQ-2026-014/i })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /open ADP-RFQ-2026-015/i })).toBeInTheDocument()
+    })
+
+    // The control moved rather than being added beside the old one. Two
+    // buttons opening the same RFQ is not a second way in, it is the same way
+    // in twice -- and it would break every `getByRole` query for that name.
+    it('leaves no open control inside the table rows', async () => {
+      vi.mocked(fetchWorkflowProject).mockResolvedValue(
+        detail({
+          items: [GENERATOR],
+          rfqs: [rfq('rfq_1', 'ADP-RFQ-2026-014', ['itm_1'])],
+          item_vendor_lists: { itm_1: vendorLists() },
+        }),
+      )
+
+      render(
+        <ItemDetail projectId="prj_1" itemId="itm_1" onBack={vi.fn()} onHome={vi.fn()}
+                    onOpenRfq={vi.fn()} />,
+      )
+
+      const opener = await screen.findByRole('button', { name: /open ADP-RFQ-2026-014/i })
+      expect(opener.closest('table')).toBeNull()
+      expect(opener.closest('.page-next')).not.toBeNull()
+    })
+
+    it('offers no way onward when no RFQ covers the item', async () => {
+      vi.mocked(fetchWorkflowProject).mockResolvedValue(
+        detail({ items: [GENERATOR], rfqs: [], item_vendor_lists: { itm_1: vendorLists() } }),
+      )
+
+      render(
+        <ItemDetail projectId="prj_1" itemId="itm_1" onBack={vi.fn()} onHome={vi.fn()}
+                    onOpenRfq={vi.fn()} />,
+      )
+
+      await screen.findByRole('region', { name: /RFQs covering/i })
+      expect(screen.queryByRole('button', { name: /^open /i })).toBeNull()
     })
   })
 })
