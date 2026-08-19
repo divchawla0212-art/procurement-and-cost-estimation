@@ -1,13 +1,15 @@
 import { useEffect, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router'
+import { Route, Routes, useLocation, useNavigate } from 'react-router'
 import { fetchProjects } from './api'
 import type { ProjectSummary } from './types'
 import { useAsync } from './useAsync'
 import { NAV, NAV_GROUPS, bidSetSlug, nextPage, reviewReachable } from './nav'
 import { useAuth } from './auth/context'
 import { Auth } from './pages/Auth'
+import { Landing } from './pages/Landing'
 import { AppRoutes } from './routes'
 import { BackForwardControls, NavHistoryProvider } from './NavHistory'
+import { ShieldMark, BRAND_NAME } from './components/ShieldMark'
 
 
 
@@ -55,9 +57,17 @@ export default function App() {
   // Every hook above must run on every render regardless of auth state, so
   // these gates come after them rather than before.
   if (!ready) return <div className="boot" />
-  // No redirect here: the URL is left exactly as it was, so signing in returns
-  // the user to the address they arrived on rather than to the roster.
-  if (!user) return <Auth />
+
+  if (!user) {
+    return (
+      <Routes>
+        <Route path="/" element={<Landing />} />
+        <Route path="/login" element={<Auth />} />
+        {/* Every other address stays in the bar so signing in returns here. */}
+        <Route path="*" element={<Auth />} />
+      </Routes>
+    )
+  }
 
   const visibleNav = NAV.filter((item) => !item.roles || item.roles.includes(user.role))
 
@@ -66,10 +76,10 @@ export default function App() {
       <div className="shell">
         <aside className="rail">
           <div className="rail-brand">
-            <div className="rail-mark">TE</div>
+            <ShieldMark size={28} tone="light" />
             <div>
-              <strong>Tender Eval</strong>
-              <span>procurement review</span>
+              <strong>{BRAND_NAME}</strong>
+              <span>Procurement workspace</span>
             </div>
           </div>
 
@@ -96,7 +106,6 @@ export default function App() {
                             // screen disagreeing.
                             className={item.matches(location.pathname) ? 'active' : ''}
                             disabled={disabled}
-                            style={disabled ? { opacity: 0.4, cursor: 'not-allowed' } : undefined}
                             onClick={() => href && navigate(href)}
                           >
                             <span className="nav-index">{item.index}</span>

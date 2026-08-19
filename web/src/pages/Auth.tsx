@@ -1,36 +1,69 @@
 import { useState } from 'react'
 import type { FormEvent, JSX } from 'react'
+import { Link, useLocation, useNavigate } from 'react-router'
+import { ArrowRight, ShieldCheck, Lock } from 'lucide-react'
 import { MIN_PASSWORD, useAuth } from '../auth/context'
-import { Card, PageHeader, PasswordField } from '../components/primitives'
+import { ShieldMark, BRAND_NAME } from '../components/ShieldMark'
 
-type Mode = 'login' | 'signup'
-
-// A typing convenience for the demo administrator, and only that: clicking it
-// fills the email field and you still supply the password. Nothing verifies
-// this address exists — a store seeded without it shows a chip whose sign-in
-// then fails on the server's own "Invalid email or password", which is the
-// same answer any wrong address gets.
 const ADMIN_ACCOUNT = 'admin@gmail.com'
-
-// Shipped in the bundle, so this password is public to anyone who loads the
-// page — treat the demo administrator as a published account, and never reuse
-// this address or password for anything that matters. Signing in is still a
-// second, deliberate press of the button; the chip only fills the fields.
 const ADMIN_PASSWORD = 'Admin@1234'
+
+const DEMO_TILES = [
+  {
+    id: 'business-admin',
+    title: 'Business Admin',
+    desc: 'Full edit access to all projects, reports & invoices',
+    email: ADMIN_ACCOUNT,
+    password: ADMIN_PASSWORD,
+    color: '#3B82F6',
+  },
+  {
+    id: 'project-lead',
+    title: 'Project Lead',
+    desc: 'Manages owned projects, ingestion & contracts',
+    email: 'lead@bks.ai',
+    password: '',
+    color: '#10B981',
+  },
+  {
+    id: 'vendor-lead',
+    title: 'Vendor Lead',
+    desc: 'Uploads & submits proposal documents',
+    email: 'vendor@kerui.com',
+    password: '',
+    color: '#F59E0B',
+  },
+  {
+    id: 'tech-admin',
+    title: 'Technology Admin',
+    desc: 'Read-only system & data maintenance access',
+    email: 'tech@bks.ai',
+    password: '',
+    color: '#64748B',
+  },
+] as const
 
 export function Auth(): JSX.Element {
   const { login, signup } = useAuth()
-  const [mode, setMode] = useState<Mode>('login')
+  const navigate = useNavigate()
+  const location = useLocation()
+  const returnTo =
+    location.pathname !== '/login' && location.pathname !== '/'
+      ? location.pathname + location.search
+      : '/projects'
+
+  const [mode, setMode] = useState<'login' | 'signup'>('login')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [passwordHint, setPasswordHint] = useState<string | null>(null)
 
-  function switchMode(next: Mode) {
-    setMode(next)
+  function fillDemo(tile: (typeof DEMO_TILES)[number]) {
+    setEmail(tile.email)
+    setPassword(tile.password)
     setError(null)
-    setPasswordHint(null)
+    document.getElementById('auth-submit')?.focus()
   }
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
@@ -46,14 +79,12 @@ export function Auth(): JSX.Element {
     setSubmitting(true)
     try {
       const result = mode === 'login' ? await login(email, password) : await signup(email, password)
-      if (!result.ok) {
+      if (result.ok) {
+        navigate(returnTo, { replace: true })
+      } else {
         setError(result.error ?? 'Something went wrong. Try again.')
       }
     } finally {
-      // A `finally` here — not a plain statement after the await — is the
-      // point: it re-enables the button even if login/signup ever throws
-      // instead of resolving to a failed AuthResult, so no future error path
-      // can strand the form disabled.
       setSubmitting(false)
     }
   }
@@ -61,94 +92,168 @@ export function Auth(): JSX.Element {
   const isLogin = mode === 'login'
 
   return (
-    <div className="auth-screen">
-      <div className="auth-card">
-        <PageHeader
-          eyebrow="Tender Eval"
-          title={isLogin ? 'Sign in' : 'Create an account'}
-          sub={
-            isLogin
-              ? 'Sign in to review procurement projects.'
-              : 'New accounts start as a reviewer with no projects granted yet — an admin grants access separately.'
-          }
-        />
-        <Card>
-          <form className="form-grid" onSubmit={onSubmit}>
-            {error && <div className="banner banner--error">{error}</div>}
-            <div className="form-row">
-              <label htmlFor="auth-email">Email</label>
+    <div className="bks-public min-h-screen w-full grid grid-cols-1 lg:grid-cols-2">
+      <div className="login-mesh relative text-white overflow-hidden hidden lg:flex flex-col justify-between px-12 xl:px-14 py-10">
+        <Link to="/" className="flex items-center gap-2.5">
+          <ShieldMark size={30} />
+          <span className="text-[15px] font-semibold tracking-tight">{BRAND_NAME}</span>
+        </Link>
+
+        <div className="max-w-[480px] fade-up">
+          <h1 className="display-heading text-white text-4xl xl:text-[2.75rem]">
+            Procurement &amp; cost estimation, governed end to end.
+          </h1>
+          <p className="mt-5 text-[15px] leading-relaxed text-white/65 max-w-[420px]">
+            Role-based control across projects, vendor proposals, comparison reports and contracts
+            — with a full audit trail on every action.
+          </p>
+        </div>
+
+        <div className="trust-row !text-white/55">
+          <span className="inline-flex items-center gap-2">
+            <ShieldCheck size={14} /> SOC 2 aligned
+          </span>
+          <span aria-hidden>·</span>
+          <span>Role-based access</span>
+          <span aria-hidden>·</span>
+          <span>Full audit trail</span>
+        </div>
+      </div>
+
+      <div className="flex items-center justify-center px-6 sm:px-10 py-14 bg-white">
+        <div className="w-full max-w-[400px] fade-up">
+          <div className="lg:hidden mb-8 flex items-center gap-2.5">
+            <ShieldMark size={26} tone="dark" />
+            <span className="text-[15px] font-semibold tracking-tight">{BRAND_NAME}</span>
+          </div>
+
+          <h2 className="text-[1.75rem] font-bold tracking-tight text-[var(--ink)]">
+            {isLogin ? 'Sign in' : 'Create an account'}
+          </h2>
+          <p className="mt-1.5 text-[14px] text-[var(--muted)]">
+            {isLogin
+              ? 'Access your procurement workspace.'
+              : 'New accounts start as a reviewer — an admin grants project access separately.'}
+          </p>
+
+          <form onSubmit={onSubmit} className="mt-7 space-y-4">
+            <div>
+              <label htmlFor="auth-email" className="field-label">
+                Email
+              </label>
               <input
                 id="auth-email"
-                className="input"
                 type="email"
-                autoComplete="email"
                 required
-                disabled={submitting}
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@bks.ai"
+                disabled={submitting}
+                className="public-input mt-1.5"
               />
             </div>
-            {isLogin && (
-              <div className="form-row">
-                <span className="hint">Admin account</span>
-                <div>
-                  <button
-                    type="button"
-                    className="chip chip--asis"
-                    disabled={submitting}
-                    onClick={() => {
-                      setEmail(ADMIN_ACCOUNT)
-                      setPassword(ADMIN_PASSWORD)
-                      // Both fields are filled, so the next act is the button
-                      // rather than the password box. By id rather than a ref
-                      // because the submit lives inside this form's own markup
-                      // and one id is cheaper than threading a ref through it.
-                      document.getElementById('auth-submit')?.focus()
-                    }}
-                  >
-                    {ADMIN_ACCOUNT}
-                  </button>
-                </div>
-              </div>
-            )}
-            <div className="form-row">
-              <label htmlFor="auth-password">Password</label>
-              <PasswordField
+
+            <div>
+              <label htmlFor="auth-password" className="field-label">
+                Password
+              </label>
+              <input
                 id="auth-password"
-                autoComplete={isLogin ? 'current-password' : 'new-password'}
+                type="password"
                 required
-                minLength={isLogin ? undefined : MIN_PASSWORD}
-                disabled={submitting}
                 value={password}
-                onChange={setPassword}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                disabled={submitting}
+                minLength={isLogin ? undefined : MIN_PASSWORD}
+                autoComplete={isLogin ? 'current-password' : 'new-password'}
+                className="public-input mt-1.5"
               />
               {passwordHint && (
-                <p className="hint" style={{ color: 'var(--fail)' }}>
-                  {passwordHint}
-                </p>
+                <p className="mt-2 text-[13px] text-red-600">{passwordHint}</p>
               )}
             </div>
-            <div className="auth-actions">
-              <button id="auth-submit" type="submit" className="btn btn-primary" disabled={submitting}>
-                {submitting
-                  ? isLogin
-                    ? 'Signing in…'
-                    : 'Creating account…'
-                  : isLogin
-                    ? 'Sign in'
-                    : 'Create account'}
-              </button>
-              <button
-                type="button"
-                className="btn btn-ghost"
-                disabled={submitting}
-                onClick={() => switchMode(isLogin ? 'signup' : 'login')}
-              >
-                {isLogin ? 'Need an account? Sign up' : 'Have an account? Sign in'}
-              </button>
-            </div>
+
+            {error && (
+              <div className="text-[13px] text-red-600 bg-red-50 border border-red-100 rounded-[var(--radius)] px-3 py-2.5 flex items-center gap-2">
+                <Lock size={13} /> {error}
+              </div>
+            )}
+
+            <button
+              id="auth-submit"
+              type="submit"
+              disabled={submitting}
+              className="btn-navy w-full h-11 flex items-center justify-center gap-2 disabled:opacity-70 mt-1"
+            >
+              {submitting ? (
+                isLogin ? 'Signing in…' : 'Creating account…'
+              ) : (
+                <>
+                  {isLogin ? 'Sign in' : 'Create account'} <ArrowRight size={15} />
+                </>
+              )}
+            </button>
           </form>
-        </Card>
+
+          {isLogin && (
+            <div className="mt-8">
+              <div className="eyebrow">Demo Accounts</div>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                {DEMO_TILES.map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    disabled={submitting}
+                    onClick={() => fillDemo(t)}
+                    className="demo-tile"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="role-dot" style={{ background: t.color }} />
+                      <span className="text-[12.5px] font-semibold text-[var(--ink)]">
+                        {t.title}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-[11.5px] text-[var(--muted)] leading-snug">
+                      {t.desc}
+                    </div>
+                  </button>
+                ))}
+              </div>
+              <p className="mt-2.5 text-[11px] text-[var(--muted-2)]">
+                Click a tile to fill demo credentials.
+              </p>
+            </div>
+          )}
+
+          <p className="mt-6 text-[13px] text-center text-[var(--muted)]">
+            {isLogin ? (
+              <>
+                Need an account?{' '}
+                <button
+                  type="button"
+                  className="font-semibold text-[var(--navy-800)] hover:underline underline-offset-2"
+                  disabled={submitting}
+                  onClick={() => setMode('signup')}
+                >
+                  Sign up
+                </button>
+              </>
+            ) : (
+              <>
+                Have an account?{' '}
+                <button
+                  type="button"
+                  className="font-semibold text-[var(--navy-800)] hover:underline underline-offset-2"
+                  disabled={submitting}
+                  onClick={() => setMode('login')}
+                >
+                  Sign in
+                </button>
+              </>
+            )}
+          </p>
+        </div>
       </div>
     </div>
   )

@@ -402,15 +402,7 @@ export function PageHeader({
   return (
     <header className="page-head">
       <p className="eyebrow">{eyebrow}</p>
-      <div
-        style={{
-          display: 'flex',
-          gap: '1rem',
-          alignItems: 'flex-end',
-          justifyContent: 'space-between',
-          flexWrap: 'wrap',
-        }}
-      >
+      <div className="page-head-row">
         <h1>{title}</h1>
         {actions}
       </div>

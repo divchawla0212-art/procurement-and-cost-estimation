@@ -1,12 +1,8 @@
-// The sign-in screen's admin-account shortcut. It fills the email field and
-// nothing else: there is no passwordless sign-in behind it, and these tests
-// are what say so.
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
 import { Auth } from './Auth'
 
-// Built once outside the factory so `useAuth()` returns a stable identity —
-// the same rule as `src/App.test.tsx`'s mock, for the same reason.
 const auth = vi.hoisted(() => ({
   value: {
     user: null,
@@ -22,59 +18,59 @@ vi.mock('../auth/context', async (importOriginal) => {
   return { ...actual, useAuth: () => auth.value }
 })
 
+function renderAuth() {
+  return render(
+    <MemoryRouter>
+      <Auth />
+    </MemoryRouter>,
+  )
+}
+
 describe('Auth', () => {
   beforeEach(() => {
     auth.value.login.mockClear()
     auth.value.signup.mockClear()
   })
 
-  it('fills both credentials when its chip is clicked', () => {
-    render(<Auth />)
+  it('fills both credentials when the business admin demo is clicked', () => {
+    renderAuth()
 
-    fireEvent.click(screen.getByRole('button', { name: 'admin@gmail.com' }))
+    fireEvent.click(screen.getByRole('button', { name: /Business Admin/ }))
 
     expect(screen.getByLabelText('Email')).toHaveValue('admin@gmail.com')
     expect(screen.getByLabelText('Password')).toHaveValue('Admin@1234')
   })
 
   it('fills the form but does not submit it', () => {
-    // The chip stops at filling the fields: signing in stays a second,
-    // deliberate press of the button. A `<button>` inside a `<form>` submits by
-    // default, so this fails the moment somebody drops the explicit
-    // type="button" — and it would fail silently, because the form is filled
-    // and the sign-in would succeed.
-    render(<Auth />)
+    renderAuth()
 
-    fireEvent.click(screen.getByRole('button', { name: 'admin@gmail.com' }))
+    fireEvent.click(screen.getByRole('button', { name: /Business Admin/ }))
 
     expect(auth.value.login).not.toHaveBeenCalled()
   })
 
   it('leaves the sign-in button focused, with nothing left to type', () => {
-    render(<Auth />)
+    renderAuth()
 
-    fireEvent.click(screen.getByRole('button', { name: 'admin@gmail.com' }))
+    fireEvent.click(screen.getByRole('button', { name: /Business Admin/ }))
 
     expect(screen.getByRole('button', { name: 'Sign in' })).toHaveFocus()
   })
 
-  it('does not offer the chip when creating an account', () => {
-    // That address is already registered, so signing up with it would 409 —
-    // a shortcut that can only fail.
-    render(<Auth />)
+  it('does not offer demo accounts when creating an account', () => {
+    renderAuth()
 
-    fireEvent.click(screen.getByRole('button', { name: /Need an account/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Sign up' }))
 
-    expect(screen.queryByRole('button', { name: 'admin@gmail.com' })).toBeNull()
+    expect(screen.queryByText('Demo Accounts')).toBeNull()
   })
 
-  it('renders the address as typed rather than capitalised', () => {
-    // `.chip` carries `text-transform: capitalize` (theme.css), which renders
-    // this address as "Admin@Gmail.Com". jsdom applies no stylesheet, so the
-    // opt-out class is as much of that defect as a test can see — the render
-    // itself is only ever caught by running the app.
-    render(<Auth />)
+  it('fills only the email for demo roles without published passwords', () => {
+    renderAuth()
 
-    expect(screen.getByRole('button', { name: 'admin@gmail.com' })).toHaveClass('chip--asis')
+    fireEvent.click(screen.getByRole('button', { name: /Project Lead/ }))
+
+    expect(screen.getByLabelText('Email')).toHaveValue('lead@bks.ai')
+    expect(screen.getByLabelText('Password')).toHaveValue('')
   })
 })
