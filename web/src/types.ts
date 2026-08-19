@@ -481,6 +481,49 @@ export interface RfqDetail {
   bid_due_date: string | null
 }
 
+/* -------------------------------------------------------------- enquiry */
+
+/** One shortlist entry, resolved to either addresses or a reason it would be
+ *  skipped — never both, never neither. `to` is null exactly when
+ *  `skip_reason` is set. */
+export interface EnquiryPreviewRecipient {
+  shortlist_entry_id: string
+  vendor_name: string
+  to: string[] | null
+  skip_reason: string | null
+}
+
+/** `transport` names what a send would actually do — "outbox" writes nothing
+ *  anyone receives, "smtp" reaches real mailboxes — so the screen can say the
+ *  two in different words rather than inferring one from the other. */
+export interface EnquiryPreview {
+  recipients: EnquiryPreviewRecipient[]
+  transport: 'outbox' | 'smtp'
+}
+
+/** One vendor's copy of the enquiry, as it actually went out. */
+export interface EnquirySend {
+  id: string
+  rfq_id: string
+  shortlist_entry_id: string
+  vendor_name: string
+  to: string[]
+  sent_at: string
+  by: string
+  message_id: string
+  transport: string
+}
+
+export interface EnquirySkipped {
+  vendor_name: string
+  reason: string
+}
+
+export interface EnquiryDispatch {
+  sent: EnquirySend[]
+  skipped: EnquirySkipped[]
+}
+
 /* ------------------------------------------------------- clarifications */
 
 /** A bidder's question and what was answered.

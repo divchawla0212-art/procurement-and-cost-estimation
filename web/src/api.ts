@@ -7,6 +7,8 @@ import type {
   ComplianceMatrix,
   AvailableBidders,
   Discipline,
+  EnquiryDispatch,
+  EnquiryPreview,
   ExtractionStatus,
   ProjectDetail,
   ProjectSetup,
@@ -568,6 +570,27 @@ export function setTbeTemplate(
     `/api/workflow/rfqs/${encodeURIComponent(rfqId)}/tbe-template`,
     'PUT',
     body,
+  )
+}
+
+/** Who a dispatch would reach right now, and why anybody else would be
+ *  skipped. Stores nothing — this is a look, not a send. */
+export function previewEnquiry(rfqId: string): Promise<EnquiryPreview> {
+  return sendJson<EnquiryPreview>(
+    `/api/workflow/rfqs/${encodeURIComponent(rfqId)}/enquiry/preview`,
+    'POST',
+    {},
+  )
+}
+
+/** Dispatch the enquiry. Takes no body — who sent it comes from the session,
+ *  never from the request, so a caller cannot sign somebody else's name to a
+ *  tender. */
+export function sendEnquiry(rfqId: string): Promise<EnquiryDispatch> {
+  return sendJson<EnquiryDispatch>(
+    `/api/workflow/rfqs/${encodeURIComponent(rfqId)}/enquiry/send`,
+    'POST',
+    {},
   )
 }
 
