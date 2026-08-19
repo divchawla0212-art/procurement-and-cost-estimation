@@ -1,0 +1,15 @@
+{
+  "summary": "Frontend production build passed, but managed frontend and backend services are unavailable because supervisor points to nonexistent /app/frontend and /app/backend directories.",
+  "backend_issues": {"critical": [{"endpoint": "All /api endpoints", "issue": "Backend supervisor is FATAL: /app/backend does not exist, so API availability could not be verified.", "priority": "CRITICAL"}], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [{"flow": "Managed frontend availability", "issue": "Frontend supervisor is FATAL: /app/frontend does not exist; localhost:3000 refuses connections, so browser E2E flows could not run.", "affected_selectors": []}], "design_issues": []},
+  "test_report_links": ["/app/test_reports/iteration_1.json"],
+  "action_items": ["Update supervisor frontend working directory/command to the actual /app/web project and restart frontend.", "Update supervisor backend working directory/command to the actual API project and restart backend.", "Provide /app/memory/test_credentials.md before auth retesting; the file is missing."],
+  "critical_code_review_comments": ["Auth.tsx contains hardcoded admin credentials; avoid exposing credentials in frontend bundles and use the intended seeded/configured source.", "The app uses relative /api URLs and web/.env is empty; verify the production proxy/base URL contract after services are corrected."],
+  "updated_files": ["/app/test_reports/iteration_1.json"],
+  "success_rate": {"backend": "0% (blocked)", "frontend": "50% (build only; runtime blocked)"},
+  "seed_data_creation": "None",
+  "retest_needed": true,
+  "should_call_test_agent_after_fix": true,
+  "context_for_next_testing_agent": "yarn build in /app/web passes. No Playwright or API tests could execute because supervisor services are FATAL and localhost:3000 is unavailable. Missing credential file blocks auth testing.",
+  "rca of the issue": "Supervisor still references the old /app/frontend and /app/backend layout, while the repository contains /app/web and API modules at the repository root. Both processes fail during chdir before application startup."
+}

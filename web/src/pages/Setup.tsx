@@ -109,7 +109,7 @@ function CreateProject({
         sub="Name the tender and pick the currency you want every offer normalised to."
       />
       <Card>
-        <form className="form-grid" onSubmit={onSubmit}>
+          <form className="form-grid" onSubmit={onSubmit} data-testid="create-bid-set-form">
           {error && <div className="banner banner--error">{error}</div>}
           <div className="form-row">
             <label htmlFor="setup-name">Project name</label>
@@ -118,6 +118,7 @@ function CreateProject({
               className="input"
               required
               value={name}
+              data-testid="bid-set-name-input"
               onChange={(e) => setName(e.target.value)}
             />
             {nameError && (
@@ -133,11 +134,12 @@ function CreateProject({
               className="input"
               maxLength={3}
               value={currency}
+              data-testid="bid-set-currency-input"
               onChange={(e) => setCurrency(e.target.value.toUpperCase())}
             />
           </div>
           <div>
-            <button type="submit" className="btn btn-primary" disabled={submitting}>
+            <button type="submit" className="btn btn-primary" data-testid="create-bid-set-submit-button" disabled={submitting}>
               {submitting ? 'Creating…' : 'Create project'}
             </button>
           </div>

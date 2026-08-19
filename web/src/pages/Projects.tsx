@@ -142,6 +142,7 @@ export function Projects(): JSX.Element {
             <button
               type="button"
               className="btn btn-primary"
+              data-testid="new-workflow-project-button"
               onClick={() => setCreating(true)}
             >
               New project
@@ -176,7 +177,7 @@ export function Projects(): JSX.Element {
            scans horizontally to find a field, then vertically to find the
            project. A card names the project once, keeps the two numbers that
            distinguish it at a glance, and folds the rest away. */
-        <div className="project-grid">
+        <div className="project-grid" data-testid="workflow-project-list">
           {projects.map((p) => (
             <ProjectCard
               key={p.id}

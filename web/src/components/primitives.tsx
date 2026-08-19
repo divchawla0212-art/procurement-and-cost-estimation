@@ -100,6 +100,7 @@ export function PasswordField({
       <button
         type="button"
         className="pw-eye"
+        data-testid={`${id}-visibility-toggle`}
         aria-label="Show password"
         aria-pressed={shown}
         onClick={() => setShown((s) => !s)}
@@ -172,7 +173,7 @@ export function CoverageInstrument({
   })).filter((s) => s.count > 0)
 
   return (
-    <div className="cov">
+    <div className="cov" data-testid="coverage-instrument">
       <div className="cov-bar" role="img" aria-label="Coverage by verdict">
         {segments.map((s) => (
           <div
@@ -210,7 +211,7 @@ export function Metric({
   sub?: ReactNode
 }) {
   return (
-    <div className="metric">
+    <div className="metric" data-testid={`metric-${k.toLowerCase().replace(/\s+/g, '-')}`}>
       <div className="k">{k}</div>
       <div className="v">
         {v} {sub != null && <small>{sub}</small>}
@@ -300,8 +301,11 @@ export function Card({
   const toggleId = useId()
   const [collapsed, setCollapsed] = useState(defaultCollapsed)
   const folded = collapsible && collapsed
+  const cardTestId = title
+    ? `card-${String(title).toLowerCase().replace(/[^a-z0-9]+/g, '-')}`
+    : `content-card-${headingId.replace(/[^a-z0-9]+/gi, '-')}`
   return (
-    <section className="card" aria-labelledby={title ? headingId : undefined}>
+    <section className="card" data-testid={cardTestId} aria-labelledby={title ? headingId : undefined}>
       {(title || actions || collapsible) && (
         <header className="card-head">
           {title ? <h2 id={headingId}>{title}</h2> : <span />}
@@ -313,6 +317,7 @@ export function Card({
                   type="button"
                   id={toggleId}
                   className="btn btn-sm btn-ghost"
+                  data-testid="card-collapse-toggle"
                   aria-expanded={!collapsed}
                   aria-controls={bodyId}
                   // "Hide" alone is four identical controls on the item
@@ -400,10 +405,10 @@ export function PageHeader({
   actions?: ReactNode
 }) {
   return (
-    <header className="page-head">
+    <header className="page-head" data-testid="page-header">
       <p className="eyebrow">{eyebrow}</p>
       <div className="page-head-row">
-        <h1>{title}</h1>
+        <h1 data-testid="page-title">{title}</h1>
         {actions}
       </div>
       {sub && <p className="sub">{sub}</p>}
@@ -415,7 +420,7 @@ export function PageHeader({
 
 export function LoadingState({ label = 'Loading…' }: { label?: string }) {
   return (
-    <div className="state">
+    <div className="state" data-testid="loading-state" aria-live="polite">
       <div className="glyph skeleton" aria-hidden />
       <p className="muted mono">{label}</p>
     </div>
@@ -424,7 +429,7 @@ export function LoadingState({ label = 'Loading…' }: { label?: string }) {
 
 export function ErrorState({ message }: { message: string }) {
   return (
-    <div className="state error">
+    <div className="state error" data-testid="error-state" role="alert">
       <div className="glyph" aria-hidden>
         !
       </div>
@@ -444,7 +449,7 @@ export function EmptyState({
   children?: ReactNode
 }) {
   return (
-    <div className="state">
+    <div className="state" data-testid="empty-state">
       <div className="glyph" aria-hidden>
         {glyph}
       </div>

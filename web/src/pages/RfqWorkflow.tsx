@@ -50,8 +50,8 @@ export function RfqWorkflow(): JSX.Element {
         </EmptyState>
       ) : (
         <Card title="RFQs">
-          <div className="table-scroll">
-            <table className="table">
+          <div className="table-scroll" data-testid="rfq-table-container">
+            <table className="table" data-testid="rfq-table">
               <thead>
                 <tr>
                   <th scope="col">Reference</th>
@@ -69,6 +69,7 @@ export function RfqWorkflow(): JSX.Element {
                       <button
                         type="button"
                         className="linkish"
+                        data-testid={`rfq-open-${rfq.id}`}
                         onClick={() => navigate(`/rfqs/${rfq.id}`)}
                       >
                         {rfq.reference}

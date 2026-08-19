@@ -1,0 +1,95 @@
+{
+  "project": {
+    "name": "Enterprise Frontend Renewal",
+    "context": "Hybrid full-stack product with enterprise dashboard, admin workflows, and public-facing pages",
+    "theme": "Clean light enterprise, preserving current brand colors while increasing hierarchy and usability",
+    "backend_constraint": "Do not modify FastAPI routes, schemas, auth behavior, API contracts, or persistence",
+    "implementation_note": "The repository currently uses React TypeScript files (.tsx/.ts), despite the request mentioning .js. Follow the existing repository conventions; if adding JavaScript, use .js only for utility files and preserve API behavior."
+  },
+  "discovery": {
+    "audience": ["executives scanning status", "operators completing workflows", "admins managing records", "public buyers evaluating credibility"],
+    "primary_tasks": ["navigate between product areas", "find and filter records", "review KPI status", "perform bulk and row actions", "recover from loading and error states", "understand product value on public pages"],
+    "success_actions": ["complete a workflow without leaving context", "find a record in under 10 seconds", "understand current system status at a glance", "submit forms with clear confirmation", "convert qualified visitors to demo/contact actions"],
+    "emotional_tone": "calm authority, precise, trustworthy, quietly distinctive",
+    "design_fusion": ["Swiss editorial grids for authority", "operations-control-room information density", "institutional serif typography for trust", "subtle paper/grain texture for human warmth"],
+    "break_patterns": ["Use asymmetric hero and dashboard compositions rather than centered templates to create a stronger identity", "Use color only for status and action so the interface remains calm", "Use a serif display voice on public pages and a practical humanist sans in product surfaces"]
+  },
+  "research": {
+    "references": [
+      {"source": "AdminLTE curated SaaS dashboard examples", "url": "https://adminlte.io/blog/saas-dashboard-design-examples/", "descriptors": ["three-zone hierarchy", "sidebar plus consistent page scaffolding", "KPIs before deeper detail"]},
+      {"source": "SaaSFrame dashboard anatomy", "url": "https://www.saasframe.io/blog/the-anatomy-of-high-performance-saas-dashboard-design-2026-trends-patterns", "descriptors": ["progressive disclosure", "role-based defaults", "tables as operational source of truth"]},
+      {"source": "SaaS data-table patterns", "url": "https://www.saasui.design/blog/saas-data-table-ui-patterns", "descriptors": ["sticky headers", "toolbar with search/filter/saved views", "bulk action bar only after selection", "side-sheet detail instead of context loss"]},
+      {"source": "DesignRails enterprise examples", "url": "https://designrails.com/examples/corporate-enterprise", "descriptors": ["12-column layout", "alternating section surfaces", "structured trust-oriented hierarchy"]}
+    ],
+    "decision": "Use dense but breathable product screens and an editorial public layer; avoid generic SaaS gradients and over-cardization."
+  },
+  "typography": {
+    "heading": {"family": "IBM Plex Serif", "fallback": "Georgia, serif", "weights": [500, 600], "usage": "Public page H1-H2, key empty-state moments; tracking-tight, leading-none"},
+    "ui": {"family": "IBM Plex Sans", "fallback": "system-ui, sans-serif", "weights": [400, 500, 600, 700], "usage": "Navigation, forms, tables, buttons, dashboard headings"},
+    "data": {"family": "IBM Plex Mono", "fallback": "ui-monospace, monospace", "usage": "IDs, timestamps, numeric metrics, status codes"},
+    "scale": {"h1": "text-4xl sm:text-5xl lg:text-6xl", "h2": "text-2xl sm:text-3xl lg:text-4xl", "h3": "text-xl sm:text-2xl", "body": "text-sm sm:text-base", "label": "text-xs uppercase tracking-[0.18em]"},
+    "rules": ["Never use Inter, Roboto, Open Sans, or Lato for headings", "Keep headings tight and body copy leading-relaxed", "Do not use oversized text beyond text-6xl", "Use tabular numerals for quantitative columns"]
+  },
+  "colors": {
+    "archetype": "Swiss & high-contrast with warm paper tint",
+    "tokens": {"canvas": "#F7F8F6", "surface": "#FFFFFF", "surfaceMuted": "#EEF1F0", "ink": "#17202A", "inkMuted": "#586572", "line": "#D7DEE2", "primary": "#2457C5", "primaryHover": "#19439F", "accent": "#C94B32", "success": "#18794E", "warning": "#9A6500", "danger": "#B42318", "focus": "#2457C5"},
+    "usage": ["95% of UI stays neutral", "Primary only for CTA, selected navigation, links, and focus", "Accent reserved for notable editorial highlights", "Status colors always include text/icon/label, never color alone"],
+    "contrast": "Meet WCAG AA minimum 4.5:1 for normal text and 3:1 for large text and controls; never use pure black or pure gray."
+  },
+  "visual_enhancers": {
+    "texture": "Use a nearly invisible warm grain/noise overlay on public sections only; aria-hidden=true and opacity below 0.04",
+    "surfaces": "Flat white panels with 1px tinted borders; use subtle ambient shadows only for overlays and elevated actions",
+    "header": "Solid or bg-white/85 backdrop-blur-xl with border-b; never fully transparent",
+    "scrollbar": "Customize to a slim tinted scrollbar without layout gutter",
+    "icons": "Use the existing icon system or lucide-react; no emoji icons"
+  },
+  "component_name": {
+    "app_shell": "Persistent desktop sidebar + compact mobile header/bottom navigation",
+    "page_header": "Breadcrumb, title, description, primary action, optional contextual tools",
+    "kpi_strip": "Three to six summary metrics with trend, timestamp, and semantic status",
+    "data_table": "Toolbar, filter chips, sticky header, selectable rows, pagination, empty/loading/error variants",
+    "detail_sheet": "Side panel for row details and secondary actions without losing table context",
+    "form_section": "Grouped labels, helper/error text, explicit required markers, submit and cancel actions",
+    "status_badge": "Text plus icon plus color; never color-only",
+    "toast": "Sonner notifications for save, failure, undo, and background completion",
+    "public_proof_band": "Editorial trust stats, customer proof, security/compliance content"
+  },
+  "component_path": {
+    "existing_root": "/app/web/src",
+    "styles": ["/app/web/src/theme.css", "/app/web/src/public-ui.css"],
+    "tailwind": "/app/web/tailwind.config.js",
+    "convention": "Prefer existing components and route patterns. Do not create a parallel frontend or alter backend files."
+  },
+  "grids": {
+    "dashboard": "grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-6 items-start",
+    "marketing": "grid-cols-1 md:grid-cols-8 lg:grid-cols-12 gap-8 lg:gap-12; intentionally leave breathing cells",
+    "table": "Full-width dense layout; toolbar and table are direct children of the page flow; no animated wrapper that breaks grid alignment",
+    "container": "max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-10",
+    "spacing": "Use p-6/p-8 inside bordered surfaces and py-16/py-24 between major sections."
+  },
+  "layouts": {
+    "dashboard": ["desktop sidebar 248px", "main content with page header", "KPI strip", "primary chart or task panel", "table/feed", "contextual detail sheet"],
+    "admin": ["stable route-level header", "toolbar with search, filters, saved view, density, export", "bulk bar on selection", "sticky table header", "pagination and result count"],
+    "public": ["visible glass/solid nav with logo, 3-5 links, CTA", "asymmetric hero with proof", "alternating editorial sections", "feature detail with product UI close-up", "dark contrast footer with massive brand element"],
+    "mobile": ["collapse sidebar to reachable bottom nav or drawer", "prioritize 2-3 table columns", "use horizontal table scroll with visible affordance", "images max-h-[80vh] md:max-h-none"]
+  },
+  "motion": {
+    "principles": "Quiet, purposeful, never distracting",
+    "interactions": ["buttons: transform and background-color 160ms ease", "rows: background-color 140ms ease", "panels: opacity and transform 220ms ease", "staggered entrance for lists at 30-50ms intervals", "loading skeleton shimmer only while waiting"],
+    "required_states": ["hover", "focus-visible", "pressed", "disabled", "loading", "success", "error", "empty", "overflow"],
+    "reduced_motion": "Wrap nonessential animation in prefers-reduced-motion; preserve instant state changes and focus visibility. Never use transition: all."
+  },
+  "accessibility": {
+    "requirements": ["Every interactive and key informational element gets a stable kebab-case data-testid", "Use semantic buttons/links and labels, not clickable divs", "Keyboard-navigable filters, sort controls, menus, dialogs, and tables", "Use aria-live for save/error/filter result announcements", "Do not rely on hover-only actions", "Visible high-contrast focus ring", "Destructive actions require confirmation and offer undo where possible", "Respect reduced motion and zoom/reflow"],
+    "testid_examples": ["app-sidebar-navigation", "page-primary-action", "records-search-input", "records-filter-menu", "records-table", "records-row-<id>", "bulk-actions-bar", "form-submit-button", "loading-state", "error-message", "empty-state-cta"]
+  },
+  "media": {
+    "strategy": "No external imagery is required for the dashboard. Public pages may use product screenshots or real customer imagery only when available; do not use placeholder URLs.",
+    "image_urls": [],
+    "rules": ["Prefer close-up product UI crops over generic stock photos", "Use descriptive alt text", "Maintain visible subject through overlays; never exceed bg-black/50", "Lazy-load below-fold images"]
+  },
+  "3d libraries": {"decision": "Not needed: enterprise workflows prioritize clarity and performance", "allowed": [], "steps": ["Do not add 3D unless a validated product story requires immersion", "If later added, lazy-load via Suspense and preserve keyboard/fallback content"]},
+  "general_ui_ux_design_guidelines": ["Keep current backend and API integration unchanged", "Preserve current colors as semantic roles, then normalize them through tokens", "Avoid generic centered layouts, full-screen gradients, and uniform cards", "Use cardless rectangular table surfaces and max 8px radius for admin", "Every form needs helper, validation, loading, success, and error states", "Every async action needs disabled/loading feedback and Sonner confirmation", "Never use transparent backgrounds behind content; use solid or blurred surfaces", "Prefer progressive disclosure and side sheets to route users away from context", "Maintain responsive behavior at mobile, tablet, desktop, and wide desktop", "Use precise button labels that describe the action, not vague words like Continue"],
+  "instructions_to_main_agent": ["Read and preserve existing route, auth, API, and test contracts before editing", "Implement in the existing /app/web React app and existing style files", "Audit every existing screen, then apply shared shell, page header, table, form, button, loading, error, and empty-state patterns consistently", "Use Shadcn primitives where already present or needed for advanced interactions; customize them to this visual system", "Add data-testid to all interactive and key informational elements", "Run the existing test suite and build after frontend changes; do not touch backend", "If an API or flow is not working, surface the real error state rather than mocking it. Do not introduce MOCKED integrations or placeholder data in production flows."],
+  "universal_guidelines_for_main_agent": "Create distinctive, enterprise-grade frontend work with generous spacing, layered depth, restrained color, explicit interaction states, accessible semantics, and no AI-slop gradients or emoji icons."
+}

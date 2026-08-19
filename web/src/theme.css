@@ -1,7 +1,7 @@
 /* ============================================================================
    Al Dhafra Procurement — design system
    Public marketing and signed-in workspace share one palette: navy chrome,
-   light canvas, Inter body type. Data screens keep IBM Plex Mono for tables.
+   light canvas, IBM Plex body type. Data screens keep IBM Plex Mono for tables.
    Signature: the segmented coverage instrument, reused across pages.
    ========================================================================== */
 
@@ -14,7 +14,7 @@
   --marketing-muted: #64748b;
   --marketing-border: #e2e8f0;
   --marketing-surface: #ffffff;
-  --marketing-font: 'Inter', var(--font-body);
+  --marketing-font: 'IBM Plex Sans', system-ui, sans-serif;
 
   /* chrome + canvas */
   --ink: var(--marketing-navy);
@@ -55,8 +55,8 @@
   --shadow-1: 0 1px 3px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
   --shadow-2: 0 12px 40px rgba(15, 23, 42, 0.08);
 
-  --font-display: 'Space Grotesk', 'Inter', system-ui, sans-serif;
-  --font-body: 'Inter', 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  --font-display: 'IBM Plex Serif', Georgia, serif;
+  --font-body: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', monospace;
 
   --rail-w: 280px;
@@ -71,6 +71,8 @@ body {
   font-family: var(--font-body);
   color: var(--text);
   background: var(--paper);
+  background-image: linear-gradient(rgba(36, 87, 197, 0.018) 1px, transparent 1px), linear-gradient(90deg, rgba(36, 87, 197, 0.018) 1px, transparent 1px);
+  background-size: 32px 32px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -179,6 +181,8 @@ a { color: var(--accent-ink); text-underline-offset: 2px; }
   font-weight: 500;
   transition: background 0.14s ease, color 0.14s ease, border-color 0.14s ease;
 }
+.rail-nav .nav-icon { flex: none; color: currentColor; opacity: 0.8; }
+.rail-nav button.active .nav-icon { opacity: 1; }
 .rail-nav button:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.06);
   color: #fff;
@@ -305,7 +309,7 @@ a { color: var(--accent-ink); text-underline-offset: 2px; }
   overflow: auto;
   background: var(--paper);
 }
-.wrap { max-width: 1160px; }
+.wrap { max-width: 1440px; margin: 0 auto; }
 
 /* ------------------------------------------------------------- page header */
 
@@ -1133,6 +1137,7 @@ p.warn { margin: 0.5rem 0 0; }
   .rail { position: static; height: auto; flex-direction: row; align-items: center; flex-wrap: wrap; }
   .rail-scroll { display: flex; gap: 0.5rem; align-items: center; padding: 0.5rem 0.8rem; }
   .rail-nav { grid-auto-flow: column; }
+  .rail-nav .nav-index { display: none; }
   .rail-label, .rail-foot { display: none; }
   .metrics { grid-template-columns: repeat(2, 1fr); }
   .charts-grid { grid-template-columns: 1fr; }

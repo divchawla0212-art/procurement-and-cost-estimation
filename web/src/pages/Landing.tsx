@@ -99,8 +99,8 @@ const ROLES = [
 
 export function Landing(): JSX.Element {
   return (
-    <div className="bks-public min-h-screen bg-white text-[var(--ink)]">
-      <header className="sticky top-0 z-30 public-header">
+    <div className="bks-public min-h-screen bg-white text-[var(--ink)]" data-testid="landing-page">
+      <header className="sticky top-0 z-30 public-header" data-testid="marketing-navigation">
         <div className="max-w-6xl mx-auto px-6 h-[4.25rem] flex items-center justify-between">
           <Link to="/" className="flex items-center gap-2.5">
             <ShieldMark size={28} tone="dark" />
@@ -127,6 +127,7 @@ export function Landing(): JSX.Element {
             <Link
               to="/login"
               className="btn-navy h-9 px-4 text-[13px] inline-flex items-center gap-2"
+              data-testid="landing-get-started-button"
             >
               Get started <ArrowRight size={14} />
             </Link>
@@ -152,10 +153,11 @@ export function Landing(): JSX.Element {
               <Link
                 to="/login"
                 className="btn-navy h-11 px-5 text-[14px] inline-flex items-center gap-2"
+                data-testid="landing-enter-workspace-button"
               >
                 Enter workspace <ArrowRight size={15} />
               </Link>
-              <a href="#workflow" className="btn-ghost h-11 px-5 text-[14px] inline-flex items-center">
+              <a href="#workflow" data-testid="landing-workflow-link" className="btn-ghost h-11 px-5 text-[14px] inline-flex items-center">
                 See the workflow
               </a>
             </div>

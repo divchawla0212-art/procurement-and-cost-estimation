@@ -31,7 +31,7 @@ export function Dashboard(props: DashboardProps): JSX.Element {
         title="Bid sets"
         sub="Every tender you are evaluating. Open one to review its compliance matrix and comparative statement, or start a new one."
         actions={
-          <button type="button" className="btn btn-primary" onClick={onNew}>
+          <button type="button" className="btn btn-primary" data-testid="new-bid-set-button" onClick={onNew}>
             New project
           </button>
         }
@@ -51,7 +51,7 @@ export function Dashboard(props: DashboardProps): JSX.Element {
           </span>
         </EmptyState>
       ) : (
-        <div className="grid-cards">
+        <div className="grid-cards" data-testid="bid-set-list">
           {projects.map((project) => (
             <ProjectCard key={project.slug} project={project} onOpen={onOpen} />
           ))}
@@ -77,6 +77,7 @@ function ProjectCard({
     <button
       type="button"
       className="pcard"
+      data-testid={`bid-set-card-${project.slug}`}
       onClick={() => onOpen(project.slug)}
     >
       <div className="title">{project.name}</div>

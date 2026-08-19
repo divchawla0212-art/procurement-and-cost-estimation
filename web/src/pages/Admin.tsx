@@ -137,18 +137,18 @@ export function Admin({ projects, meId }: AdminProps) {
       />
 
       {failure && (
-        <div className="banner banner--error" role="alert">
+        <div className="banner banner--error" data-testid="admin-error-message" role="alert">
           {failure}
         </div>
       )}
       {added && (
-        <div className="banner banner--ok" role="status">
+        <div className="banner banner--ok" data-testid="admin-success-message" role="status">
           Added {added}. They can sign in with the password you set.
         </div>
       )}
 
       <Card title="Add a user">
-        <form onSubmit={submitNewUser}>
+        <form onSubmit={submitNewUser} data-testid="add-user-form">
           <div className="form-row">
             <label htmlFor="new-email">Email</label>
             <input
@@ -160,6 +160,7 @@ export function Admin({ projects, meId }: AdminProps) {
               autoComplete="off"
               required
               disabled={adding}
+              data-testid="new-user-email-input"
             />
           </div>
           <div className="form-row">
@@ -187,12 +188,13 @@ export function Admin({ projects, meId }: AdminProps) {
               value={role}
               onChange={(e) => setRole(e.target.value as 'admin' | 'reviewer')}
               disabled={adding}
+              data-testid="new-user-role-select"
             >
               <option value="reviewer">Reviewer — sees granted projects</option>
               <option value="admin">Admin — sees everything, manages users</option>
             </select>
           </div>
-          <button type="submit" className="btn btn-primary" disabled={adding}>
+          <button type="submit" className="btn btn-primary" data-testid="add-user-submit-button" disabled={adding}>
             {adding ? 'Adding…' : 'Add user'}
           </button>
         </form>
@@ -204,8 +206,8 @@ export function Admin({ projects, meId }: AdminProps) {
             No projects yet, so there is nothing to grant. Set one up first.
           </div>
         )}
-        <div className="tbl-wrap">
-          <table className="grid">
+        <div className="tbl-wrap" data-testid="users-table-container">
+          <table className="grid" data-testid="users-table">
             <thead>
               <tr>
                 <th>User</th>

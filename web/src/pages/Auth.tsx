@@ -92,7 +92,7 @@ export function Auth(): JSX.Element {
   const isLogin = mode === 'login'
 
   return (
-    <div className="bks-public min-h-screen w-full grid grid-cols-1 lg:grid-cols-2">
+    <div className="bks-public min-h-screen w-full grid grid-cols-1 lg:grid-cols-2" data-testid="auth-page">
       <div className="login-mesh relative text-white overflow-hidden hidden lg:flex flex-col justify-between px-12 xl:px-14 py-10">
         <Link to="/" className="flex items-center gap-2.5">
           <ShieldMark size={30} />
@@ -136,7 +136,7 @@ export function Auth(): JSX.Element {
               : 'New accounts start as a reviewer — an admin grants project access separately.'}
           </p>
 
-          <form onSubmit={onSubmit} className="mt-7 space-y-4">
+          <form onSubmit={onSubmit} className="mt-7 space-y-4" data-testid="auth-form">
             <div>
               <label htmlFor="auth-email" className="field-label">
                 Email
@@ -150,6 +150,7 @@ export function Auth(): JSX.Element {
                 placeholder="you@bks.ai"
                 disabled={submitting}
                 className="public-input mt-1.5"
+                data-testid="auth-email-input"
               />
             </div>
 
@@ -168,6 +169,7 @@ export function Auth(): JSX.Element {
                 minLength={isLogin ? undefined : MIN_PASSWORD}
                 autoComplete={isLogin ? 'current-password' : 'new-password'}
                 className="public-input mt-1.5"
+                data-testid="auth-password-input"
               />
               {passwordHint && (
                 <p className="mt-2 text-[13px] text-red-600">{passwordHint}</p>
@@ -175,7 +177,7 @@ export function Auth(): JSX.Element {
             </div>
 
             {error && (
-              <div className="text-[13px] text-red-600 bg-red-50 border border-red-100 rounded-[var(--radius)] px-3 py-2.5 flex items-center gap-2">
+              <div className="text-[13px] text-red-600 bg-red-50 border border-red-100 rounded-[var(--radius)] px-3 py-2.5 flex items-center gap-2" data-testid="auth-error-message">
                 <Lock size={13} /> {error}
               </div>
             )}
@@ -185,6 +187,7 @@ export function Auth(): JSX.Element {
               type="submit"
               disabled={submitting}
               className="btn-navy w-full h-11 flex items-center justify-center gap-2 disabled:opacity-70 mt-1"
+              data-testid="auth-submit-button"
             >
               {submitting ? (
                 isLogin ? 'Signing in…' : 'Creating account…'
@@ -207,6 +210,7 @@ export function Auth(): JSX.Element {
                     disabled={submitting}
                     onClick={() => fillDemo(t)}
                     className="demo-tile"
+                    data-testid={`demo-account-${t.id}`}
                   >
                     <div className="flex items-center gap-2">
                       <span className="role-dot" style={{ background: t.color }} />

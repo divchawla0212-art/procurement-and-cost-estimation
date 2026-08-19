@@ -10,6 +10,9 @@ import { Landing } from './pages/Landing'
 import { AppRoutes } from './routes'
 import { BackForwardControls, NavHistoryProvider } from './NavHistory'
 import { ShieldMark, BRAND_NAME } from './components/ShieldMark'
+import { BarChart3, ClipboardList, FileCheck2, FolderKanban, Gauge, Settings2, ShieldCheck, Users } from 'lucide-react'
+
+const NAV_ICONS = [FolderKanban, ClipboardList, FolderKanban, Settings2, Gauge, BarChart3, FileCheck2, ClipboardList, Users]
 
 
 
@@ -56,7 +59,7 @@ export default function App() {
 
   // Every hook above must run on every render regardless of auth state, so
   // these gates come after them rather than before.
-  if (!ready) return <div className="boot" />
+  if (!ready) return <div className="boot" data-testid="app-loading-state" />
 
   if (!user) {
     return (
@@ -75,7 +78,7 @@ export default function App() {
     <NavHistoryProvider>
       <div className="shell">
         <aside className="rail">
-          <div className="rail-brand">
+          <div className="rail-brand" data-testid="app-brand">
             <ShieldMark size={28} tone="light" />
             <div>
               <strong>{BRAND_NAME}</strong>
@@ -83,7 +86,7 @@ export default function App() {
             </div>
           </div>
 
-          <div className="rail-scroll">
+          <div className="rail-scroll" data-testid="app-sidebar-navigation">
 
             {NAV_GROUPS.map((group) => {
               const items = visibleNav.filter((item) => item.group === group)
@@ -101,6 +104,7 @@ export default function App() {
                         <li key={item.index}>
                           <button
                             type="button"
+                            data-testid={`navigation-${item.index}`}
                             // Derived from the URL, never held alongside it —
                             // so no navigation can leave the highlight and the
                             // screen disagreeing.
@@ -108,6 +112,7 @@ export default function App() {
                             disabled={disabled}
                             onClick={() => href && navigate(href)}
                           >
+                            {(() => { const Icon = NAV_ICONS[Number(item.index) - 1] ?? ShieldCheck; return <Icon className="nav-icon" size={16} aria-hidden /> })()}
                             <span className="nav-index">{item.index}</span>
                             {item.label}
                           </button>
@@ -125,7 +130,7 @@ export default function App() {
               <span className="rail-email">{user.email}</span>
               <span className="rail-role">{user.role}</span>
             </div>
-            <button type="button" className="rail-signout" onClick={() => logout()}>
+            <button type="button" className="rail-signout" data-testid="sign-out-button" onClick={() => logout()}>
               Sign out
             </button>
           </div>
@@ -137,15 +142,15 @@ export default function App() {
         </aside>
 
         <div className="canvas">
-          <div className="statusbar">
+          <div className="statusbar" data-testid="workspace-statusbar">
             <BackForwardControls />
             {active ? (
               <>
-                <span className="sb-item">
+                <span className="sb-item" data-testid="active-project-status">
                   <span className="sb-dot" />
                   <b>{active.name}</b>
                 </span>
-                <span className="sb-item">
+                <span className="sb-item" data-testid="project-count-status">
                   gen <b>{active.generation}</b>
                 </span>
                 <span className="sb-item">
