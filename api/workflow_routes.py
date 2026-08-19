@@ -19,6 +19,7 @@ Status mapping, kept consistent across the module:
   409  it exists, but the workflow says no — a closed gate or a refused freeze
   422  the request is self-inconsistent, e.g. an item from another project
 """
+import dataclasses
 import hashlib
 import io
 import os
@@ -32,7 +33,7 @@ from pydantic import BaseModel
 
 from api.auth.deps import current_user
 from api.auth.models import User
-from workflow import clarifications, contact_db, persistence
+from workflow import clarifications, contact_db, enquiry, mail, persistence
 from workflow import bidder_db, disciplines, doc_store, item_vendor_lists
 from workflow.contact_import import parse_contacts_counted
 from workflow.eligibility import assess as assess_eligibility
@@ -1709,6 +1710,52 @@ def approve_shortlist(rfq_id: str, user: User = Depends(current_user)) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"approved_by": user.email}
+
+
+@router.post("/rfqs/{rfq_id}/enquiry/preview")
+def preview_enquiry(rfq_id: str, user: User = Depends(current_user)) -> dict:
+    """Who a dispatch would reach right now, and why anybody else would be
+    skipped. Stores nothing — `workflow.json` is byte-for-byte unchanged by
+    this route, which is what `test_the_preview_route_stores_nothing` holds.
+
+    `transport` rides alongside so the browser can say "this writes to the
+    outbox" versus "this reaches real mailboxes" without inferring it from
+    anything else in the response.
+    """
+    store = _read()
+    if store.get_rfq(rfq_id) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown RFQ: {rfq_id}")
+    blobs = doc_store.LocalBlobStore(_root())
+    rows = enquiry.preview(store, blobs, rfq_id)
+    transport = mail.transport_for(_root())
+    return {
+        "recipients": [dataclasses.asdict(r) for r in rows],
+        "transport": "smtp" if isinstance(transport, mail.SmtpImapTransport) else "outbox",
+    }
+
+
+@router.post("/rfqs/{rfq_id}/enquiry/send")
+def send_enquiry(rfq_id: str, user: User = Depends(current_user)) -> dict:
+    """Dispatch the enquiry to every reachable, not-yet-sent shortlist entry.
+
+    `by` is always `user.email` — never a request field — so a caller cannot
+    sign somebody else's name to a tender. The transport is built before the
+    lock: it does no I/O, and holding the store lock across a network send
+    would block every other writer for the duration of an SMTP conversation.
+    Recipients are never accepted from the caller either; `enquiry.dispatch`
+    re-resolves them itself, which is what makes a stale tab unable to redirect
+    who gets mailed.
+    """
+    transport = mail.transport_for(_root())  # outside the lock: it does no I/O
+    blobs = doc_store.LocalBlobStore(_root())
+    with persistence.locked_update(_root()) as store:
+        if store.get_rfq(rfq_id) is None:
+            raise HTTPException(status_code=404, detail=f"Unknown RFQ: {rfq_id}")
+        result = enquiry.dispatch(store, blobs, transport, rfq_id, by=user.email)
+    return {
+        "sent": [r.model_dump(mode="json") for r in result.sent],
+        "skipped": [dataclasses.asdict(s) for s in result.skipped],
+    }
 
 
 @router.put("/rfqs/{rfq_id}/tbe-template")
