@@ -4,7 +4,6 @@ import {
   approveShortlist,
   fetchVendorContacts,
   removeShortlistEntry,
-  setTbeTemplate,
   uploadVendorContacts,
 } from '../../api'
 import { ApprovalPills } from '../../components/primitives'
@@ -22,15 +21,18 @@ import type { StepProps } from './types'
  * that gates issuance, and the one-off escape hatch for a vendor nobody
  * registered.
  *
- * The approval control leads the step rather than trailing it.
- * `_shortlisting_exit` (`workflow/gates.py`) checks an included vendor, then
- * approval, then the TBE template — in that order — and a control a reader
- * only meets after scrolling past the table it approves invites approving
- * without having looked at what is on it.
+ * The TBE template is not here either. It moved to the Issued step, beside the
+ * enquiry documents whose returnables it lists, and `_shortlisting_exit`
+ * (`workflow/gates.py`) stopped asking for it when it went — the gate on this
+ * step now reads exactly the two things this step sets. The check lives on
+ * `_issued_exit` instead, guarding the edge out of the step that holds the
+ * editor.
+ *
+ * The approval control leads the step rather than trailing it: a control a
+ * reader only meets after scrolling past the table it approves invites
+ * approving without having looked at what is on it.
  */
 export function ShortlistingStep({ data, run, busy, tick }: StepProps) {
-  const [criteria, setCriteria] = useState((data.tbe_template?.criteria ?? []).join('\n'))
-
   // The directory is a *second* resource, shared across every RFQ rather than
   // scoped to this one, so it is keyed on `tick` like the RFQ data itself:
   // `run` ticks the wizard on a successful write, which refetches both.
@@ -201,35 +203,6 @@ export function ShortlistingStep({ data, run, busy, tick }: StepProps) {
         </p>
         <UnregisteredVendorRow rfqId={data.rfq.id} run={run} busy={busy} />
       </details>
-
-      <h3>TBE template</h3>
-      <label className="field-label" htmlFor="tbe-criteria">
-        One criterion per line
-      </label>
-      <textarea
-        id="tbe-criteria"
-        className="input"
-        rows={4}
-        value={criteria}
-        onChange={(e) => setCriteria(e.target.value)}
-      />
-      <button
-        type="button"
-        className="btn btn--quiet"
-        disabled={busy}
-        onClick={() =>
-          run(() =>
-            setTbeTemplate(data.rfq.id, {
-              criteria: criteria
-                .split('\n')
-                .map((c) => c.trim())
-                .filter(Boolean),
-            }),
-          )
-        }
-      >
-        Save TBE template
-      </button>
     </>
   )
 }

@@ -4,6 +4,7 @@ from typing import NamedTuple
 
 from workflow import clarifications
 from workflow.bidders import evaluate
+from workflow.avl_import import AVL_NAME_LIMIT
 from workflow.disciplines import fold
 from workflow.models.bid import Bid, BidShortlist, ReceiptState, VdrlReceipt
 from workflow.models.clarification import (
@@ -23,6 +24,7 @@ from workflow.models.project import (
 )
 from workflow.models.rfq import (
     Attachment,
+    ChecklistItem,
     EnquirySend,
     RfqRecord,
     ShortlistEntry,
@@ -534,8 +536,31 @@ class WorkflowStore:
         no address is refused at parse.
 
         A copy, so a caller cannot edit the directory through the answer.
+
+        **One exception to exact matching, and it is bounded.** The ADNOC
+        export cuts `Vendor Name` at exactly `AVL_NAME_LIMIT` characters — 9 362
+        rows in the file this registry was built from — while a contact sheet
+        carries the company's full name. Nothing here does the truncating, so
+        it cannot be undone at import; it is absorbed at this one lookup, which
+        is the only place it does any harm.
+
+        The rule is deliberately narrow, because name matching is a defect this
+        repository has recorded twice. It applies **only** to a name of exactly
+        the cut length, it matches on a folded prefix, and it resolves **only
+        when exactly one contact matches**. Two real companies agreeing for 35
+        characters are indistinguishable from a truncation, so the honest
+        answer there is that nothing is on file: a buyer told "no address"
+        uploads a sheet, while a buyer whose tender reached the wrong company
+        cannot undo it.
         """
-        contact = self._vendor_contacts.get(fold(vendor_name))
+        key = fold(vendor_name)
+        contact = self._vendor_contacts.get(key)
+        if contact is None and len(vendor_name) == AVL_NAME_LIMIT:
+            matches = [
+                held for folded, held in self._vendor_contacts.items()
+                if folded.startswith(key)
+            ]
+            contact = matches[0] if len(matches) == 1 else None
         return list(contact.emails) if contact else None
 
     # -- bidders ----------------------------------------------------------
@@ -884,6 +909,7 @@ class WorkflowStore:
         to: list[str],
         ref: SentRef,
         by: str,
+        resend: bool = False,
     ) -> EnquirySend:
         """Record what actually went out to one shortlisted vendor.
 
@@ -893,12 +919,23 @@ class WorkflowStore:
         needed that rule.
 
         The RFQ must exist (I-E's other half, the same shape `add_rfq_document`
-        keeps). And an RFQ holds at most one record per `shortlist_entry_id` —
-        a second send to the same entry is refused rather than recorded twice.
+        keeps).
+
+        **The collection holds one record per *send*, not one per shortlist
+        entry.** A second send to an entry already covered is refused unless the
+        caller passes `resend`, which is the deliberate act that permits it —
+        the same shape as `add_shortlist_entry`'s `override_reason`, and for the
+        same reason: the default has to refuse, because re-sending a tender is
+        not something a stray second click should be able to do.
+
+        Once permitted it is *appended*, never merged over the earlier record.
+        Refusing it would leave a mail that really went out unrecorded, and
+        overwriting would destroy the fact that the vendor was written to on the
+        earlier date. Both falsify a log whose only job is to say what happened.
         """
         if rfq_id not in self._rfqs:
             raise KeyError(f"Unknown RFQ: {rfq_id}")
-        if shortlist_entry_id in self.already_sent_entry_ids(rfq_id):
+        if not resend and shortlist_entry_id in self.already_sent_entry_ids(rfq_id):
             raise ValueError(
                 f"{vendor_name} has already been sent this enquiry."
             )
@@ -922,8 +959,28 @@ class WorkflowStore:
 
     def already_sent_entry_ids(self, rfq_id: str) -> set[str]:
         """The shortlist entry ids a dispatch has already covered, so a second
-        pass over the shortlist knows what to skip."""
+        pass over the shortlist knows what to skip.
+
+        A *set*, so it answers whether rather than how many times: a vendor sent
+        twice is no more "already sent" than one sent once, and the skip reason
+        would read identically either way.
+        """
         return {r.shortlist_entry_id for r in self._enquiry_sends.get(rfq_id, [])}
+
+    def last_send_by_entry(self, rfq_id: str) -> dict[str, datetime]:
+        """The **most recent** send per shortlist entry.
+
+        `max` rather than the first or the last in the list: the collection is
+        append-only and holds one record per send, so an entry sent twice has
+        two, and "when did this vendor last see the package?" is the only
+        reading that answers whether they are behind on it.
+        """
+        latest: dict[str, datetime] = {}
+        for record in self._enquiry_sends.get(rfq_id, []):
+            seen = latest.get(record.shortlist_entry_id)
+            if seen is None or record.sent_at > seen:
+                latest[record.shortlist_entry_id] = record.sent_at
+        return latest
 
     def add_shortlist_entry(
         self,
@@ -1150,13 +1207,28 @@ class WorkflowStore:
     def set_tbe_template(
         self,
         rfq_id: str,
-        criteria: list[str],
+        items: list[ChecklistItem] | list[str],
         source_rfq_reference: str | None = None,
     ) -> TbeTemplate:
+        """The buyer's **own additions** to the eligibility checklist, and only
+        those — the nine `EligibilityCategory` returnables are a fixed
+        vocabulary and are never stored per RFQ.
+
+        The parameter was `criteria: list[str]` while the template was a list
+        of free-text lines. Bare strings are still accepted and read as
+        non-mandatory items, because that is what a line of prose was: a thing
+        the buyer wanted, with no power to block a bid. Rebuilt through the
+        model rather than mutated, the same rule `update_bidder` keeps.
+        """
         if rfq_id not in self._rfqs:
             raise KeyError(f"Unknown RFQ: {rfq_id}")
         template = TbeTemplate(
-            rfq_id=rfq_id, criteria=list(criteria), source_rfq_reference=source_rfq_reference
+            rfq_id=rfq_id,
+            items=[
+                item if isinstance(item, ChecklistItem) else ChecklistItem(label=item)
+                for item in items
+            ],
+            source_rfq_reference=source_rfq_reference,
         )
         self._tbe[rfq_id] = template
         return template

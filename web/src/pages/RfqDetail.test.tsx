@@ -65,6 +65,7 @@ function detail(over: Partial<RfqDetailData> = {}): RfqDetailData {
     client_approver: 'ADNOC',
     documents: [],
     document_categories: [],
+    eligibility_checklist: [],
     tbe_template: null,
     vdrl: [],
     bids: [],

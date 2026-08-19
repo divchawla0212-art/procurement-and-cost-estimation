@@ -180,3 +180,54 @@ def test_a_developer_configured_smtp_environment_still_previews_via_the_outbox(
         f"/api/workflow/rfqs/{an_rfq_with_a_shortlist}/enquiry/preview"
     ).json()
     assert body["transport"] == "outbox"
+
+
+def test_the_send_route_refuses_a_repeat_until_a_wider_audience_is_asked_for(
+    client, an_rfq_with_a_shortlist,
+):
+    """The default is unchanged: a second press reaches nobody. That is what
+    makes `?audience=all` a deliberate act rather than a synonym for Send."""
+    base = f"/api/workflow/rfqs/{an_rfq_with_a_shortlist}/enquiry/send"
+    first = client.post(base).json()
+    assert first["sent"]
+
+    again = client.post(base).json()
+    assert again["sent"] == []
+    assert "already been sent" in again["skipped"][0]["reason"]
+
+    forced = client.post(f"{base}?audience=all").json()
+    assert len(forced["sent"]) == len(first["sent"])
+    assert forced["skipped"] == []
+
+
+def test_the_preview_route_takes_the_same_audience(client, an_rfq_with_a_shortlist):
+    """Preview and send must agree, or the buyer confirms a list that is not
+    the one that goes out."""
+    base = f"/api/workflow/rfqs/{an_rfq_with_a_shortlist}/enquiry"
+    client.post(f"{base}/send")
+
+    plain = client.post(f"{base}/preview").json()["recipients"]
+    assert all(r["to"] is None for r in plain)
+
+    again = client.post(f"{base}/preview?audience=all").json()["recipients"]
+    assert all(r["to"] is not None for r in again)
+
+
+def test_an_unknown_audience_is_refused_on_both_routes(client, an_rfq_with_a_shortlist):
+    """A typo must not read as the default. Reaching nobody is indistinguishable
+    on screen from "everybody is up to date"."""
+    base = f"/api/workflow/rfqs/{an_rfq_with_a_shortlist}/enquiry"
+
+    assert client.post(f"{base}/preview?audience=evryone").status_code == 422
+    assert client.post(f"{base}/send?audience=evryone").status_code == 422
+
+
+def test_the_preview_names_the_audiences_so_the_browser_spells_none_of_them(
+    client, an_rfq_with_a_shortlist,
+):
+    body = client.post(
+        f"/api/workflow/rfqs/{an_rfq_with_a_shortlist}/enquiry/preview"
+    ).json()
+
+    assert body["audience"] == "unsent"
+    assert body["audiences"] == ["unsent", "outdated", "all"]

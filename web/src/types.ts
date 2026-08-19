@@ -416,6 +416,22 @@ export interface ChecklistItem {
   mandatory: boolean
 }
 
+/** One row of the eligibility checklist as the server built it. `item_id` is
+ *  `null` for the nine fixed returnables and an id for a buyer's own addition
+ *  — which is what says whether a row may be removed. */
+/** Who a dispatch is aimed at. Nested, not disjoint: `unsent` ⊆ `outdated` ⊆
+ *  `all`, so asking for the vendors behind on the documents also covers the one
+ *  shortlisted late who has had nothing at all. */
+export type EnquiryAudience = 'unsent' | 'outdated' | 'all'
+
+export interface ChecklistRow {
+  letter: string
+  label: string
+  mandatory: boolean
+  note: string | null
+  item_id: string | null
+}
+
 export interface TbeTemplate {
   rfq_id: string
   /** The buyer's own additions. This was `criteria: string[]` until the
@@ -482,6 +498,11 @@ export interface RfqDetail {
   /** The eligibility vocabulary, from the server, so the upload card does not
    *  spell the categories itself. */
   document_categories: string[]
+  /** The eligibility checklist, built server-side by `workflow/checklist.py`
+   *  and sent rather than spelled out here — the same rows the enquiry mail
+   *  prints, so what a buyer reads and what a vendor is sent cannot drift.
+   *  The nine fixed returnables come first, then the buyer's own additions. */
+  eligibility_checklist: ChecklistRow[]
   tbe_template: TbeTemplate | null
   vdrl: VdrlLine[]
   bids: BidWithVdrl[]
@@ -512,6 +533,12 @@ export interface EnquiryPreviewRecipient {
 export interface EnquiryPreview {
   recipients: EnquiryPreviewRecipient[]
   transport: 'outbox' | 'smtp'
+  /** The audience this preview was built with — echoed back so the card sends
+   *  exactly what it showed rather than whatever the control reads later. */
+  audience: EnquiryAudience
+  /** Sent rather than spelled out in the browser, the same reason
+   *  `selectable_approvers` and `document_categories` are. */
+  audiences: EnquiryAudience[]
 }
 
 /** One vendor's copy of the enquiry, as it actually went out. */

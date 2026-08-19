@@ -115,6 +115,12 @@ describe('ItemDetail', () => {
     renderItem()
 
     const card = await screen.findByRole('region', { name: /client list/i })
+    // An upload holding rows starts folded, and `getByText` finds an element
+    // inside a `hidden` body just as happily as a visible one — so this asks
+    // for the card to be open first, or it would pass over a list that never
+    // renders at all.
+    fireEvent.click(within(card).getByRole('button', { name: /show/i }))
+
     expect(within(card).getByText('AL MUNARA SWITCHGEAR LLC')).toBeInTheDocument()
   })
 
@@ -135,6 +141,8 @@ describe('ItemDetail', () => {
     renderItem()
 
     const card = await screen.findByRole('region', { name: /client list/i })
+    fireEvent.click(within(card).getByRole('button', { name: /show/i }))
+
     expect(within(card).getByText(/not in the registry/i)).toBeInTheDocument()
   })
 
@@ -1276,6 +1284,13 @@ describe('ItemDetail', () => {
 
       for (const name of [/client list/i, /astra list/i]) {
         const card = await screen.findByRole('region', { name })
+        // Opened first, and this one matters more than most: an upload holding
+        // rows starts folded, and a `hidden` body answers "not in the document"
+        // to every role query. Left folded, this test would pass just as
+        // happily against a card that *had* grown a Remove control.
+        fireEvent.click(within(card).getByRole('button', { name: /show/i }))
+        expect(within(card).getByRole('table')).toBeInTheDocument()
+
         expect(
           within(card).queryByRole('button', { name: /^remove /i }),
         ).not.toBeInTheDocument()
@@ -1283,6 +1298,184 @@ describe('ItemDetail', () => {
           within(card).queryByRole('button', { name: /^add vendor$/i }),
         ).not.toBeInTheDocument()
       }
+    })
+  })
+
+  /* --------------------------------------------------- collapsing a list */
+
+  describe('collapsing a vendor list', () => {
+    it('offers the control on all four lists and on the registry card', async () => {
+      // Per card rather than one control over the lot: a buyer folding the
+      // client's 79-row export away is usually doing it to see the two curated
+      // cards under it, so collapsing all five together would defeat the point.
+      vi.mocked(fetchWorkflowProject).mockResolvedValue(
+        detail({ items: [GENERATOR] }),
+      )
+
+      renderItem()
+
+      for (const name of [
+        /client list/i,
+        /astra list/i,
+        /added by hand/i,
+        /suggested vendors/i,
+        /available vendors/i,
+      ]) {
+        const card = await screen.findByRole('region', { name })
+        // Either label: which way a card starts is the next test's business,
+        // and asserting "Hide" here would tie this one to that default.
+        expect(
+          within(card).getByRole('button', { name: /hide|show/i }),
+        ).toBeInTheDocument()
+      }
+    })
+
+    it('takes the rows away and leaves the heading', async () => {
+      // Driven through a curated card, which is the one that starts open.
+      vi.mocked(fetchWorkflowProject).mockResolvedValue(
+        detail({
+          items: [GENERATOR],
+          item_vendor_lists: {
+            itm_1: vendorLists({
+              Manual: [vendorEntry({ source: 'Manual', vendor_id: null })],
+            }),
+          },
+        }),
+      )
+
+      renderItem()
+
+      const card = await screen.findByRole('region', { name: /added by hand/i })
+      expect(within(card).getByRole('table')).toBeInTheDocument()
+
+      fireEvent.click(within(card).getByRole('button', { name: /hide/i }))
+
+      expect(within(card).queryByRole('table')).not.toBeInTheDocument()
+      // Still findable by name, so the card announces itself collapsed rather
+      // than disappearing — and the count is what it says while folded away.
+      expect(
+        await screen.findByRole('region', { name: /added by hand/i }),
+      ).toBeInTheDocument()
+    })
+
+    it('starts an uploaded list folded once it holds rows', async () => {
+      // The two exports are what push everything under them off the screen —
+      // 52 rows each for one discipline on the corpus this was measured on.
+      vi.mocked(fetchWorkflowProject).mockResolvedValue(
+        detail({
+          items: [GENERATOR],
+          item_vendor_lists: {
+            itm_1: vendorLists({
+              Client: [vendorEntry()],
+              Astra: [
+                vendorEntry({ id: 'ive_2', source: 'Astra', vendor_name: 'ASTRA CO' }),
+              ],
+              Manual: [
+                vendorEntry({ id: 'ive_3', source: 'Manual', vendor_id: null }),
+              ],
+            }),
+          },
+        }),
+      )
+
+      renderItem()
+
+      for (const name of [/client list/i, /astra list/i]) {
+        const card = await screen.findByRole('region', { name })
+        expect(within(card).queryByRole('table')).not.toBeInTheDocument()
+        expect(within(card).getByRole('button', { name: /show/i })).toBeInTheDocument()
+      }
+
+      // The curated cards are where the work happens, so they stay open. The
+      // exports are folded *so that* these are the first thing under the item.
+      const manual = await screen.findByRole('region', { name: /added by hand/i })
+      expect(within(manual).getByRole('table')).toBeInTheDocument()
+    })
+
+    it('leaves an empty upload open, because its body is the instructions', async () => {
+      // An empty card's body is the sentence telling the reader to edit the
+      // item and load the export. Folding that away leaves a card saying only
+      // that it is empty, which is the one state where the fold costs the
+      // reader the thing they needed.
+      vi.mocked(fetchWorkflowProject).mockResolvedValue(
+        detail({ items: [GENERATOR], item_vendor_lists: { itm_1: vendorLists() } }),
+      )
+
+      renderItem()
+
+      const card = await screen.findByRole('region', { name: /client list/i })
+      expect(within(card).getByRole('button', { name: /hide/i })).toBeInTheDocument()
+      expect(
+        within(card).getByRole('heading', { name: /nothing on the client list yet/i }),
+      ).toBeInTheDocument()
+    })
+
+    it('opens a folded upload again', async () => {
+      vi.mocked(fetchWorkflowProject).mockResolvedValue(
+        detail({
+          items: [GENERATOR],
+          item_vendor_lists: {
+            itm_1: vendorLists({ Client: [vendorEntry({ vendor_name: 'CLIENT CO' })] }),
+          },
+        }),
+      )
+
+      renderItem()
+
+      const card = await screen.findByRole('region', { name: /client list/i })
+      fireEvent.click(within(card).getByRole('button', { name: /show/i }))
+
+      expect(within(card).getByRole('table')).toBeInTheDocument()
+      expect(within(card).getByText('CLIENT CO')).toBeInTheDocument()
+    })
+
+    it('counts the rows in the heading, so a collapsed list still says how big it is', async () => {
+      vi.mocked(fetchWorkflowProject).mockResolvedValue(
+        detail({
+          items: [GENERATOR],
+          item_vendor_lists: {
+            itm_1: vendorLists({
+              Client: [
+                vendorEntry(),
+                vendorEntry({ id: 'ive_2', vendor_name: 'SECOND CO' }),
+              ],
+            }),
+          },
+        }),
+      )
+
+      renderItem()
+
+      const card = await screen.findByRole('region', { name: /client list/i })
+      expect(within(card).getByRole('heading')).toHaveTextContent(/client list\s*2/i)
+    })
+
+    it('folds and unfolds each list on its own', async () => {
+      // Both exports start folded, so unfolding one has to leave the other
+      // where it was: a buyer opens the client's list to read it *against* the
+      // Astra one, and a single shared flag would open both.
+      vi.mocked(fetchWorkflowProject).mockResolvedValue(
+        detail({
+          items: [GENERATOR],
+          item_vendor_lists: {
+            itm_1: vendorLists({
+              Client: [vendorEntry({ vendor_name: 'CLIENT CO' })],
+              Astra: [
+                vendorEntry({ id: 'ive_2', source: 'Astra', vendor_name: 'ASTRA CO' }),
+              ],
+            }),
+          },
+        }),
+      )
+
+      renderItem()
+
+      const client = await screen.findByRole('region', { name: /client list/i })
+      fireEvent.click(within(client).getByRole('button', { name: /show/i }))
+
+      expect(within(client).getByRole('table')).toBeInTheDocument()
+      const astra = await screen.findByRole('region', { name: /astra list/i })
+      expect(within(astra).queryByRole('table')).not.toBeInTheDocument()
     })
   })
 

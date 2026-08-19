@@ -39,6 +39,7 @@ import type {
   VendorContact,
   VendorContactDirectory,
   VendorContactSummary,
+  EnquiryAudience,
 } from './types'
 
 /** The server's `detail` if it sent one, else the status line. */
@@ -564,7 +565,7 @@ export function approveShortlist(rfqId: string): Promise<{ approved_by: string }
 
 export function setTbeTemplate(
   rfqId: string,
-  body: { criteria: string[]; source_rfq_reference?: string | null },
+  body: { items: string[]; source_rfq_reference?: string | null },
 ): Promise<TbeTemplate> {
   return sendJson<TbeTemplate>(
     `/api/workflow/rfqs/${encodeURIComponent(rfqId)}/tbe-template`,
@@ -575,9 +576,12 @@ export function setTbeTemplate(
 
 /** Who a dispatch would reach right now, and why anybody else would be
  *  skipped. Stores nothing — this is a look, not a send. */
-export function previewEnquiry(rfqId: string): Promise<EnquiryPreview> {
+export function previewEnquiry(
+  rfqId: string,
+  audience: EnquiryAudience = 'unsent',
+): Promise<EnquiryPreview> {
   return sendJson<EnquiryPreview>(
-    `/api/workflow/rfqs/${encodeURIComponent(rfqId)}/enquiry/preview`,
+    `/api/workflow/rfqs/${encodeURIComponent(rfqId)}/enquiry/preview?audience=${audience}`,
     'POST',
     {},
   )
@@ -585,10 +589,17 @@ export function previewEnquiry(rfqId: string): Promise<EnquiryPreview> {
 
 /** Dispatch the enquiry. Takes no body — who sent it comes from the session,
  *  never from the request, so a caller cannot sign somebody else's name to a
- *  tender. */
-export function sendEnquiry(rfqId: string): Promise<EnquiryDispatch> {
+ *  tender. `resend` is a query parameter for that reason: it keeps the body
+ *  empty rather than opening one.
+ *
+ *  `audience` must match whatever the preview beside it used, or the buyer
+ *  confirms a list that is not the one that goes out. */
+export function sendEnquiry(
+  rfqId: string,
+  audience: EnquiryAudience = 'unsent',
+): Promise<EnquiryDispatch> {
   return sendJson<EnquiryDispatch>(
-    `/api/workflow/rfqs/${encodeURIComponent(rfqId)}/enquiry/send`,
+    `/api/workflow/rfqs/${encodeURIComponent(rfqId)}/enquiry/send?audience=${audience}`,
     'POST',
     {},
   )

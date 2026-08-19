@@ -159,6 +159,22 @@ def freeze_the_package(store: WorkflowStore, rfq_id: str) -> None:
     store.freeze_package(rfq_id, by="lead.engineer@example.com")
 
 
+def issued_store() -> tuple[WorkflowStore, str]:
+    """An RFQ that has actually reached Issued, with no TBE template on it.
+
+    Built by transitioning rather than by setting `stage` directly, so the
+    fixture proves the edge it depends on is open — an RFQ that cannot be
+    issued without a template would make every assertion below vacuous.
+    """
+    store, rfq_id = gated_store()
+    freeze_the_package(store, rfq_id)
+    store.add_shortlist_entry(rfq_id, vendor_name="Galfar", prequal_status="Qualified",
+                              scope_code_fit=True, included=True)
+    store.approve_shortlist(rfq_id, by="procurement@example.com")
+    store.transition(rfq_id, Stage.ISSUED, by="amal@example.com")
+    return store, rfq_id
+
+
 # The two tests that stood here — `test_scoping_gate_blocks_until_the_package_is_frozen`
 # and `test_scoping_gate_passes_once_the_package_is_frozen` — are deleted rather
 # than updated: the rule they asserted no longer exists. `Scoping` is not a
@@ -191,27 +207,65 @@ def test_shortlisting_gate_blocks_when_no_vendor_is_included():
     assert "no included vendors" in result.reason.lower()
 
 
-def test_issuance_gate_blocks_without_a_tbe_template():
+def test_the_shortlisting_gate_does_not_ask_for_a_tbe_template():
+    """It used to, and the deliberate cost of moving it is recorded here: an
+    RFQ can now be **issued to vendors** with nobody having settled what they
+    must return. The editor sits on the Issued step, so asking for it on the
+    way *in* meant refusing a reader on the strength of a control they had not
+    reached; the check moved to that step's own exit instead.
+    """
     store, rfq_id = gated_store()
     freeze_the_package(store, rfq_id)
     store.add_shortlist_entry(rfq_id, vendor_name="Galfar", prequal_status="Qualified",
                               scope_code_fit=True, included=True)
     store.approve_shortlist(rfq_id, by="procurement@example.com")
 
-    result = check_gate(store, rfq_id, Stage.SHORTLISTING, Stage.ISSUED)
-    assert result.passed is False
-    assert "tbe" in result.reason.lower()
+    assert store.get_tbe_template(rfq_id) is None
+    assert check_gate(store, rfq_id, Stage.SHORTLISTING, Stage.ISSUED).passed is True
 
 
-def test_issuance_gate_passes_with_shortlist_approved_and_tbe_present():
+def test_shortlisting_gate_passes_once_the_shortlist_is_approved():
     store, rfq_id = gated_store()
     freeze_the_package(store, rfq_id)
     store.add_shortlist_entry(rfq_id, vendor_name="Galfar", prequal_status="Qualified",
                               scope_code_fit=True, included=True)
     store.approve_shortlist(rfq_id, by="procurement@example.com")
-    store.set_tbe_template(rfq_id, criteria=["Throughput", "Materials"])
 
     assert check_gate(store, rfq_id, Stage.SHORTLISTING, Stage.ISSUED).passed is True
+
+
+def test_the_issued_gate_is_open_and_asks_for_no_tbe_template():
+    """`_issued_exit` is gone, and this is what replaced the two tests that
+    drove it.
+
+    It asked whether somebody had settled what bidders must return. The
+    eligibility checklist is now `EligibilityCategory` — nine fixed returnables
+    that apply to every RFQ and are stored nowhere — so that question is
+    answered by construction and there is nothing for a buyer to forget.
+
+    The removal was forced rather than chosen: the free-text editor was the only
+    control that could set a template and it was deliberately taken off the
+    Issued step, so keeping the gate would have stranded every RFQ at Issued
+    with nothing able to unblock it. This test is the assertion that says the
+    edge is open, and it fails if the check is ever quietly reinstated.
+    """
+    store, rfq_id = issued_store()
+
+    assert store.get_tbe_template(rfq_id) is None
+    result = check_gate(store, rfq_id, Stage.ISSUED, Stage.CLARIFICATIONS)
+    assert result.passed is True
+    assert result.reason is None
+
+
+def test_a_buyers_own_checklist_additions_never_gate_the_rfq():
+    """What a buyer adds on top of the nine is *extra*. Blocking an RFQ for
+    want of an optional addition would refuse it for something that is not a
+    requirement, so attaching one changes nothing about the edge."""
+    store, rfq_id = issued_store()
+    store.set_tbe_template(rfq_id, items=["Drum lengths"])
+
+    result = check_gate(store, rfq_id, Stage.ISSUED, Stage.CLARIFICATIONS)
+    assert result.passed is True
 
 
 def test_a_blocked_gate_always_carries_a_reason():
@@ -223,8 +277,11 @@ def test_a_blocked_gate_always_carries_a_reason():
 
 
 def test_ungated_transitions_pass_without_a_reason():
+    # Issued → Clarifications was the example here until the TBE check moved
+    # onto it. Awarded → PO Issued carries no gate and is the case this test is
+    # actually about: an edge absent from `_GATES` answers "yes", with no reason.
     store, rfq_id = gated_store()
-    result = check_gate(store, rfq_id, Stage.ISSUED, Stage.CLARIFICATIONS)
+    result = check_gate(store, rfq_id, Stage.AWARDED, Stage.PO_ISSUED)
     assert result.passed is True
     assert result.reason is None
 
@@ -252,7 +309,7 @@ def test_backward_transitions_are_not_gated():
     store.add_shortlist_entry(rfq_id, vendor_name="Galfar", prequal_status="Qualified",
                               scope_code_fit=True, included=True)
     store.approve_shortlist(rfq_id, by="procurement@example.com")
-    store.set_tbe_template(rfq_id, criteria=["Throughput"])
+    store.set_tbe_template(rfq_id, items=["Throughput"])
     bid = store.register_bid(rfq_id, vendor_name="Galfar", headline_price_aed=46_200_000)
     store.select_bids(rfq_id, [bid.id], by="client@example.com", rationale="Only compliant bid")
     for target in [Stage.ISSUED, Stage.CLARIFICATIONS, Stage.BIDS_RECEIVED, Stage.EVALUATION]:
@@ -290,7 +347,7 @@ def rfq_at_clarifications() -> tuple[WorkflowStore, str, str]:
         scope_code_fit=True, included=True,
     )
     store.approve_shortlist(rfq.id, by="procurement@example.com")
-    store.set_tbe_template(rfq.id, criteria=["Accuracy class"])
+    store.set_tbe_template(rfq.id, items=["Accuracy class"])
     store.transition(rfq.id, Stage.ISSUED, by="buyer@example.com")
     store.transition(rfq.id, Stage.CLARIFICATIONS, by="buyer@example.com")
     return store, rfq.id, entry.id

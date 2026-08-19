@@ -106,6 +106,10 @@ def new_vdrl_line_id() -> str:
     return f"vdl_{uuid4().hex[:8]}"
 
 
+def new_checklist_item_id() -> str:
+    return f"cli_{uuid4().hex[:8]}"
+
+
 class ShortlistEntry(BaseModel):
     """`override_by` and `override_reason` exist so that including a vendor
     against the prequal signal is a positive, attributed act rather than a
@@ -133,9 +137,42 @@ class ShortlistEntry(BaseModel):
     override_reason: str | None = None
 
 
+class ChecklistItem(BaseModel):
+    """One line a buyer added to an RFQ's eligibility checklist.
+
+    The nine `EligibilityCategory` members are **not** records of this kind and
+    never become ones: they are a fixed vocabulary, stored nowhere per RFQ, so
+    "the nine cannot be removed" holds by construction rather than by a guard
+    somebody could forget. What lives here is only what a buyer typed for this
+    one RFQ.
+
+    `mandatory` reaches `eligibility.assess`, which is why
+    `RfqDocument.checklist_item_id` exists: a must-have item with nothing able
+    to name it would be unsatisfiable by construction, and a checklist that can
+    never be met is worse than one that cannot be extended.
+    """
+
+    id: str = Field(default_factory=new_checklist_item_id)
+    label: str
+    mandatory: bool = False
+
+
 class TbeTemplate(BaseModel):
+    """The RFQ's eligibility checklist — the record `_shortlisting_exit` reads
+    to decide that somebody has settled what bidders must return.
+
+    `items` holds **only the buyer's own additions**. The nine categories are
+    not copied in: a stored copy of a fixed vocabulary is a second definition
+    for the first edit to disagree with, the rule this repository keeps for
+    `client_approved` and `approval_caution`.
+
+    The field was `criteria: list[str]` before the checklist existed. A
+    document written then reads its strings as non-mandatory items — see
+    `persistence.from_document` — so a seeded RFQ keeps what it had.
+    """
+
     rfq_id: str
-    criteria: list[str]
+    items: list[ChecklistItem] = Field(default_factory=list)
     source_rfq_reference: str | None = None
 
 

@@ -34,6 +34,15 @@ from workflow.models.bidder import ADNOC, ASTRA, Bidder
 # Canonical header -> attribute. The first four are required; without them
 # there is no bidder to build.
 _VENDOR_NUMBER = "vendor number"
+#: The client's export cuts `Vendor Name` at exactly this many characters —
+#: 9 362 rows at the limit in the December 2025 file, and *no* row longer. It
+#: is upstream truncation: nothing in this module shortens a name, and there is
+#: no longer form of it anywhere in the workbook to recover.
+#:
+#: Named here, beside the column it describes, so `store.emails_for` can absorb
+#: it at the one lookup it breaks rather than hard-coding a bare 35.
+AVL_NAME_LIMIT = 35
+
 _VENDOR_NAME = "vendor name"
 _PRODUCT_GROUP = "product group description"
 _MANUFACTURER = "manufacture name"

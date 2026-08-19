@@ -323,6 +323,28 @@ a { color: var(--accent-ink); text-underline-offset: 2px; }
   letter-spacing: -0.01em;
   margin: 0;
 }
+/* Whatever sits at the trailing end of the head: a card's own actions, its
+   collapse toggle, or both. `flex-shrink: 0` so a long title squeezes the
+   heading rather than wrapping the control inside its own pill — the defect
+   `.chip` had in `.fxrow`. */
+.card-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+/* How many rows a card holds, beside its title. Muted and monospaced so it
+   reads as a tally rather than as part of the name — the same treatment the
+   watchlist sections give it. */
+.card-head .count {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+/* A collapsed card is a header and nothing else, and the head's rule would
+   otherwise draw a second line 1px above the card's own bottom border. */
+.card-head:has(+ [hidden]) { border-bottom: 0; }
 .card-body { padding: 1.15rem; }
 
 /* -------------------------------------------- signature: coverage instrument */
@@ -1113,6 +1135,12 @@ p.warn { margin: 0.5rem 0 0; }
    control it names. Measured in a browser; jsdom applies no stylesheet and
    does no layout, so nothing in the web suite can see it. */
 .field-label--inline { margin: 0; }
+
+/* The folder a file came from, under its name in the enquiry-document list.
+   Second line of the same cell, so a long path cannot widen the column the
+   file names sit in. The zone above that list is `.dropzone` — the one the
+   ingestion screen already uses, not a second one. */
+.filepath { font-size: 0.78rem; }
 
 
 /* ------------------------------------------------- project cards (roster) */

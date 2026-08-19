@@ -33,7 +33,7 @@ from pydantic import BaseModel
 
 from api.auth.deps import current_user
 from api.auth.models import User
-from workflow import clarifications, contact_db, enquiry, mail, persistence
+from workflow import checklist, clarifications, contact_db, enquiry, mail, persistence
 from workflow import bidder_db, disciplines, doc_store, item_vendor_lists
 from workflow.contact_import import parse_contacts_counted
 from workflow.eligibility import assess as assess_eligibility
@@ -246,7 +246,18 @@ class ShortlistEntryIn(BaseModel):
 
 
 class TbeTemplateIn(BaseModel):
-    criteria: list[str]
+    """The buyer's **own additions** to the eligibility checklist.
+
+    Never the nine `EligibilityCategory` returnables — those are a fixed
+    vocabulary served on the RFQ payload, and a request able to set them would
+    be a request able to drop one.
+
+    One label per entry. There is deliberately no `mandatory` flag yet: the
+    three categories that block a bid are the gate's, and letting a buyer mint
+    a fourth from a text box is a decision that wants its own screen.
+    """
+
+    items: list[str]
     source_rfq_reference: str | None = None
 
 
@@ -1251,6 +1262,19 @@ def get_rfq(rfq_id: str) -> dict:
         # without spelling the vocabulary itself.
         "documents": [_document_payload(d) for d in store.rfq_documents(rfq_id)],
         "document_categories": [c.value for c in EligibilityCategory],
+        # The checklist the buyer reads on screen, built by the same function
+        # that writes it into the enquiry mail -- `workflow/checklist.py`. Sent
+        # rather than spelled out in the browser for the reason above: a
+        # checklist typed into a screen would drift from the one the vendor is
+        # sent and from the one `eligibility.assess` enforces, and neither
+        # mismatch is visible from either end.
+        "eligibility_checklist": [
+            dataclasses.asdict(row)
+            for row in checklist.rows(
+                [d for d in store.rfq_documents(rfq_id) if d.submitted_by_vendor_id is None],
+                tbe.items if tbe else (),
+            )
+        ],
         "tbe_template": tbe.model_dump(mode="json") if tbe else None,
         "vdrl": [line.model_dump(mode="json") for line in store.vdrl_for(rfq_id)],
         "bids": bids,
@@ -1713,7 +1737,9 @@ def approve_shortlist(rfq_id: str, user: User = Depends(current_user)) -> dict:
 
 
 @router.post("/rfqs/{rfq_id}/enquiry/preview")
-def preview_enquiry(rfq_id: str, user: User = Depends(current_user)) -> dict:
+def preview_enquiry(
+    rfq_id: str, audience: str = enquiry.UNSENT, user: User = Depends(current_user),
+) -> dict:
     """Who a dispatch would reach right now, and why anybody else would be
     skipped. Stores nothing — `workflow.json` is byte-for-byte unchanged by
     this route, which is what `test_the_preview_route_stores_nothing` holds.
@@ -1721,22 +1747,49 @@ def preview_enquiry(rfq_id: str, user: User = Depends(current_user)) -> dict:
     `transport` rides alongside so the browser can say "this writes to the
     outbox" versus "this reaches real mailboxes" without inferring it from
     anything else in the response.
+
+    `audience` is a **query parameter, not a body field**, so this route still
+    takes no request body — the property that makes it impossible to sign
+    somebody else's name to a tender. It must match the value the send that
+    follows uses, or the buyer confirms a list that is not the one that goes.
+
+    `audiences` rides alongside so the browser builds its control without
+    spelling the vocabulary itself, the same reason `selectable_approvers` and
+    `document_categories` are sent.
     """
     store = _read()
     if store.get_rfq(rfq_id) is None:
         raise HTTPException(status_code=404, detail=f"Unknown RFQ: {rfq_id}")
     blobs = doc_store.LocalBlobStore(_root())
-    rows = enquiry.preview(store, blobs, rfq_id)
+    try:
+        enquiry.check_audience(audience)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    rows = enquiry.preview(store, blobs, rfq_id, audience)
     transport = mail.transport_for(_root())
     return {
         "recipients": [dataclasses.asdict(r) for r in rows],
         "transport": "smtp" if isinstance(transport, mail.SmtpImapTransport) else "outbox",
+        "audience": audience,
+        "audiences": list(enquiry.AUDIENCES),
     }
 
 
 @router.post("/rfqs/{rfq_id}/enquiry/send")
-def send_enquiry(rfq_id: str, user: User = Depends(current_user)) -> dict:
-    """Dispatch the enquiry to every reachable, not-yet-sent shortlist entry.
+def send_enquiry(
+    rfq_id: str, audience: str = enquiry.UNSENT, user: User = Depends(current_user),
+) -> dict:
+    """Dispatch the enquiry to every reachable shortlist entry in `audience`.
+
+    `unsent` (the default) reaches only vendors never sent to. `outdated` adds
+    those whose last send predates the newest document on the RFQ — the option
+    for "something new was added". `all` reaches the whole shortlist again.
+    Anything else is a 422 rather than a silent fallback to the default, which
+    would reach nobody and read on screen as "everybody is up to date".
+
+    Both wider audiences are deliberate acts: each vendor reached a second time
+    gets a second `EnquirySend` record, and the first is left exactly as it was.
+    Carried as a query parameter so this route keeps taking no request body.
 
     `by` is always `user.email` — never a request field — so a caller cannot
     sign somebody else's name to a tender. The transport is built before the
@@ -1746,12 +1799,18 @@ def send_enquiry(rfq_id: str, user: User = Depends(current_user)) -> dict:
     re-resolves them itself, which is what makes a stale tab unable to redirect
     who gets mailed.
     """
+    try:
+        enquiry.check_audience(audience)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     transport = mail.transport_for(_root())  # outside the lock: it does no I/O
     blobs = doc_store.LocalBlobStore(_root())
     with persistence.locked_update(_root()) as store:
         if store.get_rfq(rfq_id) is None:
             raise HTTPException(status_code=404, detail=f"Unknown RFQ: {rfq_id}")
-        result = enquiry.dispatch(store, blobs, transport, rfq_id, by=user.email)
+        result = enquiry.dispatch(
+            store, blobs, transport, rfq_id, by=user.email, audience=audience,
+        )
     return {
         "sent": [r.model_dump(mode="json") for r in result.sent],
         "skipped": [dataclasses.asdict(s) for s in result.skipped],
@@ -1764,7 +1823,7 @@ def set_tbe_template(rfq_id: str, body: TbeTemplateIn) -> dict:
         with persistence.locked_update(_root()) as store:
             template = store.set_tbe_template(
                 rfq_id,
-                criteria=body.criteria,
+                items=body.items,
                 source_rfq_reference=body.source_rfq_reference,
             )
     except KeyError as exc:

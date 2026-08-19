@@ -210,7 +210,7 @@ def freeze_and_prepare(store: WorkflowStore, rfq_id: str) -> None:
     store.add_shortlist_entry(rfq_id, vendor_name="Galfar", prequal_status="Qualified",
                               scope_code_fit=True, included=True)
     store.approve_shortlist(rfq_id, by="procurement@example.com")
-    store.set_tbe_template(rfq_id, criteria=["Throughput"])
+    store.set_tbe_template(rfq_id, items=["Throughput"])
     bid = store.register_bid(rfq_id, vendor_name="Galfar", headline_price_aed=46_200_000)
     store.select_bids(rfq_id, [bid.id], by="client@example.com", rationale="Only compliant bid")
 
@@ -385,10 +385,10 @@ def test_approving_an_empty_shortlist_is_rejected():
 def test_tbe_template_records_its_source_when_pulled_from_a_past_project():
     store = make_store()
     rfq = seed_rfq(store)
-    store.set_tbe_template(rfq.id, criteria=["Throughput", "Materials", "Delivery"],
+    store.set_tbe_template(rfq.id, items=["Throughput", "Materials", "Delivery"],
                            source_rfq_reference="ADP-RFQ-2025-008")
     tbe = store.get_tbe_template(rfq.id)
-    assert tbe.criteria == ["Throughput", "Materials", "Delivery"]
+    assert [i.label for i in tbe.items] == ["Throughput", "Materials", "Delivery"]
     assert tbe.source_rfq_reference == "ADP-RFQ-2025-008"
 
 
@@ -411,7 +411,7 @@ def test_artifacts_reject_an_unknown_rfq():
         store.add_shortlist_entry("rfq_missing", vendor_name="Galfar",
                                   prequal_status="Qualified", scope_code_fit=True, included=True)
     with pytest.raises(KeyError):
-        store.set_tbe_template("rfq_missing", criteria=["Throughput"])
+        store.set_tbe_template("rfq_missing", items=["Throughput"])
     with pytest.raises(KeyError):
         store.set_technical_package("rfq_missing", revision="Rev. A",
                                     basis_of_design="basis", attachments=[])

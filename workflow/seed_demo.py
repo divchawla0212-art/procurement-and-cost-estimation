@@ -378,7 +378,7 @@ def build_demo_store(as_of: date, bidders: list[Bidder] | None = None) -> Workfl
     store.approve_shortlist("rfq_ruu01", by=PROCUREMENT)
     store.set_tbe_template(
         "rfq_ruu01",
-        criteria=["Capacity at site conditions", "Specific power",
+        items=["Capacity at site conditions", "Specific power",
                   "Dryer dew point", "Noise at 1 m", "Spares for two years"],
         source_rfq_reference="RUU-RFQ-2025-018",
     )
@@ -423,7 +423,7 @@ def build_demo_store(as_of: date, bidders: list[Bidder] | None = None) -> Workfl
     store.approve_shortlist("rfq_ruu02", by=PROCUREMENT)
     store.set_tbe_template(
         "rfq_ruu02",
-        criteria=["Accuracy class", "Hazardous area certification",
+        items=["Accuracy class", "Hazardous area certification",
                   "Turndown ratio", "Cyber-security compliance"],
     )
     store.transition("rfq_ruu02", Stage.ISSUED, by=BUYER)
@@ -488,7 +488,7 @@ def build_demo_store(as_of: date, bidders: list[Bidder] | None = None) -> Workfl
             [("JAT-CS-501", "Cable schedule", "Rev. B")])
     cable_bidders = _invite(store, "rfq_jat01", _shortlistable(roster, PG_MV_CABLE, 2), as_of)
     store.approve_shortlist("rfq_jat01", by=PROCUREMENT)
-    store.set_tbe_template("rfq_jat01", criteria=["Conductor size", "Drum lengths",
+    store.set_tbe_template("rfq_jat01", items=["Conductor size", "Drum lengths",
                                                   "Type test certificates"])
     store.transition("rfq_jat01", Stage.ISSUED, by=BUYER)
     _vdrl(store, "rfq_jat01",
@@ -522,7 +522,7 @@ def build_demo_store(as_of: date, bidders: list[Bidder] | None = None) -> Workfl
              ("JAT-HX-602", "Exchanger datasheets", "Rev. A")])
     steel_bidders = _invite(store, "rfq_jat02", _shortlistable(roster, PG_STEEL, 2), as_of)
     store.approve_shortlist("rfq_jat02", by=PROCUREMENT)
-    store.set_tbe_template("rfq_jat02", criteria=["Plate grade", "Weld procedure",
+    store.set_tbe_template("rfq_jat02", items=["Plate grade", "Weld procedure",
                                                   "Coating system", "Delivery to site"])
     store.transition("rfq_jat02", Stage.ISSUED, by=BUYER)
     _vdrl(store, "rfq_jat02",

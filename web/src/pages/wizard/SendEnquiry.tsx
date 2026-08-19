@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { JSX } from 'react'
 import { previewEnquiry, sendEnquiry } from '../../api'
+import type { EnquiryAudience } from '../../types'
 import type { StepProps } from './types'
 
 /**
@@ -34,14 +35,17 @@ export function SendEnquiry({ data, run, busy }: Omit<StepProps, 'tick'>): JSX.E
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [result, setResult] = useState<Awaited<ReturnType<typeof sendEnquiry>> | null>(null)
+  // Narrowest by default: sending a tender again is an act somebody chooses
+  // each time, never a setting that stays on from an earlier decision.
+  const [audience, setAudience] = useState<EnquiryAudience>('unsent')
 
   const reachable = preview?.recipients.filter((r) => r.to !== null).length ?? 0
 
-  async function loadPreview() {
+  async function loadPreview(pick: EnquiryAudience) {
     setPreviewLoading(true)
     setPreviewError(null)
     try {
-      setPreview(await previewEnquiry(data.rfq.id))
+      setPreview(await previewEnquiry(data.rfq.id, pick))
     } catch (e) {
       setPreviewError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -49,16 +53,43 @@ export function SendEnquiry({ data, run, busy }: Omit<StepProps, 'tick'>): JSX.E
     }
   }
 
+  /* The control renders in **both** branches, and that is the whole point.
+     It used to live only before the preview, so the moment a buyer discovered
+     everybody had already been sent — which is exactly when they need to widen
+     the audience — the option had vanished and only a page reload brought it
+     back. Changing it here re-previews immediately, so the table on screen is
+     always the list that would go out. */
+  const picker = (
+    <label className="fxrow">
+      <span>Send to</span>
+      <select
+        className="input"
+        value={audience}
+        disabled={busy || previewLoading}
+        onChange={(e) => {
+          const pick = e.target.value as EnquiryAudience
+          setAudience(pick)
+          if (preview !== null) void loadPreview(pick)
+        }}
+      >
+        <option value="unsent">vendors not yet sent to</option>
+        <option value="outdated">vendors without the latest documents</option>
+        <option value="all">everyone on the shortlist</option>
+      </select>
+    </label>
+  )
+
   return (
     <>
       <h3>Send the enquiry</h3>
       {preview === null ? (
         <>
+          {picker}
           <button
             type="button"
             className="btn"
             disabled={busy || previewLoading}
-            onClick={() => void loadPreview()}
+            onClick={() => void loadPreview(audience)}
           >
             Preview recipients
           </button>
@@ -66,6 +97,8 @@ export function SendEnquiry({ data, run, busy }: Omit<StepProps, 'tick'>): JSX.E
         </>
       ) : (
         <>
+          {picker}
+          {previewError ? <p className="warn">{previewError}</p> : null}
           {preview.transport === 'smtp' ? (
             <p className="warn">This sends real email to {reachable} vendors.</p>
           ) : (
@@ -99,9 +132,11 @@ export function SendEnquiry({ data, run, busy }: Omit<StepProps, 'tick'>): JSX.E
             type="button"
             className="btn"
             disabled={busy}
-            onClick={() => run(async () => setResult(await sendEnquiry(data.rfq.id)))}
+            onClick={() =>
+              run(async () => setResult(await sendEnquiry(data.rfq.id, preview.audience)))
+            }
           >
-            Send to {reachable} vendors
+            {preview.audience === 'unsent' ? 'Send to' : 'Send again to'} {reachable} vendors
           </button>
         </>
       )}

@@ -206,6 +206,7 @@ export const RFQ_DETAIL: RfqDetail = {
   client_approver: 'ADNOC',
   documents: [],
   document_categories: [],
+  eligibility_checklist: [],
   tbe_template: null,
   vdrl: [],
   bids: [],

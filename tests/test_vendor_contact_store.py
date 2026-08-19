@@ -155,3 +155,74 @@ def test_the_directory_reads_back_in_folded_name_order():
     store = WorkflowStore()
     store.set_vendor_contacts([a_contact(name="zeta"), a_contact(name="Alpha")])
     assert [c.vendor_name for c in store.vendor_contacts()] == ["Alpha", "zeta"]
+
+
+# -- the client export truncates every name at 35 characters --------------------
+
+
+def test_a_name_the_client_export_truncated_still_finds_its_contact():
+    """The ADNOC export cuts `Vendor Name` at exactly 35 characters — 9 362
+    rows in the file this registry was built from. The contact sheet carries
+    the *full* name, so an exact fold match misses and a real company that has
+    an address on file reads as "no address on file".
+
+    Nothing in this repository does the truncating, so it cannot be undone at
+    import; it is absorbed here, at the one lookup that suffers from it.
+    """
+    store = WorkflowStore()
+    store.set_vendor_contacts([
+        a_contact("CONCORDE TECHNICAL - SOLE PROPRIETORSHIP", ["sales@concorde.example"]),
+    ])
+
+    truncated = "CONCORDE TECHNICAL - SOLE PROPRIETO"
+    assert len(truncated) == 35
+    assert store.emails_for(truncated) == ["sales@concorde.example"]
+
+
+def test_an_exact_match_still_wins_over_the_truncation_rule():
+    store = WorkflowStore()
+    store.set_vendor_contacts([
+        a_contact("A" * 35, ["exact@example.com"]),
+        a_contact("A" * 35 + " EXTENDED", ["longer@example.com"]),
+    ])
+
+    assert store.emails_for("A" * 35) == ["exact@example.com"]
+
+
+def test_two_contacts_sharing_a_truncated_prefix_resolve_to_neither():
+    """The rule that keeps this from becoming the fuzzy matching this
+    repository has twice recorded as a defect. Two real companies whose names
+    agree for 35 characters are indistinguishable from a truncated name, so
+    the honest answer is that nothing is on file — a buyer told "no address"
+    uploads a sheet, while a buyer sent to the wrong company cannot undo it.
+    """
+    store = WorkflowStore()
+    store.set_vendor_contacts([
+        a_contact("B" * 35 + " TRADING", ["one@example.com"]),
+        a_contact("B" * 35 + " SHIPPING", ["two@example.com"]),
+    ])
+
+    assert store.emails_for("B" * 35) is None
+
+
+def test_a_short_name_is_never_matched_by_prefix():
+    """Only a name of exactly the export's cut length may be a truncation. A
+    genuinely short name that happens to prefix a longer one is a different
+    company, and matching it would be guessing."""
+    store = WorkflowStore()
+    store.set_vendor_contacts([
+        a_contact("AL MASAOOD OIL INDUSTRY", ["full@example.com"]),
+    ])
+
+    assert store.emails_for("AL MASAOOD") is None
+
+
+def test_the_truncation_rule_folds_like_every_other_lookup():
+    store = WorkflowStore()
+    store.set_vendor_contacts([
+        a_contact("concorde  technical - sole   proprietorship", ["folded@example.com"]),
+    ])
+
+    assert store.emails_for("CONCORDE TECHNICAL - SOLE PROPRIETO") == [
+        "folded@example.com",
+    ]

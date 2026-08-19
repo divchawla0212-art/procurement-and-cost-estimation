@@ -43,6 +43,7 @@ const BASE: RfqDetail = {
   client_approver: 'ADNOC',
   documents: [],
   document_categories: [],
+  eligibility_checklist: [],
   tbe_template: null,
   vdrl: [],
   bids: [],
@@ -156,6 +157,24 @@ describe('ShortlistingStep vendor selection', () => {
     expect(
       button.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy()
+  })
+
+  // The editor moved to the Issued step, beside the enquiry documents whose
+  // returnables it lists. `_shortlisting_exit` still reads the template on the
+  // way out of *this* step, so the control now sits after the gate that
+  // requires it — reachable because the wizard opens any step early, and named
+  // in the refusal so a blocked reader is told where to go. This is the
+  // assertion that fails if it grows back here.
+  it('has no TBE template editor', () => {
+    step([entry()])
+
+    expect(
+      screen.queryByRole('heading', { name: 'TBE template' }),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('One criterion per line')).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Save TBE template' }),
+    ).not.toBeInTheDocument()
   })
 })
 

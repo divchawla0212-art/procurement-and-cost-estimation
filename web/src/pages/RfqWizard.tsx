@@ -4,7 +4,7 @@ import { fetchRfq, transitionRfq } from '../api'
 import { useAsync } from '../useAsync'
 import { Card, ErrorState, LoadingState } from '../components/primitives'
 import { ClarificationsStep } from './wizard/ClarificationsStep'
-import { IssuedStep } from './wizard/IssuedStep'
+import { RaiseRfqStep } from './wizard/RaiseRfqStep'
 import { ShortlistingStep } from './wizard/ShortlistingStep'
 
 /**
@@ -20,9 +20,9 @@ import { ShortlistingStep } from './wizard/ShortlistingStep'
  *   instead.
  *
  * The one thing editing cannot undo is a frozen technical package: the server
- * refuses, and this shows that refusal rather than hiding the control, so the
- * reason is visible rather than mysterious. An addendum, under Clarifications,
- * is the one sanctioned way that package moves.
+ * refuses uploads against one, so the Issued step shows what is in it and says
+ * why there is nothing to press. Nothing here freezes a package any more — see
+ * `RaiseRfqStep` for what that costs the addendum flow under Clarifications.
  *
  * Ticking a step off is `transitionRfq`. The button is not disabled when the
  * gate is closed — a disabled button explains nothing. It is enabled, and a
@@ -37,14 +37,14 @@ import { ShortlistingStep } from './wizard/ShortlistingStep'
 /** The steps this phase covers. Bids and evaluation arrive with the ingestion
  *  work, so the wizard stops at Clarifications rather than showing four steps
  *  with nothing behind them. `Scoping` used to open the list; it was removed
- *  from the process, and its technical-package editor moved into Issued. */
+ *  from the process, and Issued is now one upload control and the list of what
+ *  has been uploaded — `RaiseRfqStep`. */
 const WIZARD_STAGES = ['Shortlisting', 'Issued', 'Clarifications'] as const
 
 const STEP_BLURB: Record<string, string> = {
-  Shortlisting:
-    'Invite bidders from the registry, get the list approved, and attach the TBE template.',
+  Shortlisting: 'Record who is invited, and get the list approved.',
   Issued:
-    'Freeze the package vendors will bid against, and list the documents each vendor must return with their bid.',
+    'Upload the documents vendors will bid against, and review the eligibility checklist of what they must return.',
   Clarifications:
     'Bidders ask, you answer, and every answer goes to the whole shortlist unless you record why it does not.',
 }
@@ -59,7 +59,16 @@ export function RfqWizard({
   onBack: () => void
 }): JSX.Element {
   const [tick, setTick] = useState(0)
-  const { data, error, loading } = useAsync(() => fetchRfq(rfqId), [rfqId, tick])
+  const { data, error, loading } = useAsync(
+    () => fetchRfq(rfqId),
+    [rfqId, tick],
+    // Every write reloads through `run` below. Without this, each reload
+    // blanks `data` for the duration of the refetch, `loading` guard below
+    // unmounts the whole step subtree, and any state a step held locally —
+    // `SendEnquiry`'s dispatch result among it — dies with it. Same trap as
+    // `ItemDetail`'s project read, same fix.
+    { keepPreviousData: true },
+  )
   const [openStep, setOpenStep] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
@@ -81,7 +90,10 @@ export function RfqWizard({
     }
   }
 
-  if (loading) return <LoadingState label="Loading RFQ…" />
+  // Only the *first* load blanks the screen. `keepPreviousData` keeps `data`
+  // across a reload but `loading` still goes true, so guarding on it alone
+  // would unmount the subtree anyway and undo the option above.
+  if (loading && !data) return <LoadingState label="Loading RFQ…" />
   if (error) return <ErrorState message={error} />
   if (!data) return <ErrorState message="No RFQ was returned." />
 
@@ -163,7 +175,7 @@ export function RfqWizard({
         {step === 'Shortlisting' ? (
           <ShortlistingStep data={data} run={run} busy={busy} tick={tick} />
         ) : null}
-        {step === 'Issued' ? <IssuedStep data={data} run={run} busy={busy} /> : null}
+        {step === 'Issued' ? <RaiseRfqStep data={data} run={run} busy={busy} /> : null}
         {step === 'Clarifications' ? (
           <ClarificationsStep data={data} run={run} busy={busy} tick={tick} />
         ) : null}
@@ -189,11 +201,16 @@ export function RfqWizard({
 
       {isCurrentStep && nextStage ? (
         <Card title="Complete this step">
-          <p className={gate.passed ? 'muted' : 'warn'}>
-            {gate.passed
-              ? `Everything ${rfq.stage} needs is in place.`
-              : gate.reason}
-          </p>
+          {/* Only the open gate speaks here. A blocked one used to state its
+              reason in this slot; that was removed deliberately, and the
+              sentence still reaches the reader — pressing the button below
+              fails with the server's 409 and `run` puts those same words in
+              the error banner above. The button therefore stays enabled: it is
+              now the only thing that can explain the refusal, and disabling it
+              would leave a gate nobody can get an answer out of. */}
+          {gate.passed ? (
+            <p className="muted">Everything {rfq.stage} needs is in place.</p>
+          ) : null}
           <button
             type="button"
             className="btn"

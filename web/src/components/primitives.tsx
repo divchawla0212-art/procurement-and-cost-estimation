@@ -252,31 +252,86 @@ export function ExportLinks({
 
 /* --------------------------------------------------------------------- Card */
 
+/**
+ * A titled panel, optionally one the reader can fold away.
+ *
+ * `collapsible` is opt-in: every panel on every screen renders through here,
+ * and a Hide control on the metrics strip or an edit form would be a change
+ * nobody asked for. It is passed by the cards that hold a **long list** — the
+ * item screen's four vendor lists and the registry card under them, where the
+ * client's export alone runs to dozens of rows for one discipline and pushes
+ * everything below it off the screen.
+ *
+ * Collapsing **hides** the body rather than unmounting it. The obvious
+ * implementation — render the children only while expanded — throws away
+ * whatever the reader had typed into the card, and on the item screen that is
+ * the add-a-vendor form and a list of suggestions that cost a provider call to
+ * fetch. Folding a table out of the way is not a reset, and `hidden` is what
+ * makes the difference; it also keeps the `aria-controls` target in the
+ * document, which is what that attribute is for.
+ *
+ * The state is deliberately not persisted. Which lists a buyer wants folded
+ * depends on what they are doing this minute, and a card that remembered a
+ * collapse from last week would read as a list that had gone missing.
+ */
 export function Card({
   title,
   actions,
   children,
   bodyClass = 'card-body',
+  collapsible = false,
+  defaultCollapsed = false,
 }: {
   title?: ReactNode
   actions?: ReactNode
   children: ReactNode
   bodyClass?: string
+  /** Offer a Hide/Show control in the header. */
+  collapsible?: boolean
+  /** Where that control starts. Ignored unless `collapsible`. */
+  defaultCollapsed?: boolean
 }) {
   // A `<section>` is only a landmark once it has an accessible name, so the
   // heading is wired to it rather than merely sitting inside it. Without this
   // every card is an anonymous div to a screen reader — and untargetable by a
   // test that wants to assert *within* one card rather than the whole page.
   const headingId = useId()
+  const bodyId = useId()
+  const toggleId = useId()
+  const [collapsed, setCollapsed] = useState(defaultCollapsed)
+  const folded = collapsible && collapsed
   return (
     <section className="card" aria-labelledby={title ? headingId : undefined}>
-      {(title || actions) && (
+      {(title || actions || collapsible) && (
         <header className="card-head">
           {title ? <h2 id={headingId}>{title}</h2> : <span />}
-          {actions}
+          {(actions || collapsible) && (
+            <div className="card-head-actions">
+              {actions}
+              {collapsible && (
+                <button
+                  type="button"
+                  id={toggleId}
+                  className="btn btn-sm btn-ghost"
+                  aria-expanded={!collapsed}
+                  aria-controls={bodyId}
+                  // "Hide" alone is four identical controls on the item
+                  // screen. The heading is *referenced* rather than copied
+                  // into a label, so the two cannot drift apart.
+                  aria-labelledby={title ? `${toggleId} ${headingId}` : undefined}
+                  onClick={() => setCollapsed((was) => !was)}
+                >
+                  <span aria-hidden>{collapsed ? '▸' : '▾'}</span>{' '}
+                  {collapsed ? 'Show' : 'Hide'}
+                </button>
+              )}
+            </div>
+          )}
         </header>
       )}
-      <div className={bodyClass}>{children}</div>
+      <div id={bodyId} className={bodyClass} hidden={folded}>
+        {children}
+      </div>
     </section>
   )
 }

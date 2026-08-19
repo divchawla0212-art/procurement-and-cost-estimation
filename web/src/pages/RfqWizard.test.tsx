@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import type { EnquiryAudience } from '../types'
 import { RfqWizard } from './RfqWizard'
 import type { RfqDetail, ShortlistEntry } from '../types'
 
@@ -26,6 +27,11 @@ vi.mock('../api', async (importOriginal) => {
       uploaded_at: null,
       source_document: null,
     }),
+    // SendEnquiry reads and writes through these; mocked explicitly so this
+    // suite never makes a real network call when the Issued step's card is
+    // reached.
+    previewEnquiry: vi.fn(),
+    sendEnquiry: vi.fn(),
   }
 })
 
@@ -33,7 +39,9 @@ import {
   addShortlistEntry,
   approveShortlist,
   fetchRfq,
+  previewEnquiry,
   removeShortlistEntry,
+  sendEnquiry,
   transitionRfq,
 } from '../api'
 
@@ -90,6 +98,7 @@ function detail(over: Partial<RfqDetail> = {}): RfqDetail {
     client_approver: 'ADNOC',
     documents: [],
     document_categories: [],
+    eligibility_checklist: [],
     tbe_template: null,
     vdrl: [],
     bids: [],
@@ -108,6 +117,12 @@ async function show(data: RfqDetail) {
     expect(screen.queryByText(/Loading RFQ…/i)).not.toBeInTheDocument()
   })
 }
+
+// Without this, `toHaveBeenCalledTimes` on a mock this file shares across
+// every test (`fetchRfq` above all) counts calls earlier tests made too —
+// this file had no such guard until the enquiry-reload tests below needed to
+// count `fetchRfq` calls precisely.
+beforeEach(() => vi.clearAllMocks())
 
 describe('RfqWizard', () => {
   it('shows the three pre-bid steps and opens the RFQ’s current one', async () => {
@@ -134,10 +149,33 @@ describe('RfqWizard', () => {
     expect(screen.getByText('Not built yet.')).toBeInTheDocument()
   })
 
-  it('says what is blocking the step, in the gate’s own words', async () => {
+  // The blocked reason used to render here, ahead of any attempt. It was asked
+  // for removed, and the sentence is not lost with it: `run` catches the
+  // server's 409 and the error banner shows the same words, which
+  // `surfaces the server’s refusal when a closed gate rejects the step` below
+  // is what holds. That test is the safety net — removing it too would leave a
+  // refusal with nowhere to appear at all.
+  it('does not state the blocking reason before the step is attempted', async () => {
     await show(detail())
+
     expect(
-      screen.getByText(/The shortlist contains no included vendors/),
+      screen.queryByText(/The shortlist contains no included vendors/),
+    ).not.toBeInTheDocument()
+    // The button stays, and stays enabled: its refusal is what surfaces the
+    // reason now, so disabling it would make the gate unexplainable.
+    expect(
+      screen.getByRole('button', { name: /Mark Shortlisting complete/ }),
+    ).toBeEnabled()
+  })
+
+  // Pins the scope of that removal. Only the blocked variant went; the passing
+  // one is the card's whole content when a gate is open, and dropping the
+  // paragraph outright rather than just its blocked branch takes this with it.
+  it('still says the step is ready when the gate passes', async () => {
+    await show(detail({ gate: { passed: true, reason: null } }))
+
+    expect(
+      screen.getByText(/Everything Shortlisting needs is in place/),
     ).toBeInTheDocument()
   })
 
@@ -335,5 +373,119 @@ describe('RfqWizard', () => {
   it('keeps the whole stage history visible while stepping', async () => {
     await show(detail())
     expect(screen.getByText(/RFQ created/)).toBeInTheDocument()
+  })
+
+  // Each step's blurb is the only sentence telling a reader what the step is
+  // for, so it is the first thing to go stale when a control moves between two
+  // of them. The free-text TBE template editor is gone entirely, replaced by
+  // the fixed eligibility checklist; a blurb still promising a template sends
+  // the reader to look for a control that no longer exists anywhere, and
+  // nothing else in this suite reads these strings.
+  it('promises the eligibility checklist on Issued and no TBE template anywhere', async () => {
+    await show(detail())
+
+    // Asserted on the whole step card rather than the blurb's wording, so it
+    // covers the editor and the sentence describing it at once — either one
+    // left behind here is the failure.
+    expect(screen.getByRole('region', { name: /Shortlisting/ })).not.toHaveTextContent(
+      /TBE|eligibility checklist/i,
+    )
+
+    // Scoped to the stepper: "Issued" also names the transition button at the
+    // bottom of the screen.
+    const steps = screen.getByRole('list', { name: 'RFQ steps' })
+    fireEvent.click(within(steps).getByRole('button', { name: /Issued/ }))
+    const issued = screen.getByRole('region', { name: /Issued/ })
+    expect(issued).toHaveTextContent(/eligibility checklist/i)
+    // The retired name must not survive anywhere on the step it used to own.
+    expect(issued).not.toHaveTextContent(/TBE template/)
+  })
+})
+
+// Regression coverage for the Critical defect found round-tripping this
+// screen in a real browser: clicking "Preview recipients" showed the
+// recipient table for an instant and then reverted to the button, with no
+// way to ever reach Send. `SendEnquiry` stubbed `run` in its own test file to
+// something that just awaits the action — nothing there reloads or unmounts,
+// so those tests could not see this. Only rendering through the real
+// `RfqWizard`, whose `run` genuinely reloads the RFQ, exercises the path that
+// broke.
+describe('RfqWizard enquiry send — surviving a reload', () => {
+  const withRecipient = {
+    transport: 'outbox' as const,
+    recipients: [
+      { shortlist_entry_id: 'sle_1', vendor_name: 'Galfar', to: ['sales@galfar.example'], skip_reason: null },
+    ],
+    audience: 'unsent' as const,
+    audiences: ['unsent', 'outdated', 'all'] as EnquiryAudience[],
+  }
+
+  it('does not reload the RFQ merely to preview who it would reach', async () => {
+    // The mechanism: `previewEnquiry` stores nothing, so routing it through
+    // `run` reloads the whole RFQ for no reason — and that reload is exactly
+    // what used to unmount `SendEnquiry` mid-preview. If a later change routes
+    // the preview back through `run`, `fetchRfq` fires a second time and this
+    // goes red, independent of any timing.
+    vi.mocked(fetchRfq).mockResolvedValue(
+      detail({ rfq: { ...detail().rfq, stage: 'Issued' } }),
+    )
+    vi.mocked(previewEnquiry).mockResolvedValue(withRecipient)
+
+    render(<RfqWizard rfqId="rfq_abc" stages={STAGES} onBack={() => {}} />)
+    await waitFor(() =>
+      expect(screen.queryByText(/Loading RFQ…/i)).not.toBeInTheDocument(),
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /Preview recipients/ }))
+
+    expect(await screen.findByText('sales@galfar.example')).toBeInTheDocument()
+    // A macrotask beat, so a reload that *did* fire (bug reinstated) has time
+    // to land before this assertion runs.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(screen.getByText('sales@galfar.example')).toBeInTheDocument()
+    expect(fetchRfq).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the preview and the skipped list on screen after sending reloads the RFQ', async () => {
+    // Sending genuinely writes, so it does go through `run`, and `run` does
+    // reload. The second `fetchRfq` call resolves on a macrotask rather than
+    // immediately: resolved immediately, the loading state and the resolution
+    // batch into one commit and the subtree never unmounts, which is the trap
+    // this repository has already recorded three times on the item screen —
+    // the test would pass whether or not `RfqWizard` guards its loading branch
+    // correctly.
+    const rfq = detail({ rfq: { ...detail().rfq, stage: 'Issued' } })
+    let calls = 0
+    vi.mocked(fetchRfq).mockImplementation(() => {
+      calls += 1
+      return calls === 1
+        ? Promise.resolve(rfq)
+        : new Promise((resolve) => setTimeout(() => resolve(rfq), 0))
+    })
+    vi.mocked(previewEnquiry).mockResolvedValue(withRecipient)
+    vi.mocked(sendEnquiry).mockResolvedValue({
+      sent: [],
+      skipped: [{ vendor_name: 'Nowhere Trading', reason: 'No address on file for Nowhere Trading.' }],
+    })
+
+    render(<RfqWizard rfqId="rfq_abc" stages={STAGES} onBack={() => {}} />)
+    await waitFor(() =>
+      expect(screen.queryByText(/Loading RFQ…/i)).not.toBeInTheDocument(),
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /Preview recipients/ }))
+    await screen.findByText('sales@galfar.example')
+
+    fireEvent.click(screen.getByRole('button', { name: /^Send/ }))
+
+    // The reload is in flight now (the macrotask has not fired yet). The
+    // whole point of `keepPreviousData` is that the screen does not blank
+    // during it.
+    expect(screen.queryByText(/Loading RFQ…/i)).not.toBeInTheDocument()
+
+    expect(
+      await screen.findByText(/No address on file for Nowhere Trading/),
+    ).toBeInTheDocument()
+    expect(fetchRfq).toHaveBeenCalledTimes(2)
   })
 })

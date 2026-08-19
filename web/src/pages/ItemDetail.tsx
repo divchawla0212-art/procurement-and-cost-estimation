@@ -558,7 +558,9 @@ function AvailableVendorList({
   const poolTotal = registryTotal + curatedRows.length
 
   return (
-    <Card title={title}>
+    // The longest table on the screen — capped at BIDDER_CAP rows out of up to
+    // 1 346 — so it folds away like the four lists above it.
+    <Card title={title} collapsible>
       {/* Only worth saying when the fallback actually produced something —
           beside an empty registry it would explain a narrowing that made no
           difference. */}
@@ -980,7 +982,41 @@ function VendorListCard({
   }
 
   return (
-    <Card title={label}>
+    <Card
+      // The count rides in the heading rather than under the table, because
+      // the heading is all there is to read once the card is folded away: a
+      // collapsed list that does not say how big it is gives the reader no
+      // reason to open it again.
+      title={
+        entries.length > 0 ? (
+          <>
+            {label} <span className="count">{entries.length}</span>
+          </>
+        ) : (
+          label
+        )
+      }
+      // The client's export runs to dozens of rows for one discipline and
+      // pushes the two curated cards under it off the screen. Per card, not
+      // one control over all four — see `Card`.
+      collapsible
+      // An upload that holds rows starts folded; everything else starts open.
+      //
+      // Not a row-count threshold, which would be a rule nobody can see — a
+      // card behaving differently at ten rows and eleven. The line is drawn on
+      // what the card *is*: an upload is a document somebody already looked at
+      // before loading it, and the two curated cards under it are where the
+      // work happens, so the exports are what should be out of the way.
+      //
+      // The `entries.length` half is the part that matters. An empty upload's
+      // body is not a list at all — it is the sentence telling the reader to
+      // edit the item and load the export — and folding the instructions away
+      // leaves a card that says only that it is empty.
+      //
+      // Read once, when the card mounts. Rows arriving from an upload into an
+      // open card leave it open, which is right: you asked to see them.
+      defaultCollapsed={uploaded && entries.length > 0}
+    >
       {/* Above the list, because on the two curated cards it is the thing the
           reader came here to do — and on an empty one it is the only thing
           there is to do. */}

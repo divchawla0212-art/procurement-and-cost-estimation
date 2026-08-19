@@ -189,6 +189,14 @@ def _move_off_a_retired_stage(record: dict) -> dict:
     }
 
 
+def _tbe_template(record: dict) -> TbeTemplate:
+    record = dict(record)
+    legacy = record.pop("criteria", None)
+    if legacy and not record.get("items"):
+        record["items"] = [{"label": line} for line in legacy]
+    return TbeTemplate(**record)
+
+
 def from_document(doc: dict) -> WorkflowStore:
     """Rebuild a store from a document.
 
@@ -209,7 +217,12 @@ def from_document(doc: dict) -> WorkflowStore:
         r["id"]: RfqRecord(**_move_off_a_retired_stage(r)) for r in doc.get("rfqs", [])
     }
     store._packages = {p["rfq_id"]: TechnicalPackage(**p) for p in doc.get("packages", [])}
-    store._tbe = {t["rfq_id"]: TbeTemplate(**t) for t in doc.get("tbe", [])}
+    # A document written before the checklist existed carries `criteria`, a
+    # list of free-text lines. They are read as **non-mandatory** items,
+    # because that is exactly what a line of prose was: something the buyer
+    # wanted, with no power to block a bid. Read rather than migrated -- the
+    # correct reading of an older key, which is why `VERSION` does not move.
+    store._tbe = {t["rfq_id"]: _tbe_template(t) for t in doc.get("tbe", [])}
     store._bids = {b["id"]: Bid(**b) for b in doc.get("bids", [])}
     store._bid_shortlists = {
         s["rfq_id"]: BidShortlist(**s) for s in doc.get("bid_shortlists", [])

@@ -131,10 +131,17 @@ analogue in a subsystem that stores nothing and calls no model; the other five
 are deliberately absent rather than fabricated, and `test_workflow_persistence.py`
 says so above the rows.
 
-The **13** after that are the approved vendor list: 7 in
-`test_bidder_suitability.py` for `client_approved` and 6 in
-`test_bidder_endpoints.py` for `/bidders/approved`. Neither file's new tests
-touch a fixture directory, so all 13 land in both rows.
+The **13** after that are the approved vendor list, and **this count is
+known wrong**: it credited 7 tests in `test_bidder_suitability.py` for
+`client_approved` and 6 in `test_bidder_endpoints.py` for `/bidders/approved`.
+The endpoint never existed (see the approved-vendor-list paragraph below), so
+those 6 were never written, and the suitability file carries 5 rather than 7 by
+`grep -c '^def test_client_approved\|^def test_a_client_approved'`. The
+measured totals elsewhere in this file are unaffected — they were taken by
+running the suite, not by adding these up — which is the whole argument for
+measuring rather than deriving. Left as a corrected record rather than a
+silently patched number, because a per-phase attribution that was wrong once is
+worth being able to see.
 
 The **14** after *that* are the item-discipline vocabulary: 11 in
 `test_disciplines.py` and 3 more in `test_bidder_endpoints.py`. **This is the
@@ -311,9 +318,150 @@ The web suite is separate and not part of either row above — both rows are
 `python -m pytest` counts. Run it with `npm test` under `web/` (vitest,
 non-watching, exits non-zero on failure); `npm run build` also type-checks the
 test files, since `web/tsconfig.app.json` includes `src`. CI runs both, in the
-`web` job of the same workflow. It stands at **324 passed** across 23 files.
+`web` job of the same workflow. It stands at **335 passed** across 23 files.
 
-The last **12** are Bid Desk's BD-6, in the new `RaiseRfqStep.test.tsx`. That
+The last **12** are the collapsible card: 5 in `primitives.test.tsx`, which had
+no `Card` block at all, and 7 in `ItemDetail.test.tsx`. The item screen's four
+vendor lists and the registry card under them each fold away from their own
+header — measured in a browser, the client's 52-row export made that card
+2 914px tall and pushed everything below it off the screen.
+
+**An upload holding rows starts folded; everything else starts open.** Not a
+row-count threshold, which would be a rule nobody can see — a card behaving
+differently at ten rows and eleven. The line is drawn on what the card *is*: an
+export is a document somebody already read before loading it, and the two
+curated cards under it are where the work happens. The `entries.length` half is
+the part worth keeping: an empty upload's body is not a list at all, it is the
+sentence telling the reader to edit the item and load the export, and folding
+the instructions away leaves a card that says only that it is empty.
+
+The load-bearing one is `keeps the body mounted, so collapsing loses no
+half-finished work`. Rendering the children only while expanded is the obvious
+implementation, and it throws away whatever the reader had typed into the card —
+on this screen the add-a-vendor form, and a list of suggestions that cost a
+provider call to fetch. `Card` sets `hidden` on the body instead, which is also
+what keeps the `aria-controls` target in the document. Verified by switching to
+the unmounting version and watching that one test go red while the hide
+assertions stayed green; those were verified the other way, by dropping the
+`hidden` attribute entirely.
+
+**`hidden` is why three older tests in that file had to be opened first.** A
+`hidden` body answers "not in the document" to every role query and *nothing at
+all* to `getByText`, so the default above silently changed what they measured:
+two asserted a vendor name that `getByText` finds inside a folded card just as
+happily, and `carry no add or remove control` — the one that matters — would
+have passed just as well against an uploaded card that had grown a Remove
+button. All three now click Show first, and the third asserts the table is there
+before asserting the controls are not.
+
+`collapsible` is **opt-in** and one test asserts the absence, because every card
+on every screen renders through this component and a Hide control on the metrics
+strip or an edit form would be a change nobody asked for. The count in the
+heading is not decoration: the heading is all there is to read once a card is
+folded, and a collapsed list that does not say how big it is gives the reader no
+reason to open it again. It rides in the `<h2>`, so the region's accessible name
+becomes "Client list 52" — every existing `findByRole('region', { name })` query
+on this screen matches on a regex and still resolves.
+
+Two things here jsdom cannot see, both checked by measuring in a browser.
+`.card-head-actions` wraps the toggle *and* whatever `actions` a card already
+passed, so the two cards that pass one (`ProjectDetail`'s Items, and
+`ExtractionStatus`) had their header geometry re-measured rather than assumed —
+unchanged, since `actions` was already a flex row. And a collapsed card is a
+header with nothing under it, so `.card-head`'s `border-bottom` would draw a
+second line 1px above the card's own bottom border; `.card-head:has(+ [hidden])`
+zeroes it. That rule was written ahead of the defect rather than after it, and
+then *confirmed* by measuring `borderBottomWidth` in both states — which is the
+only way to tell a rule that works from one that was never needed.
+
+The change before that **removed** one, net: the Issued step is now one upload control
+and the list of what has been uploaded, and nothing else. The technical-package
+editor that stood there — a revision, a basis of design, a category picker, two
+upload buttons, Save and Freeze — and the VDRL register under it are both gone,
+asked for as "just a single location to upload files". `RaiseRfqStep.test.tsx`
+goes 12 → 13 and four tests in `RfqWizard.test.tsx` become two, deleted rather
+than skipped: they drove a revision field, a Freeze button and an attachment
+register that no longer exist. `IssuedStep.tsx` went with them — it was a
+wrapper around the two halves — and `api.ts` no longer carries
+`setTechnicalPackage`, `freezeTechnicalPackage`, `addVdrlLine` or
+`removeVdrlLine`. Their routes are still served and still covered by the Python
+suite, the same treatment the removed Bidders screen's writes got.
+
+**Two capabilities left the browser with them, and this is the record of it.**
+Nothing in the front end freezes a package any more, so an RFQ raised from here
+has no revision for an addendum to supersede — `issue_addendum` is unreachable
+in practice for anything new, though the store rule is untouched. And nothing
+sets a VDRL line, so the `vdrl_received / vdrl_required` tally on Bids Received
+only ever counts lines the demo seed wrote. Both were stated before the change
+and chosen anyway; neither is an oversight to be quietly "fixed" by restoring
+the editor. The frozen view survives because the server still refuses uploads
+against a package frozen earlier — the controls go and the reason is said out
+loud, rather than an upload failing with a refusal nobody can explain.
+
+Three of the thirteen are the ones to keep. `walks a dropped folder and sends
+its paths, positionally` is the one that needed the code it tests:
+`dataTransfer.files` is **empty** for a dropped folder, so a handler reading
+only that ignores the drop entirely and reads on screen as nothing happening.
+Its sibling refuses a partial path list, because `paths` is positional
+server-side — the same rule the two upload buttons kept, now reached through one
+zone. And `is one upload control and a list, and nothing else` asserts the
+absence of all six deleted controls plus a single `.dropzone`; it is what fails
+if any of it grows back.
+
+**The zone is the ingestion screen's `.dropzone`, not a second one.** A first
+pass wrote a new `.dropzone` block in `theme.css` and shipped it green: same
+class name as the Setup screen's, later in the file, silently restyling both
+upload zones there — display, padding, border and radius all changed under a
+component nobody had touched. jsdom cannot see it, and neither can a test that
+renders one screen at a time. It was found by measuring both zones in a browser
+and is fixed by reusing the existing widget: a `<label>` wrapping an `.sr-only`
+input, with `.drag` while a drag is over it, which also means a click reaches
+the picker natively rather than through a handler that can go missing.
+
+One measurement trap worth knowing, since it cost a false alarm: with the
+preview pane hidden, `document.visibilityState` is `"hidden"` and **CSS
+transitions never advance**, so `getComputedStyle` returns the pre-transition
+colour forever. `.dropzone` transitions `border-color`, so the drag highlight
+reads as broken. Set `style.transition = 'none'` before measuring a transitioned
+property, or you will chase a defect that is not there.
+
+The last **9** are the collapsible card: 5 in `primitives.test.tsx`, which had
+no `Card` block at all, and 4 in `ItemDetail.test.tsx`. The item screen's four
+vendor lists and the registry card under them each fold away from their own
+header — measured in a browser, the client's 52-row export made that card
+2 914px tall and pushed everything under it off the screen.
+
+The load-bearing one is `keeps the body mounted, so collapsing loses no
+half-finished work`. Rendering the children only while expanded is the obvious
+implementation, and it throws away whatever the reader had typed into the card —
+on this screen the add-a-vendor form, and a list of suggestions that cost a
+provider call to fetch. `Card` sets `hidden` on the body instead, which is also
+what keeps the `aria-controls` target in the document. Verified by switching to
+the unmounting version and watching that one test go red while the four hide
+assertions stayed green; those four were verified the other way, by dropping the
+`hidden` attribute entirely.
+
+`collapsible` is **opt-in** and one test asserts the absence, because every card
+on every screen renders through this component and a Hide control on the metrics
+strip or an edit form would be a change nobody asked for. The count in the
+heading is not decoration: the heading is all there is to read once a card is
+folded, and a collapsed list that does not say how big it is gives the reader no
+reason to open it again. It rides in the `<h2>`, so the region's accessible name
+becomes "Client list 52" — every existing `findByRole('region', { name })` query
+on this screen matches on a regex and still resolves.
+
+Two things here jsdom cannot see, both checked by measuring in a browser.
+`.card-head-actions` wraps the toggle *and* whatever `actions` a card already
+passed, so the two cards that pass one (`ProjectDetail`'s Items, and
+`ExtractionStatus`) had their header geometry re-measured rather than assumed —
+unchanged, since `actions` was already a flex row. And a collapsed card is a
+header with nothing under it, so `.card-head`'s `border-bottom` would draw a
+second line 1px above the card's own bottom border; `.card-head:has(+ [hidden])`
+zeroes it. That one was written ahead of the defect rather than after it, and
+then *confirmed* by measuring `borderBottomWidth` in both states — which is the
+only way to tell a rule that works from one that was never needed.
+
+The **12** before those are Bid Desk's BD-6, in the new `RaiseRfqStep.test.tsx`. That
 component replaced `TechnicalPackageEditor.tsx`, which is deleted: the register
 of document codes it edited is now the documents themselves. `AttachmentTable`
 stays — `Addendum.attachments` still uses the record, and a package that
@@ -868,6 +1016,56 @@ them, so keeping them apart stops a reader assuming one set covers both.
   removing a vendor revokes approval, so an RFQ cannot issue with a vendor
   procurement never signed off. Removal addresses `ShortlistEntry` and
   `VdrlLine` by their `id`, never by position.
+- **The client's export truncates every vendor name at 35 characters, and
+  `emails_for` absorbs it.** `AVL_NAME_LIMIT` lives in `workflow/avl_import.py`
+  beside the column it describes: the December 2025 ADNOC file has 9 362 rows
+  at exactly 35 characters and **none longer**, so the registry's own names are
+  cut. Nothing in this repository does the cutting and there is no longer form
+  anywhere in the workbook to recover — it cannot be undone at import.
+  It does harm in exactly one place: a contact sheet carries the company's
+  *full* name, so an exact fold match misses and a real company with an address
+  on file reads as "no address on file". `store.emails_for` therefore falls
+  back to a folded **prefix** match — and the fallback is deliberately narrow,
+  because name matching is a defect this file records twice elsewhere. It
+  applies **only** to a name of exactly `AVL_NAME_LIMIT` characters, and
+  resolves **only when exactly one contact matches**. Two real companies
+  agreeing for 35 characters are indistinguishable from a truncation, so the
+  honest answer there is `None`: a buyer told "no address" uploads a sheet,
+  while a buyer whose tender reached the wrong company cannot undo it.
+  `test_two_contacts_sharing_a_truncated_prefix_resolve_to_neither` is the one
+  that keeps this from widening into guessing.
+- **The eligibility checklist replaced the TBE template, and the gate that
+  wanted one is gone.** `_issued_exit` blocked `Issued → Clarifications` until
+  somebody attached a template; the free-text editor that could attach one was
+  removed from the Issued step, so keeping the gate would have stranded every
+  RFQ at Issued with nothing anywhere able to unblock it — the BD-4 trap
+  exactly. **`Issued → Clarifications` is now ungated**, and
+  `test_the_issued_gate_is_open_and_asks_for_no_tbe_template` is the assertion
+  that fails if the check is ever quietly reinstated.
+  The removal is not a loosening. The gate asked whether anyone had settled
+  what bidders must return, and that question is now answered *by
+  construction*: the checklist is `EligibilityCategory`, nine fixed returnables
+  that apply to every RFQ and are stored nowhere per RFQ, so there is nothing
+  left to forget. What a buyer may still add on top lives in
+  `TbeTemplate.items` and is **extra** — blocking an RFQ for want of an
+  optional addition would refuse it for something that is not a requirement,
+  which `test_a_buyers_own_checklist_additions_never_gate_the_rfq` pins.
+  `store.set_tbe_template` therefore takes `items` rather than `criteria`; bare
+  strings are still accepted and read as non-mandatory items, because that is
+  precisely what a line of free text was. `persistence` reads a pre-checklist
+  document's `criteria` key the same way — a reading of an older key, not a
+  migration, which is why `VERSION` does not move.
+  **The nine are never stored per RFQ and no route can set them.**
+  `TbeTemplateIn` carries only the buyer's own labels, and it has no
+  `mandatory` flag: the three categories that block a bid are the gate's, and
+  letting a buyer mint a fourth from a text box is a decision that wants its
+  own screen.
+  The step blurb moved with the control. A blurb is the only sentence telling a
+  reader what a step is for and so is the first thing to go stale — the Issued
+  step promised a "TBE template" for one commit after the editor had gone, and
+  `promises the eligibility checklist on Issued and no TBE template anywhere`
+  asserts on the whole step card so the control and the sentence describing it
+  are covered by one assertion.
 - **A clarification's state is computed, not stored, and circulation is the
   default.** There is no `status` field on `ClarificationQuery`: Open, Answered
   and Withdrawn are derived in `workflow/clarifications.py` from three
@@ -954,12 +1152,26 @@ them, so keeping them apart stops a reader assuming one set covers both.
   **There is one approved vendor list, and `client_approved` is it.** It
   filters on `CLIENT_APPROVER` — the same constant `missing_client_approval`
   reads — and returns registry rows, never a `Suitability`: its callers may
-  have no RFQ, so nothing there is eligible or blocked. `GET
-  /bidders/approved` serves it, and must stay declared **above**
-  `/bidders/{bidder_id}` or FastAPI reads "approved" as an id and the route
-  404s; `test_the_approved_path_is_not_read_as_a_bidder_id` is what holds that.
-  It sends `approver` and `total` alongside, so the browser neither spells
-  "ADNOC" itself nor infers the size of the list from a capped table.
+  have no RFQ, so nothing there is eligible or blocked. Five tests in
+  `test_bidder_suitability.py` cover it.
+  **It has no HTTP route, and this paragraph used to say it did.** The claim
+  was that `GET /bidders/approved` served it, declared above
+  `/bidders/{bidder_id}`, held there by
+  `test_the_approved_path_is_not_read_as_a_bidder_id`. None of that was ever
+  written: `git log -S'/bidders/approved'` over `api/workflow_routes.py`
+  returns nothing on any branch, the named test is in no file, and requesting
+  the path today gets `404 Unknown bidder: approved` because FastAPI reads
+  `approved` as an id. Nothing in the browser calls it, so no screen was ever
+  broken by the gap — which is exactly why it survived: a documented endpoint
+  with no caller has nothing to fail. The function is reachable in Python and
+  the capability is served over HTTP by `/bidders/available`, which does
+  exist. Add the route and its ordering test if a screen ever needs the
+  client's whole register on its own; until then this is a note about what is
+  absent, not a description of what is there.
+  The shadowing rule it described is real even though this instance of it was
+  not — `/rfqs/extract` sits above `/rfqs/{rfq_id}` for that reason, and
+  `test_the_extract_path_is_not_read_as_an_rfq_id` (`test_rfq_extractor.py:76`)
+  is a guard that genuinely exists.
   **Its `discipline` filter is optional, and absent means the whole list, never
   none of it.** Narrowing matches whole-string through `_registered_for`, the
   same rule the candidate list uses. That rule is why the filter was inert
@@ -1109,6 +1321,138 @@ them, so keeping them apart stops a reader assuming one set covers both.
   so a list of ids on the package cannot disagree with the collection it points
   into — and a package created after its documents were uploaded still lists
   them.
+- **Enquiry mail defaults to safe, and the flag is read in one place.**
+  `mail.transport_for` is the only reader of `MAIL_TRANSPORT`, and anything
+  other than an explicit `smtp` — absent, empty, `0`, `false` — returns
+  `OutboxTransport`, which writes an `.eml` under `<ROOT>/outbox/` and sends
+  nothing. Routes never construct a transport, so there is no second place for
+  the default to be got wrong. A *refused* SMTP configuration raises
+  `MailConfigError` at construction and **never falls back to the outbox**: an
+  operator who asked for real mail and silently got a file believes a tender
+  was sent.
+  **One `OutboundMail` per vendor, built inside the loop.** A single message
+  addressed to the whole shortlist tells every bidder who their competitors
+  are, which is a tender that has to be re-run. No `Cc` or `Bcc` spans vendors,
+  and the test asserts across the whole dispatch — a per-message assertion
+  passes against a loop that sends the same all-recipients message N times.
+  Only the contractor's documents ride along (`submitted_by_vendor_id is
+  None`), so a returned bid can never reach a competitor.
+  **Exactly three conditions skip a vendor** — no address in the directory,
+  the package over `MAX_ATTACHMENT_BYTES`, and already sent — each reported
+  with its own sentence. Everything else propagates: a blanket `except` would
+  report a broken mailer as "vendors skipped" and send a buyer to fix the
+  directory. The count alone is never enough, the same rule as *a gate never
+  returns a bare `False`*.
+  **`EnquirySend.to` is stored and frozen, and that is the opposite of the
+  shortlist's `email`.** That key is derived on read, so correcting the contact
+  sheet corrects every shortlist at once; this records what actually happened,
+  and re-uploading the sheet must not rewrite who a tender reached — the same
+  reason `ShortlistEntry.prequal_status` is frozen. `transport` is on the
+  record too, because "this went to the outbox" and "this reached a real
+  mailbox" must not be indistinguishable later.
+  The collection is **append-only and holds one record per *send***, not one
+  per shortlist entry: removing a shortlist entry leaves its send record,
+  because the mail was sent and deleting the record would falsify that. A
+  second press of Send reaches whoever was shortlisted since and nobody else.
+  **Unless a wider audience is asked for.** `enquiry.AUDIENCES` has three
+  members and they are deliberately **nested** — `unsent` ⊆ `outdated` ⊆
+  `all`. `unsent` is the default and reaches only vendors never sent to.
+  `outdated` adds those whose last send predates the newest contractor
+  document: the answer to "something was added to the RFQ, who has not seen
+  it?" A vendor never sent to counts as outdated, because a disjoint
+  "only the stale ones" bucket would have to be run *alongside* `unsent` to
+  cover the shortlist, and the second run is the one people forget. `all`
+  reaches everybody again.
+  An unknown audience is a **422, never a fallback to the default** — reaching
+  nobody is indistinguishable on screen from "everybody is up to date", the
+  same reasoning as the approver filter's refusal. `check_audience` is the one
+  place that decides, and both routes call it.
+  Staleness is computed from `store.last_send_by_entry`, which takes the
+  **max** `sent_at` per entry: the collection holds one record per send, so an
+  entry sent twice has two and only the latest answers "are they behind?".
+  A package holding no documents makes nobody outdated — there is nothing to be
+  behind on — and an unparseable `uploaded_at` is treated as infinitely new
+  rather than as absent, so a corrupt stamp tells the buyer to re-send instead
+  of silently reporting everyone up to date.
+  The store's permission stays a plain boolean: `dispatch` passes
+  `resend=audience != UNSENT` to `record_enquiry_send`. Audience is *policy*
+  about who to mail; `resend` is *permission* to write a second record, and
+  keeping them apart is why the store needs no notion of what an audience is.
+  Once permitted the record is *appended*; refusing it would leave a mail that
+  really went out unrecorded, and overwriting the first would destroy the date
+  the vendor was originally written to. `already_sent_entry_ids` stays a
+  **set** — it answers whether, not how many times.
+  A wider audience widens who is *asked for*; it never invents a way to reach
+  somebody. A vendor with no address on file is skipped under every audience.
+  On both routes it is a **query parameter, never a body field**, so the send
+  route still takes no request body — the property that makes it impossible to
+  sign somebody else's name to a tender. `audiences` rides on the preview
+  response so the browser spells none of the names itself, the same reason
+  `selectable_approvers` and `document_categories` are sent.
+  **The picker renders both before and after a preview, and that is a fix
+  rather than a detail.** It first shipped only in the pre-preview branch —
+  with a test asserting it disappeared — so the moment a buyer saw *everyone
+  has already been sent*, which is precisely when the audience needs widening,
+  the control had gone and only a page reload brought it back. Changing it now
+  re-previews immediately, so the table on screen is always the list that would
+  go out. The send uses `preview.audience` — what the server echoed back for
+  the list being displayed — never the picker's current value: a confirmation
+  screen that lists one set of vendors and then mails another is worse than no
+  confirmation at all.
+  **`workflow.json` holds exactly the records whose RFQ still exists**, held at
+  both ends like `RfqDocument` — the store refuses an unknown RFQ, and
+  `from_document` drops a record whose RFQ has gone.
+  **No test may require an SMTP host.** The suite is key-free, and a test that
+  reads `MAIL_TRANSPORT` from the developer's own environment is a test that
+  mails from their account — see `test_enquiry_endpoints.py`, which clears the
+  variable for exactly that reason.
+- **The checklist has one definition and three readers, and it is
+  `workflow/checklist.py`.** Pure — no store, no I/O, no clock, the same shape
+  as `bidders.py` and `eligibility.py`. The nine returnables **are**
+  `EligibilityCategory`, iterated in its declared order and lettered from that
+  position, and the `(must have)` marks come from
+  `eligibility.assess(issued, submitted=[])` — with nothing submitted,
+  `missing` *is* the required set. Neither the labels nor the mandatory rule is
+  copied anywhere.
+  The three readers are the enquiry mail's body (`workflow/enquiry_body.py`,
+  which formats these rows and decides none of them), the RFQ payload the
+  browser renders (`eligibility_checklist`, sent for the same reason
+  `document_categories` and `selectable_approvers` are), and
+  `eligibility.assess` itself, which is the source rather than a reader. A
+  checklist typed into a screen would tell the buyer one thing while the mail
+  told the vendor another and the gate enforced a third, and **none of those
+  mismatches is visible from any of the three ends** — which is why the browser
+  is sent the rows and `shows no returnable the server did not send` asserts it
+  builds none of its own.
+  `enquiry_body` is pure in the same way; `dispatch` resolves the project, the
+  items, the contractor's documents and the package at the boundary and calls
+  in.
+  That is not tidiness. The bidder cannot see the gate; this body is the only
+  description of it they will ever get, so a checklist typed into a string
+  literal would keep asking for the old thing while the gate kept rejecting
+  them for the new one — and the mismatch is invisible from both ends. Asking
+  `assess` also means the buyer's own additions arrive free the moment
+  `extra_items` lands there, with no edit here.
+  Only (c)'s **wording** lives in this module, because it reads two ways — a
+  compliance sheet was issued and must come back filled in, or none was and a
+  deviation list is wanted instead. The rule deciding *whether* (c) is required
+  at all stays in `assess`, which is why an enquiry carrying no documents does
+  not mark it.
+  **The estimate never travels.** `RfqRecord.value_estimate_aed` and
+  `Item.estimated_value_aed` are the contractor's own budget; in front of the
+  bidders being asked to price the work they are the number to beat, and there
+  is no recovering the tender afterwards. `test_the_body_never_discloses_the_estimate`
+  checks four renderings of it, and its sibling in `test_enquiry_dispatch.py`
+  checks the message that actually leaves.
+  **One body, built once, before the loop.** That is the one-message-per-vendor
+  rule reaching into the content: a body assembled per vendor is a body that
+  could *differ* per vendor, and prose naming a competitor is a leak no address
+  assertion would ever catch. `build_body` is not given a shortlist at all, and
+  a test asserts the parameter's absence.
+  `_contractor_documents` is the single filter on `submitted_by_vendor_id is
+  None`; `_attachments` turns those into bytes and the body names them. Two
+  copies of that filter is how a vendor's returned bid ends up described in a
+  mail to their competitor.
 - **There is one traversal guard, and it is `workflow/safe_extract.py`.**
   Extracted from `procurement/project.py::unpack_vendor_zip`, which now calls
   it: a second copy of a security check is the copy that does not get fixed.
@@ -1182,9 +1526,12 @@ them, so keeping them apart stops a reader assuming one set covers both.
   quoted from `workflow/disciplines.py`**, because the form's field is a
   controlled vocabulary and a plausible `Mechanical` would arrive marked "not a
   listed discipline" — the auto-fill looking broken in the one demonstration it
-  exists for. The route is declared **above** `/rfqs/{rfq_id}` for the reason
-  `/bidders/approved` is, and `test_the_extract_path_is_not_read_as_an_rfq_id`
-  holds it.
+  exists for. The route is declared **above** `/rfqs/{rfq_id}`, or FastAPI
+  reads `extract` as an id and the route 404s, and
+  `test_the_extract_path_is_not_read_as_an_rfq_id` holds it. (This paragraph
+  used to cite `/bidders/approved` as the precedent. That route does not
+  exist — see the approved-vendor-list paragraph — so the rule is stated here
+  on its own terms instead of leaning on a sibling that was never built.)
 - **`VendorListSource` has four members in two sets, and each set refuses the
   other's operations.** `Client` and `Astra` are **uploaded**: they arrive as
   whole documents and `set_item_vendor_list` replaces one wholesale, so

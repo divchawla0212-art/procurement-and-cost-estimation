@@ -12,6 +12,7 @@ test into a billed call.
 from fastapi.testclient import TestClient
 
 from tests.auth_helpers import ADMIN_EMAIL, ADMIN_PASSWORD, signed_in_admin
+from workflow.models.rfq_document import EligibilityCategory
 
 
 # No store-resetting fixture is needed: the workflow lives in
@@ -197,7 +198,7 @@ def _satisfy_the_shortlisting_gate(client: TestClient, rfq_id: str) -> None:
     })
     client.post(f"/api/workflow/rfqs/{rfq_id}/shortlist/approve")
     client.put(f"/api/workflow/rfqs/{rfq_id}/tbe-template",
-               json={"criteria": ["Throughput", "Materials"]})
+               json={"items": ["Throughput", "Materials"]})
 
 
 def test_a_satisfied_gate_lets_the_rfq_advance(tmp_path, monkeypatch):
@@ -290,7 +291,15 @@ def test_rfq_detail_carries_the_artifacts_each_gate_reads(tmp_path, monkeypatch)
     body = client.get(f"/api/workflow/rfqs/{rfq_id}").json()
     assert [e["vendor_name"] for e in body["shortlist"]] == ["Galfar"]
     assert body["shortlist_approved"] is True
-    assert body["tbe_template"]["criteria"] == ["Throughput", "Materials"]
+    assert [i["label"] for i in body["tbe_template"]["items"]] == [
+        "Throughput", "Materials",
+    ]
+    # The nine fixed returnables ride alongside, built by `workflow/checklist.py`
+    # -- the same rows the enquiry mail prints, so the screen and the vendor's
+    # copy cannot drift. The buyer's own additions are appended after them.
+    labels = [row["label"] for row in body["eligibility_checklist"]]
+    assert labels[:len(list(EligibilityCategory))] == [c.value for c in EligibilityCategory]
+    assert labels[len(list(EligibilityCategory)):] == ["Throughput", "Materials"]
     assert body["gate"]["passed"] is True
 
 
@@ -444,7 +453,7 @@ def test_a_user_can_walk_shortlisting_to_clarifications(tmp_path, monkeypatch):
     })
     client.post(f"/api/workflow/rfqs/{rfq_id}/shortlist/approve")
     client.put(f"/api/workflow/rfqs/{rfq_id}/tbe-template",
-               json={"criteria": ["Throughput", "Materials"]})
+               json={"items": ["Throughput", "Materials"]})
     assert client.post(f"/api/workflow/rfqs/{rfq_id}/transition",
                        json={"target": "Issued"}).status_code == 200
 

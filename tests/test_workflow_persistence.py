@@ -64,7 +64,7 @@ def populated_store() -> tuple[WorkflowStore, str]:
     store.add_shortlist_entry(rfq.id, vendor_name="Galfar", prequal_status="Qualified",
                               scope_code_fit=True, included=True)
     store.approve_shortlist(rfq.id, by="procurement@example.com")
-    store.set_tbe_template(rfq.id, criteria=["Throughput"], source_rfq_reference="ADP-RFQ-2025-008")
+    store.set_tbe_template(rfq.id, items=["Throughput"], source_rfq_reference="ADP-RFQ-2025-008")
     store.add_vdrl_line(rfq.id, doc_code="GA-001", title="GA", doc_type="Doc", mandatory=True)
     bid = store.register_bid(rfq.id, vendor_name="Petrofac", headline_price_aed=51_400_000)
     store.record_vdrl_receipt(bid.id, doc_code="GA-001", state="unreadable")
@@ -1514,7 +1514,7 @@ def test_an_rfq_cannot_reach_bids_received_over_an_open_query(tmp_path):
     rfq_id, entry_id, query_id = rfq_with_a_query(root)
     with persistence.locked_update(root) as store:
         store.approve_shortlist(rfq_id, by="procurement@example.com")
-        store.set_tbe_template(rfq_id, criteria=["Throughput"])
+        store.set_tbe_template(rfq_id, items=["Throughput"])
         store.transition(rfq_id, Stage.ISSUED, by="buyer@example.com")
         store.transition(rfq_id, Stage.CLARIFICATIONS, by="buyer@example.com")
         # Re-open the one query the fixture answered.

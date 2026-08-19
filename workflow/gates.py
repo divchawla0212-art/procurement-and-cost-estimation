@@ -39,9 +39,32 @@ def _shortlisting_exit(store: "WorkflowStore", rfq_id: str) -> GateResult:
         return _blocked("The shortlist contains no included vendors.")
     if not store.is_shortlist_approved(rfq_id):
         return _blocked("The shortlist must be approved by procurement before issuance.")
-    if store.get_tbe_template(rfq_id) is None:
-        return _blocked("A TBE template must be attached before the RFQ can be issued.")
+    # The TBE template was asked for here and no longer is. Its editor is on the
+    # Issued step, so this gate refused a reader on the strength of a control
+    # they had not reached; the check moved to `_issued_exit`, which guards the
+    # edge out of the step that holds it. The deliberate cost is that an RFQ can
+    # be issued to vendors before anyone has settled what they must return.
     return _passed()
+
+
+# `_issued_exit` stood here and asked for a TBE template. It is gone, and
+# `Issued → Clarifications` is now ungated.
+#
+# The check asked whether somebody had settled what bidders must return. That
+# question is now answered by construction: the eligibility checklist is
+# `EligibilityCategory` — nine fixed returnables that apply to every RFQ,
+# stored nowhere and impossible to omit — so there is nothing left for a buyer
+# to forget and nothing for a gate to catch. What a buyer may still add on top
+# (`TbeTemplate.items`) is *extra*, and blocking an RFQ for want of an optional
+# addition would refuse it for a reason that is not a requirement.
+#
+# Removing it was forced rather than chosen. The free-text editor was the only
+# control anywhere that could set a template, and it was deliberately removed
+# from the Issued step; leaving the gate would have stranded every RFQ at
+# Issued with nothing able to unblock it. That is exactly the trap BD-4
+# recorded when the Scoping gate and the only screen that could satisfy it were
+# both up for deletion — the difference is that there the check moved, and here
+# the thing it checked for stopped being optional at all.
 
 
 def _clarifications_exit(store: "WorkflowStore", rfq_id: str) -> GateResult:
