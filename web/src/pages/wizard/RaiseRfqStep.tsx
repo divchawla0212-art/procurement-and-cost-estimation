@@ -138,7 +138,7 @@ export function RaiseRfqStep({ data, run, busy }: Omit<StepProps, 'tick'>): JSX.
           <thead>
             <tr>
               <th scope="col">#</th>
-              <th scope="col">Returnable</th>
+              <th scope="col">VDRL list</th>
             </tr>
           </thead>
           <tbody>

@@ -378,19 +378,30 @@ export function ItemForm({
   )
   const { onSubmit: submit, error, busy } = useSubmit(async () => {
     const parsed = Number(valueText.trim())
-    if (!Number.isFinite(parsed)) throw new Error('Estimated value must be a number.')
+    if (!Number.isFinite(parsed)) throw new Error('Budget must be a number.')
     await onSubmit({ ...f, estimated_value_aed: parsed })
   })
 
   return (
     <form className="form-grid" onSubmit={submit}>
       <FormError message={error} />
-      <Row id="i-type" label="Item type">
+      {/* The two labels below name the *fields* `item_type` and `discipline`,
+          and they deliberately do not match them. Asked for that way: what a
+          buyer calls the free-text line is the item's **name**, and what they
+          call the vocabulary pick is its **type**. Nothing renames underneath,
+          because `discipline` is a domain concept — `workflow/disciplines.py`
+          joins it to the client export's product groups, and the item screen's
+          vendor narrowing is written in that word throughout. Renaming the
+          model to follow one form's wording would be a change to what the
+          whole application means by a discipline. */}
+      <Row id="i-type" label="Item name">
         <input id="i-type" className="field" required value={f.item_type}
                onChange={(e) => setF({ ...f, item_type: e.target.value })} />
       </Row>
+      {/* Optional. An empty description is sent as `""`, which `ItemIn` takes
+          -- there is no "no description" state to distinguish it from. */}
       <Row id="i-desc" label="Description">
-        <input id="i-desc" className="field" required value={f.description}
+        <input id="i-desc" className="field" value={f.description}
                onChange={(e) => setF({ ...f, description: e.target.value })} />
       </Row>
       <Row id="i-qty" label="Quantity">
@@ -398,18 +409,18 @@ export function ItemForm({
                value={f.qty}
                onChange={(e) => setF({ ...f, qty: Number(e.target.value) })} />
       </Row>
-      <Row id="i-uom" label="Unit of measure">
-        <input id="i-uom" className="field" required value={f.uom}
-               onChange={(e) => setF({ ...f, uom: e.target.value })} />
-      </Row>
-      <Row id="i-disc" label="Discipline">
+      {/* No unit-of-measure and no long-lead control any more, but both stay
+          in `f` and therefore in the body: `uom` is required by `ItemIn`, and
+          an *edit* posts the whole item, so dropping them from the state as
+          well as the form would blank a saved item's values on every save. */}
+      <Row id="i-disc" label="Item type">
         <DisciplineSelect
           id="i-disc"
           value={f.discipline}
           onChange={(discipline) => setF({ ...f, discipline })}
         />
       </Row>
-      <Row id="i-value" label="Estimated value (AED)">
+      <Row id="i-value" label="Budget">
         {/* Text, not number: a focused number input steps on wheel scroll, so
             scrolling past a filled-in value silently rewrote it. `inputMode`
             keeps the numeric keypad, which is all `type="number"` bought. */}
@@ -426,13 +437,6 @@ export function ItemForm({
                  setF({ ...f, required_on_site: e.target.value || null })
                } />
       </Row>
-      <div className="form-row">
-        <label htmlFor="i-longlead">
-          <input id="i-longlead" type="checkbox" checked={f.is_long_lead}
-                 onChange={(e) => setF({ ...f, is_long_lead: e.target.checked })} />
-          {' '}Long lead
-        </label>
-      </div>
       <Actions submitLabel={submitLabel} busy={busy} onCancel={onCancel} />
       {/* Beside the save controls, and only for an item that already exists.
           The upload posts immediately and is not part of this form's submit —

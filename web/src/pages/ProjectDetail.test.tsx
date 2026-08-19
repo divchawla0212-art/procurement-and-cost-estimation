@@ -64,14 +64,16 @@ async function fillItemForm() {
   // options land silently leaves it empty — a `<select>` ignores a value it
   // has no option for — so wait for the option itself, not just the field.
   await screen.findByRole('option', { name: 'Generators' })
-  type('Item type', 'Gas generator')
+  // "Item name" is the free-text line (`item_type`) and "Item type" is the
+  // vocabulary pick (`discipline`) -- the labels cross the field names on
+  // purpose, so query them in this order and not by what they store.
+  type('Item name', 'Gas generator')
   type('Description', '2 x 5 MW containerised')
   type('Quantity', '2')
-  type('Unit of measure', 'no')
   // A select, not a text box: free text never matched the export's product
   // groups, so the discipline is chosen from the served vocabulary.
-  type('Discipline', 'Generators')
-  type('Estimated value (AED)', '18000000')
+  type('Item type', 'Generators')
+  type('Budget', '18000000')
 }
 
 describe('ProjectDetail', () => {
@@ -384,7 +386,7 @@ describe('ProjectDetail', () => {
     renderDetail()
     fireEvent.click(await screen.findByRole('button', { name: /add item/i }))
 
-    expect(screen.getByLabelText('Estimated value (AED)')).toHaveAttribute('type', 'text')
+    expect(screen.getByLabelText('Budget')).toHaveAttribute('type', 'text')
   })
 
   it('refuses a budget that is not a number rather than sending NaN', async () => {
