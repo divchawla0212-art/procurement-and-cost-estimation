@@ -9,15 +9,19 @@ The invariant these tests defend: **the document holds exactly the entities the
 store holds** — a round trip neither drops one nor invents one, and that
 includes the append-only stage history, which is the audit trail of a retender.
 """
+import io
 import json
 from datetime import date
 from pathlib import Path
 
 import pytest
 
-from workflow import bidder_db, clarifications, persistence
+from workflow import bidder_db, clarifications, doc_store, enquiry, persistence
 from workflow.models.draft_shortlist import DraftShortlistEntry
+from workflow.models.mail import SentRef
 from workflow.models.rfq import Attachment
+from workflow.models.rfq_document import RfqDocument
+from workflow.models.vendor_contact import VendorContact
 from workflow.stages import Stage
 from workflow.store import WorkflowStore
 
@@ -1733,3 +1737,345 @@ def test_the_delete_guard_is_unaffected_by_the_caution(tmp_path):
     reloaded = persistence.load(root)
     assert reloaded.get_bidder(bidder.id) is not None
     assert [e.id for e in reloaded.shortlist_for(rfq.id)] == [entry.id]
+
+
+# -- the enquiry send rows of the mutation matrix ------------------------------
+#
+# Same shape as every block above: mutate the store between two runs, then
+# read run 2 *from disk*. Tasks 3 and 4 own two invariants -- workflow.json
+# holds exactly the EnquirySend records whose RFQ still exists, and an RFQ
+# holds at most one record per shortlist_entry_id -- and this is where both
+# are defended across a reload rather than asserted against the store object
+# that made the change.
+#
+# PLAN-TEMPLATE.md's nine required rows all mutate an LLM extraction pipeline
+# -- a newer document revision, a prompt-version bump, a model call failing
+# between runs. This subsystem calls no model and runs no extraction, so seven
+# of the nine have no analogue here and are deliberately absent rather than
+# fabricated, the same treatment the client-approval block above gives them.
+# The two that do carry across are kept, in their real shape: a document
+# arriving between runs is this subsystem's version of a newer revision
+# arriving, and a transient failure not being cached as a permanent answer
+# needs no translation at all.
+#
+# | mutation between run 1 and run 2                  | invariant at risk                    |
+# |----------------------------------------------------|--------------------------------------|
+# | a send is recorded, then the store is reloaded     | the document holds exactly the       |
+# |                                                      | records of RFQs that still exist     |
+# | ...then its shortlist entry is removed             | removing an entry leaves its send    |
+# |                                                      | record -- append-only, a second time |
+# | a second vendor is shortlisted between the runs    | at most one record per               |
+# |                                                      | shortlist_entry_id                   |
+# | a dispatch runs twice across a reload              | (same) -- the row a single run       |
+# |                                                      | cannot see                           |
+# | a record's RFQ is absent from the document         | records whose RFQ has gone are       |
+# |                                                      | dropped on load, not tolerated       |
+# | a vendor's address is corrected between the runs   | to is frozen, never derived          |
+# | [analogue] a document is added between runs        | attachments are read live, not       |
+# |                                                      | frozen at some earlier point         |
+# | [analogue] a dispatch fails on run 1, succeeds on  | a transient failure is not cached as |
+# | run 2                                                | a permanent answer                   |
+#
+# Row 4 is the load-bearing one. The already-sent check reads records that on
+# run 2 came off disk, so an enquiry_sends key lost between to_document and
+# from_document reads as "nobody has been sent to" and mails the whole
+# shortlist a duplicate tender. No single-run test can see it.
+
+
+class _RecordingTransport:
+    """Captures what would be sent. Real enough to assert against, and it
+    reaches nobody."""
+
+    def __init__(self):
+        self.sent = []
+
+    def send(self, message):
+        self.sent.append(message)
+        return SentRef(
+            message_id=f"<{len(self.sent)}@test>", transport="outbox",
+            location=f"/tmp/{len(self.sent)}.eml",
+        )
+
+
+class _FailingTransport:
+    """Simulates an outage: every send raises rather than returning a ref."""
+
+    def send(self, message):
+        raise RuntimeError("SMTP outage")
+
+
+def _a_contact(vendor_name: str, email: str, uploaded_at: str = "2026-08-19T09:00:00Z"):
+    return VendorContact(
+        vendor_name=vendor_name, emails=[email], source_document="sheet.xlsx",
+        uploaded_by="buyer@adp.ae", uploaded_at=uploaded_at,
+    )
+
+
+def _add_enquiry_document(store, blobs, rfq_id, filename="enquiry.pdf", data=b"%PDF-1.4 enquiry"):
+    ref = blobs.put(rfq_id, filename, io.BytesIO(data))
+    store.add_rfq_document(RfqDocument(
+        rfq_id=rfq_id,
+        filename=filename,
+        rel_path=filename,
+        sha256=ref.sha256,
+        size_bytes=ref.size,
+        content_type="application/pdf",
+        uploaded_by="buyer@adp.ae",
+        uploaded_at="2026-08-19T09:00:00Z",
+        submitted_by_vendor_id=None,
+    ))
+
+
+def test_a_send_survives_a_reload_with_the_same_address_and_transport(tmp_path):
+    """Row 1. workflow.json holds exactly the EnquirySend records whose RFQ
+    still exists -- the round trip must not drop the one just written."""
+    root = str(tmp_path)
+    with persistence.locked_update(root) as store:
+        project, generator, _cable = project_and_items(store)
+        rfq = cover_with_rfq(store, project.id, [generator.id])
+        entry = store.add_shortlist_entry(
+            rfq.id, vendor_name="Galfar", prequal_status="Qualified", scope_code_fit=True,
+        )
+        store.record_enquiry_send(
+            rfq.id, shortlist_entry_id=entry.id, vendor_name="Galfar",
+            to=["sales@galfar.example"],
+            ref=SentRef(message_id="<a@test>", transport="outbox", location="/tmp/a.eml"),
+            by="buyer@adp.ae",
+        )
+
+    reloaded = persistence.load(root)                       # run 2: from disk
+    [record] = reloaded.enquiry_sends_for(rfq.id)
+    assert record.to == ["sales@galfar.example"]
+    assert record.transport == "outbox"
+
+
+def test_removing_the_shortlist_entry_leaves_the_send_record_on_disk(tmp_path):
+    """Row 2. Append-only, the same rule the stage history keeps in a second
+    place: the mail was sent, and removing the shortlist entry it names must
+    not erase the record of it."""
+    root = str(tmp_path)
+    with persistence.locked_update(root) as store:
+        project, generator, _cable = project_and_items(store)
+        rfq = cover_with_rfq(store, project.id, [generator.id])
+        entry = store.add_shortlist_entry(
+            rfq.id, vendor_name="Galfar", prequal_status="Qualified", scope_code_fit=True,
+        )
+        store.record_enquiry_send(
+            rfq.id, shortlist_entry_id=entry.id, vendor_name="Galfar",
+            to=["sales@galfar.example"],
+            ref=SentRef(message_id="<a@test>", transport="outbox", location="/tmp/a.eml"),
+            by="buyer@adp.ae",
+        )
+
+    with persistence.locked_update(root) as store:
+        store.remove_shortlist_entry(rfq.id, entry.id)
+
+    reloaded = persistence.load(root)                       # run 2: from disk
+    assert reloaded.shortlist_for(rfq.id) == []
+    [record] = reloaded.enquiry_sends_for(rfq.id)
+    assert record.shortlist_entry_id == entry.id
+
+
+def test_a_second_shortlisted_vendor_is_the_only_one_a_reloaded_dispatch_reaches(tmp_path):
+    """Row 3. An RFQ holds at most one record per shortlist_entry_id.
+    Dispatching after a second vendor joins the shortlist must reach only the
+    vendor that is actually new -- a store that forgot who was already sent to
+    would mail Galfar a second, duplicate tender."""
+    root = str(tmp_path)
+    with persistence.locked_update(root) as store:
+        project, generator, _cable = project_and_items(store)
+        rfq = cover_with_rfq(store, project.id, [generator.id])
+        store.set_vendor_contacts([_a_contact("Galfar", "sales@galfar.example")])
+        store.add_shortlist_entry(
+            rfq.id, vendor_name="Galfar", prequal_status="Qualified", scope_code_fit=True,
+        )
+        blobs = doc_store.LocalBlobStore(root)
+        _add_enquiry_document(store, blobs, rfq.id)
+        enquiry.dispatch(store, blobs, _RecordingTransport(), rfq.id, by="buyer@adp.ae")
+
+    with persistence.locked_update(root) as store:
+        store.set_vendor_contacts([
+            _a_contact("Galfar", "sales@galfar.example"),
+            _a_contact("OQC", "sales@oqc.example"),
+        ])
+        store.add_shortlist_entry(
+            rfq.id, vendor_name="OQC", prequal_status="Qualified", scope_code_fit=True,
+        )
+        blobs = doc_store.LocalBlobStore(root)
+        transport = _RecordingTransport()
+        enquiry.dispatch(store, blobs, transport, rfq.id, by="buyer@adp.ae")
+
+    assert [m.to for m in transport.sent] == [["sales@oqc.example"]]
+    reloaded = persistence.load(root)                       # run 2: from disk
+    records = reloaded.enquiry_sends_for(rfq.id)
+    assert sorted(r.vendor_name for r in records) == ["Galfar", "OQC"]
+    assert len({r.shortlist_entry_id for r in records}) == 2
+
+
+def test_a_dispatch_repeated_after_a_reload_sends_nothing(tmp_path):
+    """Row 4, the load-bearing one. The already-sent check reads records that
+    on run 2 came off disk. If enquiry_sends were ever lost between
+    to_document and from_document, this is the row that would catch it -- a
+    reloaded store that believed nobody had been sent to would mail the whole
+    shortlist a duplicate tender. No single-run test can see this."""
+    root = str(tmp_path)
+    with persistence.locked_update(root) as store:
+        project, generator, _cable = project_and_items(store)
+        rfq = cover_with_rfq(store, project.id, [generator.id])
+        store.set_vendor_contacts([
+            _a_contact("Galfar", "sales@galfar.example"),
+            _a_contact("OQC", "sales@oqc.example"),
+        ])
+        store.add_shortlist_entry(
+            rfq.id, vendor_name="Galfar", prequal_status="Qualified", scope_code_fit=True,
+        )
+        store.add_shortlist_entry(
+            rfq.id, vendor_name="OQC", prequal_status="Qualified", scope_code_fit=True,
+        )
+        blobs = doc_store.LocalBlobStore(root)
+        _add_enquiry_document(store, blobs, rfq.id)
+        first = _RecordingTransport()
+        enquiry.dispatch(store, blobs, first, rfq.id, by="buyer@adp.ae")
+        assert len(first.sent) == 2                          # sanity, within run 1
+
+    reloaded = persistence.load(root)                       # run 2: from disk
+    blobs = doc_store.LocalBlobStore(root)
+    second = _RecordingTransport()
+    result = enquiry.dispatch(reloaded, blobs, second, rfq.id, by="buyer@adp.ae")
+
+    assert second.sent == []
+    assert len(result.skipped) == 2
+    assert all("already" in s.reason.lower() for s in result.skipped)
+
+
+def test_a_send_whose_rfq_is_gone_does_not_load(tmp_path):
+    """Row 5. The same shape I-E keeps for rfq_documents: nothing in this
+    repository deletes an RFQ, so the invariant is held by dropping a record
+    that names one which is not there, rather than loading a row pointing at
+    nothing -- and the load itself must not raise."""
+    root = str(tmp_path)
+    with persistence.locked_update(root) as store:
+        project, generator, _cable = project_and_items(store)
+        rfq = cover_with_rfq(store, project.id, [generator.id])
+        entry = store.add_shortlist_entry(
+            rfq.id, vendor_name="Galfar", prequal_status="Qualified", scope_code_fit=True,
+        )
+        store.record_enquiry_send(
+            rfq.id, shortlist_entry_id=entry.id, vendor_name="Galfar",
+            to=["sales@galfar.example"],
+            ref=SentRef(message_id="<a@test>", transport="outbox", location="/tmp/a.eml"),
+            by="buyer@adp.ae",
+        )
+
+    path = Path(persistence.workflow_path(root))
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    doc["rfqs"] = []                     # the RFQ the record names is simply gone
+    path.write_text(json.dumps(doc), encoding="utf-8")
+
+    reloaded = persistence.load(root)                       # must not raise
+    assert reloaded.enquiry_sends_for(rfq.id) == []
+    assert reloaded.list_projects()                          # everything else still loaded
+
+
+def test_a_corrected_address_does_not_rewrite_an_already_sent_record(tmp_path):
+    """Row 6. to is frozen at send time -- the opposite of the shortlist's
+    email-by-name lookup, which is derived on every read so that correcting
+    the contact sheet corrects every shortlist at once. Correcting the sheet
+    must change what the *next* dispatch reaches, and must not rewrite what
+    has already gone out."""
+    root = str(tmp_path)
+    with persistence.locked_update(root) as store:
+        project, generator, _cable = project_and_items(store)
+        rfq = cover_with_rfq(store, project.id, [generator.id])
+        store.set_vendor_contacts([_a_contact("Galfar", "old@galfar.example")])
+        entry = store.add_shortlist_entry(
+            rfq.id, vendor_name="Galfar", prequal_status="Qualified", scope_code_fit=True,
+        )
+        store.record_enquiry_send(
+            rfq.id, shortlist_entry_id=entry.id, vendor_name="Galfar",
+            to=store.emails_for("Galfar"),
+            ref=SentRef(message_id="<a@test>", transport="outbox", location="/tmp/a.eml"),
+            by="buyer@adp.ae",
+        )
+
+    with persistence.locked_update(root) as store:
+        store.set_vendor_contacts([_a_contact(
+            "Galfar", "new@galfar.example", uploaded_at="2026-08-19T10:00:00Z",
+        )])
+
+    reloaded = persistence.load(root)                       # run 2: from disk
+    [record] = reloaded.enquiry_sends_for(rfq.id)
+    assert record.to == ["old@galfar.example"]
+    assert reloaded.emails_for("Galfar") == ["new@galfar.example"]
+
+
+def test_a_document_added_between_runs_is_carried_by_the_next_dispatch(tmp_path):
+    """Row 7 [analogue]. Attachments are read live from rfq_documents at
+    dispatch time, never frozen at some earlier point -- this subsystem's
+    version of a newer document revision arriving between runs. A document
+    uploaded after the first vendor was reached must still ride along for the
+    next one."""
+    root = str(tmp_path)
+    with persistence.locked_update(root) as store:
+        project, generator, _cable = project_and_items(store)
+        rfq = cover_with_rfq(store, project.id, [generator.id])
+        store.set_vendor_contacts([
+            _a_contact("Galfar", "sales@galfar.example"),
+            _a_contact("OQC", "sales@oqc.example"),
+        ])
+        store.add_shortlist_entry(
+            rfq.id, vendor_name="Galfar", prequal_status="Qualified", scope_code_fit=True,
+        )
+        blobs = doc_store.LocalBlobStore(root)
+        _add_enquiry_document(store, blobs, rfq.id, filename="enquiry.pdf", data=b"%PDF-1.4 one")
+        enquiry.dispatch(store, blobs, _RecordingTransport(), rfq.id, by="buyer@adp.ae")
+
+    with persistence.locked_update(root) as store:
+        store.add_shortlist_entry(
+            rfq.id, vendor_name="OQC", prequal_status="Qualified", scope_code_fit=True,
+        )
+        blobs = doc_store.LocalBlobStore(root)
+        _add_enquiry_document(store, blobs, rfq.id, filename="spec.pdf", data=b"%PDF-1.4 two")
+        transport = _RecordingTransport()
+        enquiry.dispatch(store, blobs, transport, rfq.id, by="buyer@adp.ae")
+
+    [message] = transport.sent
+    assert sorted(a.filename for a in message.attachments) == ["enquiry.pdf", "spec.pdf"]
+    reloaded = persistence.load(root)                       # run 2: from disk
+    assert sorted(d.filename for d in reloaded.rfq_documents(rfq.id)) == ["enquiry.pdf", "spec.pdf"]
+
+
+def test_a_transient_dispatch_failure_leaves_no_record_and_is_retried(tmp_path):
+    """Row 8 [analogue]. A broken transport propagates rather than being
+    absorbed into a skip -- see enquiry.dispatch's own docstring -- so a
+    failed send must leave nothing on disk for locked_update to have written,
+    and a retry on a working transport must still reach the vendor rather
+    than finding them recorded as already sent."""
+    root = str(tmp_path)
+    with persistence.locked_update(root) as store:
+        project, generator, _cable = project_and_items(store)
+        rfq = cover_with_rfq(store, project.id, [generator.id])
+        store.set_vendor_contacts([_a_contact("Galfar", "sales@galfar.example")])
+        store.add_shortlist_entry(
+            rfq.id, vendor_name="Galfar", prequal_status="Qualified", scope_code_fit=True,
+        )
+        blobs = doc_store.LocalBlobStore(root)
+        _add_enquiry_document(store, blobs, rfq.id)
+
+    with pytest.raises(RuntimeError, match="SMTP outage"):
+        with persistence.locked_update(root) as store:
+            blobs = doc_store.LocalBlobStore(root)
+            enquiry.dispatch(store, blobs, _FailingTransport(), rfq.id, by="buyer@adp.ae")
+
+    after_failure = persistence.load(root)                 # run 1's aftermath: from disk
+    assert after_failure.enquiry_sends_for(rfq.id) == []
+
+    with persistence.locked_update(root) as store:
+        blobs = doc_store.LocalBlobStore(root)
+        transport = _RecordingTransport()
+        enquiry.dispatch(store, blobs, transport, rfq.id, by="buyer@adp.ae")
+
+    assert len(transport.sent) == 1
+    reloaded = persistence.load(root)                       # run 2: from disk
+    [record] = reloaded.enquiry_sends_for(rfq.id)
+    assert record.vendor_name == "Galfar"
