@@ -18,7 +18,6 @@ import {
   EmptyState,
   ErrorState,
   LoadingState,
-  Metric,
   PageHeader,
 } from '../components/primitives'
 
@@ -32,6 +31,23 @@ import {
  * actionable thing on the screen at that moment — the same rule the stage
  * gates already follow.
  */
+
+/** `On Hold` → `on-hold`, matching the roster card so Active / On Hold /
+ *  Closed keep the same colour on this screen as they do on the list. */
+function statusModifier(status: WorkflowProject['status']): string {
+  return status.toLowerCase().replace(/\s+/g, '-')
+}
+
+/** `2026-08-20` → `20 Aug 2026`. Unparseable values are shown as stored. */
+function formatIsoDate(iso: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso)
+  if (!match) return iso
+  const months = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ]
+  return `${Number(match[3])} ${months[Number(match[2]) - 1]} ${match[1]}`
+}
 
 /** A project as the edit form wants it: everything except its identity. */
 function toInput(project: WorkflowProject): WorkflowProjectInput {
@@ -208,15 +224,51 @@ export function ProjectDetail({
         </Card>
       ) : (
         <Card title="Project detail">
-          <div className="metrics">
-            <Metric
-              k="Live period"
-              v={`${project.live_period_start} → ${project.live_period_end}`}
-            />
-            <Metric k="Currency" v={project.currency} />
-            <Metric k="Status" v={project.status} />
-            <Metric k="Items" v={items.length} sub={`${rfqs.length} RFQs`} />
-          </div>
+          <dl className="project-facts">
+            <div className="project-fact">
+              <dt>Client</dt>
+              <dd>{project.client}</dd>
+            </div>
+            <div className="project-fact">
+              <dt>Location</dt>
+              <dd>{project.location}</dd>
+            </div>
+            <div className="project-fact">
+              <dt>Live period</dt>
+              <dd>
+                <time dateTime={project.live_period_start}>
+                  {formatIsoDate(project.live_period_start)}
+                </time>
+                <span className="project-fact-range">→</span>
+                <time dateTime={project.live_period_end}>
+                  {formatIsoDate(project.live_period_end)}
+                </time>
+              </dd>
+            </div>
+            <div className="project-fact">
+              <dt>Currency</dt>
+              <dd className="mono">{project.currency}</dd>
+            </div>
+            <div className="project-fact">
+              <dt>Status</dt>
+              <dd>
+                <span
+                  className={`pcard-status pcard-status--${statusModifier(project.status)}`}
+                >
+                  {project.status}
+                </span>
+              </dd>
+            </div>
+            <div className="project-fact">
+              <dt>Items</dt>
+              <dd>
+                <span className="project-fact-num">{items.length}</span>
+                <small>
+                  {rfqs.length} {rfqs.length === 1 ? 'RFQ' : 'RFQs'}
+                </small>
+              </dd>
+            </div>
+          </dl>
         </Card>
       )}
 
@@ -311,7 +363,7 @@ export function ProjectDetail({
               <table className="table">
                 <thead>
                   <tr>
-                    <th scope="col">
+                    <th className="col-check" scope="col">
                       <span className="sr-only">Select</span>
                     </th>
                     <th scope="col">Type</th>
@@ -322,7 +374,7 @@ export function ProjectDetail({
                     <th scope="col">Est. value (AED)</th>
                     <th scope="col">On site</th>
                     <th scope="col">Long lead</th>
-                    <th scope="col">
+                    <th className="col-actions" scope="col">
                       <span className="sr-only">Actions</span>
                     </th>
                   </tr>
@@ -330,7 +382,7 @@ export function ProjectDetail({
                 <tbody>
                   {items.map((item) => (
                     <tr key={item.id}>
-                      <td>
+                      <td className="col-check">
                         <input
                           type="checkbox"
                           aria-label={`Select ${item.item_type}`}
@@ -360,16 +412,20 @@ export function ProjectDetail({
                           </div>
                         )}
                       </td>
-                      <td>{item.description}</td>
+                      <td className="cell-soft">{item.description}</td>
                       <td className="mono">{item.qty}</td>
-                      <td>{item.uom}</td>
-                      <td>{item.discipline}</td>
+                      <td>{item.uom || '—'}</td>
+                      <td className="cell-soft">{item.discipline}</td>
                       <td className="mono">
                         {item.estimated_value_aed.toLocaleString('en-AE')}
                       </td>
-                      <td className="mono">{item.required_on_site ?? '—'}</td>
+                      <td className="mono">
+                        {item.required_on_site
+                          ? formatIsoDate(item.required_on_site)
+                          : '—'}
+                      </td>
                       <td>{item.is_long_lead ? 'Yes' : '—'}</td>
-                      <td>
+                      <td className="col-actions">
                         {confirmingItem === item.id ? (
                           <>
                             <button
@@ -430,9 +486,11 @@ export function ProjectDetail({
                   <tr key={rfq.id}>
                     <td className="mono">{rfq.reference}</td>
                     <td>{rfq.package}</td>
-                    <td>{rfq.discipline}</td>
+                    <td className="cell-soft">{rfq.discipline}</td>
                     <td className="mono">{rfq.item_ids.length}</td>
-                    <td>{rfq.stage}</td>
+                    <td>
+                      <span className="stage-chip">{rfq.stage}</span>
+                    </td>
                   </tr>
                 ))}
               </tbody>

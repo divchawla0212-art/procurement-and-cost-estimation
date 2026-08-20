@@ -61,13 +61,17 @@ function Row({
   id,
   label,
   children,
+  wide = false,
 }: {
   id: string
   label: string
   children: ReactNode
+  /** Span every column — file pickers and long selects, which otherwise
+   *  share a cell with a neighbour and look stacked against it. */
+  wide?: boolean
 }) {
   return (
-    <div className="form-row">
+    <div className={wide ? 'form-row form-row-wide' : 'form-row'}>
       {/* A real label, not a placeholder: a placeholder disappears on focus
           and is not announced as the field's name. */}
       <label htmlFor={id}>{label}</label>
@@ -146,16 +150,20 @@ export function ProjectForm({
         <input id="p-location" className="field" required value={f.location}
                onChange={(e) => set('location')(e.target.value)} />
       </Row>
-      <Row id="p-start" label="Live period start">
-        <input id="p-start" className="field" type="date" required
-               value={f.live_period_start}
-               onChange={(e) => set('live_period_start')(e.target.value)} />
-      </Row>
-      <Row id="p-end" label="Live period end">
-        <input id="p-end" className="field" type="date" required
-               value={f.live_period_end}
-               onChange={(e) => set('live_period_end')(e.target.value)} />
-      </Row>
+      {/* The two dates are one period, so they sit on one row rather than
+          wrapping independently in the auto-fit grid. */}
+      <div className="form-row-wide form-pair">
+        <Row id="p-start" label="Live period start">
+          <input id="p-start" className="field" type="date" required
+                 value={f.live_period_start}
+                 onChange={(e) => set('live_period_start')(e.target.value)} />
+        </Row>
+        <Row id="p-end" label="Live period end">
+          <input id="p-end" className="field" type="date" required
+                 value={f.live_period_end}
+                 onChange={(e) => set('live_period_end')(e.target.value)} />
+        </Row>
+      </div>
       <Row id="p-currency" label="Currency">
         <input id="p-currency" className="field" required value={f.currency}
                onChange={(e) => set('currency')(e.target.value)} />
@@ -394,56 +402,62 @@ export function ItemForm({
           vendor narrowing is written in that word throughout. Renaming the
           model to follow one form's wording would be a change to what the
           whole application means by a discipline. */}
-      <Row id="i-type" label="Item name">
-        <input id="i-type" className="field" required value={f.item_type}
-               onChange={(e) => setF({ ...f, item_type: e.target.value })} />
-      </Row>
-      {/* Optional. An empty description is sent as `""`, which `ItemIn` takes
-          -- there is no "no description" state to distinguish it from. */}
-      <Row id="i-desc" label="Description">
-        <input id="i-desc" className="field" value={f.description}
-               onChange={(e) => setF({ ...f, description: e.target.value })} />
-      </Row>
-      <Row id="i-qty" label="Quantity">
-        <input id="i-qty" className="field" type="number" step="any" required
-               value={f.qty}
-               onChange={(e) => setF({ ...f, qty: Number(e.target.value) })} />
-      </Row>
+      <div className="form-row-wide form-pair">
+        <Row id="i-type" label="Item name">
+          <input id="i-type" className="field" required value={f.item_type}
+                 onChange={(e) => setF({ ...f, item_type: e.target.value })} />
+        </Row>
+        {/* Optional. An empty description is sent as `""`, which `ItemIn` takes
+            -- there is no "no description" state to distinguish it from. */}
+        <Row id="i-desc" label="Description">
+          <input id="i-desc" className="field" value={f.description}
+                 onChange={(e) => setF({ ...f, description: e.target.value })} />
+        </Row>
+      </div>
+      <div className="form-row-wide form-pair">
+        <Row id="i-qty" label="Quantity">
+          <input id="i-qty" className="field" type="number" step="any" required
+                 value={f.qty}
+                 onChange={(e) => setF({ ...f, qty: Number(e.target.value) })} />
+        </Row>
+        <Row id="i-value" label="Budget">
+          {/* Text, not number: a focused number input steps on wheel scroll, so
+              scrolling past a filled-in value silently rewrote it. `inputMode`
+              keeps the numeric keypad, which is all `type="number"` bought. */}
+          <input id="i-value" className="field" type="text" inputMode="decimal"
+                 required value={valueText}
+                 onChange={(e) => setValueText(e.target.value)} />
+        </Row>
+      </div>
       {/* No unit-of-measure and no long-lead control any more, but both stay
           in `f` and therefore in the body: `uom` is required by `ItemIn`, and
           an *edit* posts the whole item, so dropping them from the state as
           well as the form would blank a saved item's values on every save. */}
-      <Row id="i-disc" label="Item type">
-        <DisciplineSelect
-          id="i-disc"
-          value={f.discipline}
-          onChange={(discipline) => setF({ ...f, discipline })}
-        />
-      </Row>
-      <Row id="i-value" label="Budget">
-        {/* Text, not number: a focused number input steps on wheel scroll, so
-            scrolling past a filled-in value silently rewrote it. `inputMode`
-            keeps the numeric keypad, which is all `type="number"` bought. */}
-        <input id="i-value" className="field" type="text" inputMode="decimal"
-               required value={valueText}
-               onChange={(e) => setValueText(e.target.value)} />
-      </Row>
-      <Row id="i-date" label="Required on site">
-        {/* Optional, and an empty date field means "not decided yet" — sent as
-            null rather than as an empty string, which is not a date. */}
-        <input id="i-date" className="field" type="date"
-               value={f.required_on_site ?? ''}
-               onChange={(e) =>
-                 setF({ ...f, required_on_site: e.target.value || null })
-               } />
-      </Row>
+      <div className="form-row-wide form-pair">
+        <Row id="i-disc" label="Item type">
+          <DisciplineSelect
+            id="i-disc"
+            value={f.discipline}
+            onChange={(discipline) => setF({ ...f, discipline })}
+          />
+        </Row>
+        <Row id="i-date" label="Required on site">
+          {/* Optional, and an empty date field means "not decided yet" — sent as
+              null rather than as an empty string, which is not a date. */}
+          <input id="i-date" className="field" type="date"
+                 value={f.required_on_site ?? ''}
+                 onChange={(e) =>
+                   setF({ ...f, required_on_site: e.target.value || null })
+                 } />
+        </Row>
+      </div>
       <Actions submitLabel={submitLabel} busy={busy} onCancel={onCancel} />
       {/* Beside the save controls, and only for an item that already exists.
           The upload posts immediately and is not part of this form's submit —
           it stores against the item on its own, which is why it needs an id
           and why the create form cannot offer it. */}
       {projectId && itemId ? (
-        <div className="form-row">
+        <div className="form-row-wide form-pair">
           <VendorListUpload source="Client" projectId={projectId} itemId={itemId}
                             onUploaded={onVendorListUploaded ?? (() => {})} />
           <VendorListUpload source="Astra" projectId={projectId} itemId={itemId}
@@ -537,10 +551,10 @@ export function RaiseRfqForm({
     <form className="form-grid" onSubmit={submit}>
       <FormError message={error} />
       <FormError message={extractError} />
-      <p className="muted" style={{ margin: 0 }}>
+      <p className="muted form-note">
         Covering {itemIds.length} {itemIds.length === 1 ? 'item' : 'items'}.
       </p>
-      <Row id="r-doc" label="Fill in from the enquiry document">
+      <Row id="r-doc" label="Fill in from the enquiry document" wide>
         {/* Every field below stays editable afterwards. Nothing is stored by
             the read — the RFQ is created by the submit button, out of whatever
             the reader is looking at by then, so a bad extraction is corrected
@@ -550,100 +564,104 @@ export function RaiseRfqForm({
             so after a successful read it contradicted the filename beside it.
             It keeps its id, `accept` and label association, so it is still
             what the label names and what a test addresses. */}
-        <input
-          id="r-doc"
-          className="sr-only"
-          ref={fileRef}
-          type="file"
-          accept=".pdf,.docx,.xlsx"
-          disabled={extracting}
-          onChange={(e) => {
-            const file = e.target.files?.[0]
-            // Cleared so that picking the same file twice reads it twice —
-            // the second attempt after a failure is the case that needs it.
-            e.target.value = ''
-            if (file) void extract(file)
-          }}
-        />
-        <button
-          type="button"
-          className="btn btn-sm"
-          disabled={extracting}
-          onClick={() => fileRef.current?.click()}
-        >
-          Choose file
-        </button>
-        {/* The one place this control's state is reported. `role="status"` so
-            a change is announced; the tick is decorative and the filename
-            carries the meaning. */}
-        <span className="muted" role="status">
-          {extracting ? (
-            'Reading the document…'
-          ) : picked ? (
-            <>
-              <span aria-hidden="true" className="ok-tick">
-                ✓
-              </span>{' '}
-              {picked.name}
-            </>
-          ) : (
-            'Optional. PDF, Word or Excel.'
-          )}
-        </span>
-        {picked && !extracting && (
+        <div className="filepick">
+          <input
+            id="r-doc"
+            className="sr-only"
+            ref={fileRef}
+            type="file"
+            accept=".pdf,.docx,.xlsx"
+            disabled={extracting}
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              // Cleared so that picking the same file twice reads it twice —
+              // the second attempt after a failure is the case that needs it.
+              e.target.value = ''
+              if (file) void extract(file)
+            }}
+          />
           <button
             type="button"
-            className="linkish"
-            // Named, so two forms open at once are distinguishable and a
-            // screen reader announces which document is being opened.
-            aria-label={`View ${picked.name}`}
-            onClick={() => {
-              // Created on click rather than on pick: one blob per file the
-              // reader tried would leak every one of them. Nothing was
-              // uploaded — `/rfqs/extract` stores nothing — so this URL is the
-              // only thing that can back the control, and it dies with the
-              // form.
-              const url = URL.createObjectURL(picked)
-              window.open(url, '_blank', 'noopener')
-              setTimeout(() => URL.revokeObjectURL(url), 0)
-            }}
+            className="btn btn-sm"
+            disabled={extracting}
+            onClick={() => fileRef.current?.click()}
           >
-            View
+            Choose file
           </button>
-        )}
+          {/* The one place this control's state is reported. `role="status"` so
+              a change is announced; the tick is decorative and the filename
+              carries the meaning. */}
+          <span className="muted" role="status">
+            {extracting ? (
+              'Reading the document…'
+            ) : picked ? (
+              <span className="filerow">
+                <span aria-hidden="true" className="ok-tick">
+                  ✓
+                </span>
+                <span className="fname">{picked.name}</span>
+                <button
+                  type="button"
+                  className="linkish"
+                  // Named, so two forms open at once are distinguishable and a
+                  // screen reader announces which document is being opened.
+                  aria-label={`View ${picked.name}`}
+                  onClick={() => {
+                    // Created on click rather than on pick: one blob per file the
+                    // reader tried would leak every one of them. Nothing was
+                    // uploaded — `/rfqs/extract` stores nothing — so this URL is the
+                    // only thing that can back the control, and it dies with the
+                    // form.
+                    const url = URL.createObjectURL(picked)
+                    window.open(url, '_blank', 'noopener')
+                    setTimeout(() => URL.revokeObjectURL(url), 0)
+                  }}
+                >
+                  View
+                </button>
+              </span>
+            ) : (
+              'Optional. PDF, Word or Excel.'
+            )}
+          </span>
+        </div>
       </Row>
-      <Row id="r-ref" label="Reference">
-        <input id="r-ref" className="field" required value={reference}
-               onChange={(e) => setReference(e.target.value)} />
-      </Row>
-      <Row id="r-pkg" label="Package">
-        {/* A placeholder rather than help text under the field: it is the one
-            field whose *shape* is not obvious from its name, and an example
-            says more than a sentence would. It disappears the moment anything
-            is typed, so it costs nothing once the habit is formed. */}
-        <input id="r-pkg" className="field" required value={pkg}
-               placeholder={'Wellhead tie-in ball valves, 11 kV ring main cable…'}
-               onChange={(e) => setPkg(e.target.value)} />
-      </Row>
-      <Row id="r-disc" label="Discipline">
-        {/* Product groups offered as well as the families: an RFQ is commonly
-            cut narrower than an item's discipline — one cable type, not all
-            eleven — and this is the field vendor scope is matched on. */}
-        <DisciplineSelect
-          id="r-disc"
-          value={discipline}
-          onChange={setDiscipline}
-          productGroups
-        />
-      </Row>
-      <Row id="r-value" label="Estimated budget (AED)">
-        {/* Text, not number — see `ItemForm`'s field for why. The two messages
-            differ because both forms can be open on one screen, and a shared
-            sentence would not say which field to go and fix. */}
-        <input id="r-value" className="field" type="text" inputMode="decimal"
-               required value={value}
-               onChange={(e) => setValue(e.target.value)} />
-      </Row>
+      <div className="form-row-wide form-pair">
+        <Row id="r-ref" label="Reference">
+          <input id="r-ref" className="field" required value={reference}
+                 onChange={(e) => setReference(e.target.value)} />
+        </Row>
+        <Row id="r-pkg" label="Package">
+          {/* A placeholder rather than help text under the field: it is the one
+              field whose *shape* is not obvious from its name, and an example
+              says more than a sentence would. It disappears the moment anything
+              is typed, so it costs nothing once the habit is formed. */}
+          <input id="r-pkg" className="field" required value={pkg}
+                 placeholder={'Wellhead tie-in ball valves, 11 kV ring main cable…'}
+                 onChange={(e) => setPkg(e.target.value)} />
+        </Row>
+      </div>
+      <div className="form-row-wide form-pair">
+        <Row id="r-disc" label="Discipline">
+          {/* Product groups offered as well as the families: an RFQ is commonly
+              cut narrower than an item's discipline — one cable type, not all
+              eleven — and this is the field vendor scope is matched on. */}
+          <DisciplineSelect
+            id="r-disc"
+            value={discipline}
+            onChange={setDiscipline}
+            productGroups
+          />
+        </Row>
+        <Row id="r-value" label="Estimated budget (AED)">
+          {/* Text, not number — see `ItemForm`'s field for why. The two messages
+              differ because both forms can be open on one screen, and a shared
+              sentence would not say which field to go and fix. */}
+          <input id="r-value" className="field" type="text" inputMode="decimal"
+                 required value={value}
+                 onChange={(e) => setValue(e.target.value)} />
+        </Row>
+      </div>
       <Actions submitLabel="Create RFQ" busy={busy} onCancel={onCancel} />
     </form>
   )
